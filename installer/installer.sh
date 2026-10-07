@@ -21,13 +21,51 @@ fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
 die() { printf '%s  Ошибка: %s%s\n' "$ROSE" "$*" "$RESET" >&2; exit 1; }
 ask() { local value; [[ -t 0 ]] || die "Задайте параметр: $1"; read -r -p "$1${2:+ [$2]}: " value || return 1; printf '%s' "${value:-${2:-}}"; }
+trim_answer() {
+    local value=$1
+    value=${value#"${value%%[![:space:]]*}"}; value=${value%"${value##*[![:space:]]}"}
+    printf '%s' "$value"
+}
+discard_pending_input() {
+    [[ -t 0 ]] || return 0
+    if command -v python3 >/dev/null; then
+        python3 -c 'import sys,termios; termios.tcflush(sys.stdin.fileno(),termios.TCIFLUSH)' 2>/dev/null || true
+    else
+        local discarded attempt
+        for ((attempt=0; attempt<64; attempt++)); do IFS= read -r -t .01 -N 4096 discarded || break; done
+    fi
+}
+ask_yes_no() {
+    local answer
+    while true; do
+        answer=$(ask "$1" "${2:-no}") || return $?
+        answer=$(trim_answer "$answer")
+        [[ -n $answer ]] || answer=${2:-no}
+        # Literal Cyrillic alternatives also work with the byte-oriented C locale.
+        case "${answer,,}" in
+            y|yes|д|Д|да|Да|дА|ДА) printf yes; return 0;;
+            n|no|н|Н|нет|Нет|нЕт|неТ|НЕт|НеТ|нЕТ|НЕТ) printf no; return 0;;
+            *) printf '  Введите yes/y/да/д или no/n/нет/н.\n' >&2; discard_pending_input;;
+        esac
+    done
+}
+ask_menu_choice() {
+    local answer maximum=$1
+    while true; do
+        answer=$(ask 'Действие') || return $?
+        answer=$(trim_answer "$answer")
+        if [[ $answer =~ ^[0-9]{1,2}$ ]] && ((10#$answer<=maximum)); then printf '%s' "$((10#$answer))"; return 0; fi
+        printf '  Выберите номер от 0 до %s.\n' "$maximum" >&2
+        discard_pending_input
+    done
+}
 valid_version() { [[ $1 == latest || $1 =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$ ]]; }
 download() { curl --fail --show-error --silent --location --retry 3 --connect-timeout 15 --max-time 600 --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2"; }
 usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.4] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.5] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -75,6 +113,7 @@ Remnacust · installer.sh
   --preserve-subhash        Перенос короткого токена подписки, если совместим
 
 Версия запрашивается перед установкой/обновлением/миграцией; Enter = latest.
+Подтверждение: yes/y/да/д; отказ: no/n/нет/н. Регистр и пробелы не важны.
 Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS, amd64 / arm64.
 SECRET_KEY вводится скрыто или через REMNACUST_NODE_SECRET. Секреты не печатаются.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
@@ -240,7 +279,12 @@ archive_retired_registry() {
     install -m 0600 "$REINSTALL_RECORD" "$snapshot/registry.json"
     info "Параметры прежней установки сохранены: $snapshot/registry.json"
 }
-confirm() { $YES && return 0; [[ $(ask "$1. Введите yes для продолжения") == yes ]] || exit 0; }
+confirm() {
+    $YES && return 0
+    local answer
+    answer=$(ask_yes_no "$1. Продолжить? yes/y/да/д или no/n/нет/н" no) || exit 1
+    [[ $answer == yes ]] || { info 'Действие отменено'; exit 0; }
+}
 cleanup() {
     if [[ -n $WORK && -f $WORK/.installer-owned ]]; then rm -rf -- "$WORK"; fi
 }
@@ -522,9 +566,11 @@ install_cli() {
     ln -sfn /usr/local/bin/remnacust /usr/local/bin/remnacust-setup
 }
 service_menu() {
-    COMPONENT=$(ask 'Компонент: panel или node' panel)
+    COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
     printf '  1 status\n  2 logs\n  3 start\n  4 stop\n  5 restart\n  6 backup-panel\n  7 restore-panel\n  8 renew-node-certificate\n  9 check-panel\n  0 Назад\n'
-    case "$(ask 'Действие')" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate;;9) ACTION=check-panel; COMPONENT=panel;;0) ACTION='';;*) ACTION=''; info 'Неизвестное действие';;esac
+    local choice
+    choice=$(ask_menu_choice 9) || return $?
+    case "$choice" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate;;9) ACTION=check-panel; COMPONENT=panel;;0) ACTION='';;esac
 }
 main() {
     local result
@@ -541,20 +587,22 @@ interactive_menu() {
     while true; do
         ACTION=''; COMPONENT=''
         show_menu
-        choice=$(ask 'Действие') || return $?
+        choice=$(ask_menu_choice 10) || return $?
         case "$choice" in
             1) if component_installed panel; then ACTION=uninstall-panel; elif component_retained panel; then ACTION=start; COMPONENT=panel; else ACTION=install-panel; fi;;
             2) if component_installed node; then ACTION=uninstall-node; elif component_retained node; then ACTION=start; COMPONENT=node; else ACTION=install-node; fi;;
             3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
-            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu;;10) ACTION=migrate-marzban-panel;;0) return 0;;*) info 'Неизвестное действие'; continue;;
+            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu || return $?;;10) ACTION=migrate-marzban-panel;;0) return 0;;
         esac
-        [[ -n $ACTION ]] || continue
+        [[ -n $ACTION ]] || { discard_pending_input; continue; }
         selection=("$ACTION")
         [[ -z $COMPONENT ]] || selection+=(--component "$COMPONENT")
         # A separate shell preserves errexit and confines exit/traps/locks to one action.
         if bash "${BASH_SOURCE[0]}" "${selection[@]}" "$@"; then
+            discard_pending_input
             info 'Возврат в меню'
         else
+            discard_pending_input
             info 'Действие не завершено. Исправьте указанную причину и повторите его в меню.'
         fi
     done
@@ -865,8 +913,8 @@ certificate_wizard() {
             [[ -n $PANEL_IP ]] || PANEL_IP=$(ask 'IP/CIDR панели для доступа к API (Enter — свой firewall)')
         fi
         if [[ -t 0 && -z $NODE_DOMAIN ]]; then
-            choice=$(ask 'Настроить TLS/XHTTP на ноде? yes/no' no)
-            case "$choice" in yes) NODE_DOMAIN=$(ask 'Домен ноды');;no) ;;*) die 'Введите yes или no';;esac
+            choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде? yes/y/да/д или no/n/нет/н' no)
+            case "$choice" in yes) NODE_DOMAIN=$(ask 'Домен ноды');;no) ;;esac
         fi
         if [[ -z $NODE_DOMAIN ]]; then
             [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]] || die 'Для TLS ноды укажите --node-domain'

@@ -171,7 +171,7 @@ main "$@"
                 if not chunk:
                     break
                 output += chunk
-                expected = ['Действие: ', 'Версия установки [latest]: ', 'Введите yes для продолжения: ', 'Действие: '][min(stage, 3)].encode()
+                expected = ['Действие: ', 'Версия установки [latest]: ', 'Продолжить? yes/y/да/д или no/n/нет/н [no]: ', 'Действие: '][min(stage, 3)].encode()
                 if stage < 4 and expected in output:
                     os.write(master, [b'1\n', b'\n', b'yes\n', b'0\n'][stage])
                     stage += 1
