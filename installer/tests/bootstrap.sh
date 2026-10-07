@@ -39,6 +39,9 @@ printf '%s\n' "$url" >> "$FIXTURE/requests"
 [[ ${MOCK_FAIL:-false} != true ]] || exit 22
 case "$url" in
     https://api.github.com/repos/lottman/Remnacust-installer/releases/latest|https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v1.1.1) cp "$FIXTURE/release.json" "$out";;
+    https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v1.1.2) cp "$FIXTURE/release-v1.1.2.json" "$out";;
+    https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/SHA256SUMS) cp "$FIXTURE/SHA256SUMS-v1.1.2" "$out";;
+    https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/remnacust-source-v1.1.2.tar.gz) cp "$FIXTURE/remnacust-source-v1.1.2.tar.gz" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.1/SHA256SUMS) cp "$FIXTURE/SHA256SUMS" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.1/remnacust-source-v1.1.1.tar.gz) cp "$FIXTURE/remnacust-source-v1.1.1.tar.gz" "$out";;
     *) exit 22;;
@@ -153,5 +156,49 @@ set -e
 ((first_boot_status != 0)) || { printf 'FAIL expected first boot failure\n'; exit 1; }
 [[ -f $fixture/recovery-cli-ready && -s $fixture/new-root/registry/panel.json ]]
 pass 'first boot failure retains registry and recovery CLI'
+(
+    WORK="$fixture/cli-work"; SOURCE="$fixture/old-source"
+    mkdir -p "$WORK" "$SOURCE/installer"
+    printf '#!/bin/bash\necho old-installer\n' > "$SOURCE/installer/installer.sh"
+    install() {
+        case "${!#}" in
+            "$WORK/installer-entry.sh") command install "$@";;
+            /usr/local/bin/remnacust) command install -m 0755 "${@: -2:1}" "$fixture/installed-cli";;
+            /usr/local/lib/remnacust-installer*) :;;
+            *) exit 1;;
+        esac
+    }
+    ln() { :; }
+    install_cli
+    cmp "$project/installer.sh" "$fixture/installed-cli"
+    # Calling the installed entry again must work when its destination already exists.
+    source "$fixture/installed-cli"
+    WORK="$fixture/cli-work"; SOURCE="$fixture/old-source"
+    install_cli
+    cmp "$project/installer.sh" "$fixture/installed-cli"
+)
+pass 'installing an older bundle preserves current CLI policy and supports self-update'
+make_patch_release() {
+    python3 - "$fixture" "$1" <<'PY'
+import hashlib,json,pathlib,sys,tarfile
+root=pathlib.Path(sys.argv[1]);source=root/'archive';version=sys.argv[2]
+(source/'VERSION').write_text('1.1.2\n')
+(source/'component-sources.json').write_text(json.dumps({kind:{'repository':'lottman/Remnacust-'+kind,'commit':'a'*40,'version':version if kind=='node' else '1.1.1'} for kind in ['panel','node','core']}))
+name='remnacust-source-v1.1.2.tar.gz'
+with tarfile.open(root/name,'w:gz') as archive:archive.add(source,arcname='.')
+digest=hashlib.sha256((root/name).read_bytes()).hexdigest()
+(root/'SHA256SUMS-v1.1.2').write_text(digest+'  '+name+'\n')
+release=dict(tag_name='v1.1.2',draft=False,prerelease=False,assets=[])
+for asset,local in [(name,name),('SHA256SUMS','SHA256SUMS-v1.1.2')]:
+    release['assets'].append(dict(name=asset,state='uploaded',browser_download_url='https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/'+asset,digest='sha256:'+hashlib.sha256((root/local).read_bytes()).hexdigest()))
+(root/'release-v1.1.2.json').write_text(json.dumps(release))
+PY
+}
+make_patch_release 1.1.1
+bash "$project/installer.sh" --check-release --version 1.1.2 > "$fixture/result"
+pass 'installer patch accepts independently pinned application versions'
+make_patch_release 1.1.0
+reject 'valid archive checksum cannot conceal an incorrect pinned component version' bash "$project/installer.sh" --check-release --version 1.1.2
+grep -q 'Версия исходников не совпадает с закреплённым компонентом: node' "$fixture/result"
 WORK=''
 printf 'Installer bootstrap checks passed.\n'

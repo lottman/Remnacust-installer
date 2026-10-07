@@ -70,5 +70,13 @@ class ReleaseTests(unittest.TestCase):
         destination=module.package(self.root,'v1.1.1',self.parent)
         contents=module.read_archive((destination/'remnacust-source-v1.1.1.tar.gz').read_bytes())
         self.assertEqual(contents['NOTICE.md'],b'fixture notice\n')
+    def test_installer_patch_keeps_pinned_application_versions(self):
+        for entry in self.lock.values():entry['version']='1.1.1'
+        self.write(self.root,{'VERSION':'1.1.2\n','component-sources.json':json.dumps(self.lock)})
+        self.retag();self.git(self.root,'tag','v1.1.2')
+        module.package(self.root,'v1.1.2',self.parent,check=True)
+    def test_incorrect_pinned_version_is_rejected(self):
+        self.lock['node']['version']='1.1.0';self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
+        with self.assertRaisesRegex(ValueError,'Component VERSION mismatch'):module.package(self.root,'v1.1.1',self.parent)
 
 if __name__=='__main__':unittest.main()

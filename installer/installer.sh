@@ -25,7 +25,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.1.1] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.1.2] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -64,6 +64,7 @@ Remnacust · installer.sh
   --preserve-subhash        Перенос короткого токена подписки, если совместим
 
 Версия запрашивается перед установкой/обновлением/миграцией; Enter = latest.
+Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS, amd64 / arm64.
 SECRET_KEY вводится скрыто или через REMNACUST_NODE_SECRET. Секреты не печатаются.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
 HELP
@@ -152,17 +153,23 @@ PY
     ((status==0)) || return "$status"
     mapfile -t START_APPS < "$WORK/restore-applications"
 }
+supported_ubuntu_codename() {
+    local release=${1:-/etc/os-release} id version
+    [[ -f $release ]] || die 'Не определена ОС: отсутствует /etc/os-release'
+    # shellcheck disable=SC1090,SC1091
+    id=$(unset ID; . "$release"; printf '%s' "${ID:-}")
+    # shellcheck disable=SC1090,SC1091
+    version=$(unset VERSION_ID; . "$release"; printf '%s' "${VERSION_ID:-}")
+    case "$id:$version" in
+        ubuntu:22.04) printf jammy;;
+        ubuntu:24.04) printf noble;;
+        *) die "Поддерживаются только Ubuntu 22.04 LTS и Ubuntu 24.04 LTS. Обнаружено: ${id:-неизвестно} ${version:-неизвестно}";;
+    esac
+}
 prepare_host() {
     [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Для установки нужен root на Linux'
-    [[ -f /etc/os-release ]] || die 'Не определена ОС'
-    local id version codename
-    # shellcheck disable=SC1091
-    id=$(. /etc/os-release; printf '%s' "$ID")
-    # shellcheck disable=SC1091
-    version=$(. /etc/os-release; printf '%s' "$VERSION_ID")
-    # shellcheck disable=SC1091
-    codename=$(. /etc/os-release; printf '%s' "${VERSION_CODENAME:-}")
-    case "$id:$version" in debian:12|debian:13|ubuntu:22.04|ubuntu:24.04) ;; *) die 'Поддерживаются Debian 12/13 и Ubuntu 22.04/24.04';; esac
+    local id=ubuntu codename
+    codename=$(supported_ubuntu_codename) || return $?
     case "$(uname -m)" in x86_64|aarch64) ;; *) die 'Нужна архитектура amd64 или arm64';; esac
     if ! command -v python3 >/dev/null || ! command -v curl >/dev/null || ! command -v flock >/dev/null || ! command -v tar >/dev/null; then
         step 'Подготовка системных пакетов' apt-get update
@@ -338,8 +345,11 @@ recover() {
     exit "${result:-1}"
 }
 install_cli() {
+    # Keep the current OS policy even when an older application release is selected.
+    install -m 0600 "${BASH_SOURCE[0]}" "$WORK/installer-entry.sh"
+    bash -n "$WORK/installer-entry.sh"
     install -d -m 0755 /usr/local/lib/remnacust-installer
-    install -m 0755 "$SOURCE/installer/installer.sh" /usr/local/bin/remnacust
+    install -m 0755 "$WORK/installer-entry.sh" /usr/local/bin/remnacust
     install -m 0644 "$SOURCE/installer/runtime.py" /usr/local/lib/remnacust-installer/runtime.py
     install -m 0644 "$SOURCE/installer/database.cjs" /usr/local/lib/remnacust-installer/database.cjs
     install -m 0644 "$SOURCE/installer/marzban.py" /usr/local/lib/remnacust-installer/marzban.py
@@ -445,17 +455,30 @@ with tarfile.open(root/name) as archive:
     archive.extractall(destination, members=members, filter='data') if sys.version_info >= (3,12) else archive.extractall(destination,members=members)
 for required in ['installer/installer.sh','installer/runtime.py','installer/database.cjs','installer/marzban.py','panel/Dockerfile','node/docker/Dockerfile','panel/backend/.env.sample','xray/core/core.go']:
     if not (destination/required).is_file(): raise SystemExit('Неполный архив: '+required)
-for package in ['panel/frontend','panel/backend','node','subscription-page/frontend','subscription-page/backend']:
-    version=json.load(open(destination/package/'package.json'))['version']
-    if version!=json.load(open(root/'resolved.json'))['tag'][1:]:
-        raise SystemExit('Версия исходников не совпадает с тегом: '+package)
 version=json.load(open(root/'resolved.json'))['tag'][1:]
 if (destination/'VERSION').read_text().strip()!=version:
     raise SystemExit('VERSION не совпадает с тегом')
+lock_path=destination/'component-sources.json'
+lock=json.loads(lock_path.read_text()) if lock_path.is_file() else {}
+if lock_path.is_file() and (not isinstance(lock,dict) or set(lock)!={'panel','node','core'}):
+    raise SystemExit('Неверный список компонентов выпуска')
+versions={}
+for kind in ['panel','node','core']:
+    entry=lock.get(kind,{})
+    if not isinstance(entry,dict): raise SystemExit('Неверный компонент: '+kind)
+    expected=entry.get('version',version)
+    if not isinstance(expected,str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?',expected):
+        raise SystemExit('Неверная версия компонента: '+kind)
+    versions[kind]=expected
+for package in ['panel/frontend','panel/backend','node','subscription-page/frontend','subscription-page/backend']:
+    actual_version=json.load(open(destination/package/'package.json'))['version']
+    expected=versions['node' if package=='node' else 'panel']
+    if actual_version!=expected:
+        raise SystemExit('Версия исходников не совпадает с закреплённым компонентом: '+package)
 core=(destination/'xray/core/core.go').read_text()
 numbers=[re.search(rf'Version_{axis}\s+byte\s*=\s*(\d+)',core) for axis in 'xyz']
-if not all(numbers) or '.'.join(m.group(1) for m in numbers)!=version.split('-')[0]:
-    raise SystemExit('Версия Xray не совпадает с тегом')
+if not all(numbers) or '.'.join(m.group(1) for m in numbers)!=versions['core'].split('-')[0]:
+    raise SystemExit('Версия Xray не совпадает с закреплённым компонентом')
 (root/'source.sha256').write_text(actual+'\n')
 PY
 }

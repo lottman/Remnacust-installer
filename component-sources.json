@@ -1,14 +1,17 @@
 {
   "panel": {
     "repository": "lottman/Remnacust-panel",
-    "commit": "eeafb2288708e72ec99e48f5cd07bdaf2dc48b0c"
+    "commit": "3380fe8c9b51230f92ba8a3f03da70b3a31334fc",
+    "version": "1.1.1"
   },
   "node": {
     "repository": "lottman/Remnacust-node",
-    "commit": "c7a57929a005f7fa8b79707b5e7d2b9856400fea"
+    "commit": "30d1d4c3da328368a60789560c84db12a6825594",
+    "version": "1.1.1"
   },
   "core": {
     "repository": "lottman/Remnacust-core",
-    "commit": "e2407ae41edfa1ba847c7976dab2dcc0a96bbc91"
+    "commit": "e2407ae41edfa1ba847c7976dab2dcc0a96bbc91",
+    "version": "1.1.1"
   }
 }

@@ -64,7 +64,7 @@ def component_files(kind, commit, local_sources):
     return read_archive(data, strip_root=True)
 
 
-def validate(files, version):
+def validate(files, version, versions):
     for name, data in files.items():
         path = PurePosixPath(name)
         if path.name.startswith('.env') and path.name not in {'.env.sample', '.env.example'}:
@@ -77,13 +77,14 @@ def validate(files, version):
         if path.suffix == '.sh' and b'\r' in data:
             raise ValueError('Shell script requires LF: ' + name)
     for folder in ['panel/backend', 'panel/frontend', 'node', 'subscription-page/backend', 'subscription-page/frontend']:
-        if json.loads(files[folder+'/package.json']).get('version') != version:
+        expected = versions['node' if folder == 'node' else 'panel']
+        if json.loads(files[folder+'/package.json']).get('version') != expected:
             raise ValueError('Package version mismatch: ' + folder)
     if files['VERSION'].decode().strip() != version:
         raise ValueError('Installer version mismatch')
     core = files['xray/core/core.go'].decode()
     numbers = [re.search(rf'Version_{axis}\s+byte\s*=\s*(\d+)', core) for axis in 'xyz']
-    if not all(numbers) or '.'.join(m.group(1) for m in numbers) != version.split('-')[0]:
+    if not all(numbers) or '.'.join(m.group(1) for m in numbers) != versions['core'].split('-')[0]:
         raise ValueError('Core version mismatch')
     for name in ['installer/installer.sh', 'installer/runtime.py', 'installer/database.cjs', 'installer/marzban.py',
                  'panel/Dockerfile', 'panel/backend/.env.sample', 'node/docker/Dockerfile', 'xray/LICENSE', 'LICENSE', 'NOTICE.md']:
@@ -103,19 +104,24 @@ def package(root, tag, local_sources=None, check=False):
     if set(lock) != set(REPOSITORIES):
         raise ValueError('Component lock must name panel, node and core')
     files = dict(own)
+    versions = {}
     for kind in REPOSITORIES:
         entry = lock[kind]
         if entry.get('repository') != REPOSITORIES[kind] or not re.fullmatch(r'[0-9a-f]{40}', entry.get('commit', '')):
             raise ValueError('Invalid pinned repository or commit: ' + kind)
+        component_version = entry.get('version', tag[1:])
+        if not isinstance(component_version, str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?', component_version):
+            raise ValueError('Invalid pinned version: ' + kind)
+        versions[kind] = component_version
         source = component_files(kind, entry['commit'], local_sources)
-        if source['VERSION'].decode().strip() != tag[1:]:
+        if source['VERSION'].decode().strip() != component_version:
             raise ValueError('Component VERSION mismatch: ' + kind)
         for name, data in source.items():
             if name.startswith(PREFIXES[kind]):
                 if name in files:
                     raise ValueError('Overlapping source: ' + name)
                 files[name] = data
-    validate(files, tag[1:])
+    validate(files, tag[1:], versions)
     if check:
         print(f'PASS {tag}: {len(files)} pinned source files, versions and archive paths')
         return None

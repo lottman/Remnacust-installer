@@ -4,13 +4,13 @@
 
 ## Быстрый запуск
 
-Скачайте установщик из последнего стабильного выпуска:
+Скопируйте всю строку в консоль сервера. Она скачает установщик и откроет меню:
 
 ```bash
-curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
-  https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh -o installer.sh
-sudo bash installer.sh
+curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh -o installer.sh && sudo bash installer.sh
 ```
+
+[Скачать installer.sh](https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh). Для установки без меню добавьте в конец строки `install-panel` или `install-node`.
 
 Для просмотра справки достаточно Bash: `bash installer.sh --help`. Меню показывает все команды независимо от того, что уже установлено. Цвета отключаются через `NO_COLOR=1`; журнал операции хранится в `/opt/remnacust/logs` с доступом только для root.
 
@@ -33,11 +33,11 @@ sudo bash installer.sh
 | `backup-panel`, `restore-panel` | Копия БД и конфигурации / восстановление выбранной копии |
 | `renew-node-certificate` | Копирование обновлённого сертификата и перезапуск ноды/Nginx |
 
-При установке, обновлении и миграции запрашивается версия. Enter выбирает `latest`; `--version 1.1.1` закрепляет выпуск. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
+При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.1.2` закрепляет выпуск. Установщик 1.1.2 содержит панель, ноду и ядро версии 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
 
 ```bash
 sudo bash installer.sh install-panel --domain panel.example.com --version latest
-sudo remnacust upgrade-panel --version 1.1.1
+sudo remnacust upgrade-panel --version 1.1.2
 sudo remnacust status --component node
 sudo remnacust backup-panel
 sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
@@ -45,7 +45,9 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 
 ## Новая установка
 
-Поддерживаются Debian 12/13 и Ubuntu 22.04/24.04, amd64 и arm64. Нужны root, доступ к GitHub, Docker Hub и репозиториям пакетов. Для сборки выделите 4 GiB RAM, 2 CPU и не менее 20 GiB диска. Минимум 8 GiB свободного места проверяется перед сборкой; потребление зависит от кеша Docker.
+Установка, обновление и миграция поддерживаются только на Ubuntu 22.04 LTS и Ubuntu 24.04 LTS, amd64 и arm64. На другой ОС установщик завершается до установки пакетов и изменения приложения. Проверка выпуска, справка и обслуживание ранее установленного приложения не ограничены этими двумя версиями ОС. При выборе старого выпуска установленная команда `remnacust` сохраняет проверку ОС текущего установщика.
+
+Нужны root, доступ к GitHub, Docker Hub и репозиториям пакетов. Для работы панели нужны минимум 2 CPU, 2 GiB RAM и 20 GiB диска; рекомендуются 4 CPU и 4 GiB RAM. Для ноды — минимум 1 CPU и 1 GiB RAM, с запасом под нагрузку Xray. Для сборки на сервере выделите не менее 4 GiB RAM и 2 CPU. Минимум 8 GiB свободного места проверяется перед сборкой; потребление зависит от кеша Docker. [Требования Remnawave](https://docs.rw/install/requirements/) используются для планирования ресурсов; список ОС установщика Remnacust ограничен двумя версиями Ubuntu.
 
 Установщик добавляет Docker только при его отсутствии. Если установлен Docker без Compose v2, добавляется только пакет Compose. Существующий daemon не переустанавливается. SSH, системные sysctl и посторонние службы не перенастраиваются.
 
