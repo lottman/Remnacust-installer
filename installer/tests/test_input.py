@@ -145,7 +145,7 @@ main "$@"
         code, output = self.terminal('bash "$1"', [('Действие: ', paste), ('Действие: ', '0\n')], script=self.menu_fixture())
         self.assertEqual(code, 0, output)
         self.assertEqual(output.count('Установка и обслуживание'), 1, output)
-        self.assertEqual(output.count('Выберите номер от 0 до 10.'), 1, output)
+        self.assertEqual(output.count('Выберите номер от 0 до 12.'), 1, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
     def test_return_from_action_does_not_execute_leftover_paste(self):

@@ -103,11 +103,16 @@ cp "$fixture/good-release.json" "$fixture/release.json"
 
 source "$project/installer.sh"
 show_menu > "$fixture/menu"
-for action in install-panel install-node upgrade-panel upgrade-node migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel status; do grep -q "$action" "$fixture/menu"; done
+for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel status; do grep -q "$action" "$fixture/menu"; done
 ! grep -q upgrade-core "$fixture/menu"
 DIRECTORY="$fixture/existing"; mkdir -p "$DIRECTORY"; touch "$DIRECTORY/.env"
 show_menu > "$fixture/existing-menu"; cmp "$fixture/menu" "$fixture/existing-menu"
 pass 'all commands always visible, upgrade-core removed'
+(component_installed() { return 0; }; show_menu) > "$fixture/installed-menu"
+for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel; do grep -q "$action" "$fixture/installed-menu"; done
+grep -q '1  install-panel' "$fixture/installed-menu"
+grep -q '11  uninstall-panel' "$fixture/installed-menu"
+pass 'installed components keep installation and deletion commands visible with stable numbers'
 (ask() { printf 0; }; command() { return 1; }; ACTION=''; main) > "$fixture/no-tools-menu"
 cmp "$fixture/menu" "$fixture/no-tools-menu"
 pass 'menu and exit do not need Docker or network'

@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.15] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.16] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -127,13 +127,13 @@ HELP
 show_menu() {
     local panel_action=install-panel node_action=install-node panel_note='Панель с нуля' node_note='Нода + Xray'
     local panel_upgrade='Обновить панель · не установлена' node_upgrade='Обновить ноду · не установлена'
-    if component_installed panel; then panel_action=uninstall-panel; panel_note='Удалить панель · данные сохраняются'; panel_upgrade='Обновить панель'; fi
-    if component_installed node; then node_action=uninstall-node; node_note='Удалить ноду · файлы сохраняются'; node_upgrade='Обновить ноду целиком'; fi
+    if component_installed panel; then panel_note='Уже установлена · обновление: 3, удаление: 11'; panel_upgrade='Обновить панель'; fi
+    if component_installed node; then node_note='Уже установлена · обновление: 4, удаление: 12'; node_upgrade='Обновить ноду целиком'; fi
     printf '\n%s  ▌ REMNACUST%s  %sУстановка и обслуживание%s\n\n' "$PURPLE" "$RESET" "$DIM" "$RESET"
     printf '  1  %-26s %s\n  2  %-26s %s\n' "$panel_action" "$panel_note" "$node_action" "$node_note"
     printf '  3  upgrade-panel              %s\n  4  upgrade-node               %s\n' "$panel_upgrade" "$node_upgrade"
     printf '  5  migrate-remnawave-panel    Перенести существующую панель\n  6  migrate-remnawave-node     Перенести существующую ноду\n'
-    printf '  7  --check-release            Проверить выпуск\n  8  status                     Состояние\n  9  Обслуживание                Журналы, запуск, копии\n 10  migrate-marzban-panel       Перенести пользователей Marzban\n  0  Выход\n\n'
+    printf '  7  --check-release            Проверить выпуск\n  8  status                     Состояние\n  9  Обслуживание                Журналы, запуск, копии\n 10  migrate-marzban-panel       Перенести пользователей Marzban\n 11  uninstall-panel            Удалить панель · данные сохраняются\n 12  uninstall-node             Удалить ноду · файлы сохраняются\n  0  Выход\n\n'
 }
 parse_args() {
     while (($#)); do
@@ -563,10 +563,10 @@ install_cli() {
 }
 service_menu() {
     COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
-    printf '  1 status\n  2 logs\n  3 start\n  4 stop\n  5 restart\n  6 backup-panel\n  7 restore-panel\n  8 renew-node-certificate\n  9 check-panel\n  0 Назад\n'
+    printf '  1 status\n  2 logs\n  3 start\n  4 stop\n  5 restart\n  6 backup-panel\n  7 restore-panel\n  8 renew-node-certificate\n  9 check-panel\n 10 renew-panel-certificate\n  0 Назад\n'
     local choice
-    choice=$(ask_menu_choice 9) || return $?
-    case "$choice" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate;;9) ACTION=check-panel; COMPONENT=panel;;0) ACTION='';;esac
+    choice=$(ask_menu_choice 10) || return $?
+    case "$choice" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate; COMPONENT=node;;9) ACTION=check-panel; COMPONENT=panel;;10) ACTION=renew-panel-certificate; COMPONENT=panel;;0) ACTION='';;esac
 }
 main() {
     local result
@@ -585,12 +585,12 @@ interactive_menu() {
     while true; do
         ACTION=''; COMPONENT=''
         show_menu
-        choice=$(ask_menu_choice 10) || return $?
+        choice=$(ask_menu_choice 12) || return $?
         case "$choice" in
-            1) if component_installed panel; then ACTION=uninstall-panel; else ACTION=install-panel; fi;;
-            2) if component_installed node; then ACTION=uninstall-node; else ACTION=install-node; fi;;
+            1) ACTION=install-panel;;
+            2) ACTION=install-node;;
             3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
-            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu || return $?;;10) ACTION=migrate-marzban-panel;;0) return 0;;
+            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu || return $?;;10) ACTION=migrate-marzban-panel;;11) ACTION=uninstall-panel;;12) ACTION=uninstall-node;;0) return 0;;
         esac
         [[ -n $ACTION ]] || { discard_pending_input; continue; }
         selection=("$ACTION")

@@ -79,4 +79,17 @@ class ReleaseTests(unittest.TestCase):
         self.lock['node']['version']='1.1.0';self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
         with self.assertRaisesRegex(ValueError,'Component VERSION mismatch'):module.package(self.root,'v1.1.1',self.parent)
 
+    def test_panel_four_part_version_is_preserved(self):
+        directory=self.parent/'Remnacust-panel'
+        files={'VERSION':'1.1.7.1\n', **{p+'/package.json':'{"version":"1.1.7.1"}' for p in ['panel/frontend','panel/backend','subscription-page/frontend','subscription-page/backend']}}
+        self.write(directory,files);self.git(directory,'add','.');self.git(directory,'commit','-m','Panel patch')
+        self.lock['panel'].update(version='1.1.7.1',commit=self.git(directory,'rev-parse','HEAD').strip())
+        self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
+        module.package(self.root,'v1.1.1',self.parent,check=True)
+
+    def test_node_four_part_version_is_rejected(self):
+        self.lock['node']['version']='1.1.7.1'
+        self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
+        with self.assertRaisesRegex(ValueError,'Invalid pinned version: node'):module.package(self.root,'v1.1.1',self.parent)
+
 if __name__=='__main__':unittest.main()

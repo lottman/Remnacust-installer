@@ -110,7 +110,8 @@ def package(root, tag, local_sources=None, check=False):
         if entry.get('repository') != REPOSITORIES[kind] or not re.fullmatch(r'[0-9a-f]{40}', entry.get('commit', '')):
             raise ValueError('Invalid pinned repository or commit: ' + kind)
         component_version = entry.get('version', tag[1:])
-        if not isinstance(component_version, str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?', component_version):
+        version_pattern = r'\d+\.\d+\.\d+' + (r'(?:\.\d+)?' if kind == 'panel' else '') + r'(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?'
+        if not isinstance(component_version, str) or not re.fullmatch(version_pattern, component_version):
             raise ValueError('Invalid pinned version: ' + kind)
         versions[kind] = component_version
         source = component_files(kind, entry['commit'], local_sources)
