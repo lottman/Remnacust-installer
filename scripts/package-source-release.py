@@ -42,7 +42,8 @@ def read_archive(data, strip_root=False):
 
 def git_files(directory, revision):
     return read_archive(subprocess.check_output(
-        ['git', 'archive', '--format=tar', revision], cwd=directory))
+        ['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+         'archive', '--format=tar', revision], cwd=directory))
 
 
 def component_files(kind, commit, local_sources):
