@@ -155,6 +155,30 @@ main "$@"
         self.assertEqual(output.count('ACTION-RAN'), 1, output)
         self.assertEqual(output.count('Установка и обслуживание'), 2, output)
 
+    def test_successful_deployments_exit_the_menu_with_zero_status(self):
+        script = self.menu_fixture(action=True)
+        text = script.read_text().replace('sleep .1; printf "ACTION-RAN\\n"',
+                                          'printf "ACTION-RAN\\n"; printf completed >&3')
+        script.write_text(text)
+        for choice in ['1', '2', '3', '4', '5', '6']:
+            with self.subTest(choice=choice):
+                code, output = self.terminal('bash "$1"', [('Действие: ', choice + '\n')], script=script)
+                self.assertEqual(code, 0, output)
+                self.assertEqual(output.count('ACTION-RAN'), 1, output)
+                self.assertEqual(output.count('Установка и обслуживание'), 1, output)
+                self.assertNotIn('Возврат в меню', output)
+
+    def test_cancellation_and_external_exit_code_20_return_to_menu(self):
+        for action, exchanges in [
+            ('confirm "Тест"', [('Действие: ', '1\n'), (CONFIRM_PROMPT, 'n\n'), ('Действие: ', '0\n')]),
+            ('printf completed >&3; exit 20', [('Действие: ', '1\n'), ('Действие: ', '0\n')]),
+        ]:
+            script = self.menu_fixture()
+            script.write_text(script.read_text().replace('printf UNEXPECTED-ACTION; exit 33', action))
+            code, output = self.terminal('bash "$1"', exchanges, script=script)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(output.count('Установка и обслуживание'), 2, output)
+
     def test_menu_trims_spaces_and_retries_without_python(self):
         code, output = self.terminal('source "$1"; command() { return 1; }; choice=$(ask_menu_choice 10); printf "CHOICE=%s" "$choice"',
                                      [('Действие: ', 'wrong\nold log\n'), ('Действие: ', ' 08 \n')])

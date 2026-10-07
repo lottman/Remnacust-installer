@@ -14,11 +14,13 @@ SERVER_IPS='' HTTPS_TIMEOUT=180
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
 TEAL='' PURPLE='' ROSE='' DIM='' RESET=''
+BOLD=''
 Y_LABEL=y N_LABEL=n
 if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
     TEAL=$'\033[38;2;25;190;160m'; PURPLE=$'\033[38;2;167;139;250m'
     ROSE=$'\033[38;2;239;128;153m'; DIM=$'\033[2m'; RESET=$'\033[0m'
     Y_LABEL=$'\033[1;32my\033[0m'; N_LABEL=$'\033[1;31mn\033[0m'
+    BOLD=$'\033[1m'
 fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
 die() { printf '%s  Ошибка: %s%s\n' "$ROSE" "$*" "$RESET" >&2; exit 1; }
@@ -67,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.6] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.7] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -574,6 +576,8 @@ main() {
 interactive_menu() {
     local choice
     local -a selection=()
+    WORK=$(mktemp -d -t remnacust-menu.XXXXXXXX)
+    touch "$WORK/.installer-owned"; trap cleanup EXIT
     while true; do
         ACTION=''; COMPONENT=''
         show_menu
@@ -588,7 +592,8 @@ interactive_menu() {
         selection=("$ACTION")
         [[ -z $COMPONENT ]] || selection+=(--component "$COMPONENT")
         # A separate shell preserves errexit and confines exit/traps/locks to one action.
-        if bash "${BASH_SOURCE[0]}" "${selection[@]}" "$@"; then
+        if REMNACUST_MENU_COMPLETION_FD=3 bash "${BASH_SOURCE[0]}" "${selection[@]}" "$@" 3> "$WORK/menu-completed"; then
+            [[ ! -s $WORK/menu-completed ]] || return 0
             discard_pending_input
             info 'Возврат в меню'
         else
@@ -1206,15 +1211,65 @@ PY
     helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     if [[ $ACTION != install-* ]]; then install_cli; fi
     CHANGED=false; trap - ERR
-    info "$COMPONENT v${COMPONENT_VERSION:-${TAG#v}} готов · выпуск $TAG · remnacust status --component $COMPONENT"
-    if [[ $ACTION == install-panel ]]; then
-        info "Панель: https://$DOMAIN · создайте администратора при первом входе"
-        if [[ $PROXY == caddy ]]; then
-            info 'HTTPS: Caddy в Docker; системный nginx.service не устанавливается'
-            info 'Панель и прокси: remnacust logs --component panel'
-        else info 'HTTPS обслуживает ваш существующий reverse proxy'; fi
+    completion_summary
+    if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
+}
+completion_row() { printf '  %s %s%s%s\n' "$1" "$BOLD" "$2" "$RESET"; }
+completion_summary() {
+    local -a details=()
+    python3 - "$STATE" "$DOMAIN" "$NODE_DOMAIN" "$PORT" "$PROXY" "$TLS_METHOD" "$CERT_FILE" "$KEY_FILE" > "$WORK/completion-details" <<'PY'
+import json,sys
+from pathlib import Path
+s=json.load(open(sys.argv[1]));directory=s['directory'];env={}
+p=Path(directory)/'.env'
+if p.is_file():
+ for line in p.read_text().splitlines():
+  key,sep,value=line.partition('=')
+  if sep and key in {'FRONT_END_DOMAIN','PANEL_DOMAIN','NODE_PORT'}:env[key]=value.strip().strip('"\'')
+panel=sys.argv[2] or s.get('panelDomain') or env.get('FRONT_END_DOMAIN') or env.get('PANEL_DOMAIN','')
+if panel and not panel.startswith(('http://','https://')):panel='https://'+panel
+tls=s.get('tls',{})
+for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),sys.argv[4] or s.get('nodePort') or s.get('port') or env.get('NODE_PORT',''),s.get('proxy',sys.argv[5]),tls.get('method',sys.argv[6]),tls.get('certificate',sys.argv[7]),tls.get('key',sys.argv[8])]:
+ print(str(value).replace('\n',' ').replace('\r',' '))
+PY
+    mapfile -t details < "$WORK/completion-details"
+    local directory=${details[0]} url=${details[1]} node_domain=${details[2]} port=${details[3]} proxy=${details[4]} method=${details[5]} certificate=${details[6]} key=${details[7]}
+    printf '\n%s%s  ✓ REMNACUST · Установка завершена%s\n\n' "$BOLD" "$TEAL" "$RESET"
+    completion_row 'Компонент:' "$COMPONENT v${COMPONENT_VERSION:-${TAG#v}} · установщик $TAG"
+    if [[ $COMPONENT == panel ]]; then
+        if [[ -n $url ]]; then completion_row 'Адрес входа:' "$url"
+        else completion_row 'Адрес входа:' 'Ваш прежний домен панели'; fi
+        if [[ $ACTION == install-panel ]]; then
+            completion_row 'Администратор:' 'Создайте аккаунт при первом входе'
+            completion_row 'Пароль:' 'От 24 символов: A–Z, a–z и цифры; генератор в форме — 32 символа'
+        else completion_row 'Авторизация:' 'Прежние имя пользователя и пароль'; fi
+        if [[ $proxy == caddy ]]; then completion_row 'HTTPS:' 'Caddy в Docker'
+        else
+            completion_row 'HTTPS:' 'Ваш существующий Nginx/Caddy'
+            completion_row 'Сертификат:' 'Путь указан в конфигурации вашего proxy; установщик его не меняет'
+        fi
+    else
+        completion_row 'API ноды:' "Адрес этого сервера · TCP ${port:-2222}"
+        completion_row 'Подключение:' 'Добавьте адрес, API-порт и профиль в панели'
+        [[ -z $node_domain ]] || completion_row 'TLS/XHTTP домен:' "$node_domain"
+        completion_row 'Ключ ноды:' "$directory/.env · SECRET_KEY"
     fi
-    if [[ $ACTION == install-node ]]; then info "API ноды: TCP $PORT · добавьте адрес, порт и профиль в панели"; fi
+    completion_row 'Файл настроек:' "$directory/.env"
+    if [[ -n $certificate ]]; then
+        completion_row 'Исходный сертификат:' "$certificate"
+        completion_row 'Исходный ключ TLS:' "$key"
+        completion_row 'Копия сертификата:' "$directory/certs/fullchain.pem"
+        completion_row 'Копия ключа TLS:' "$directory/certs/privkey.pem"
+        if [[ $COMPONENT == node ]]; then completion_row 'В Xray:' '/var/lib/remnacust/tls/fullchain.pem и /var/lib/remnacust/tls/privkey.pem'; fi
+        if [[ $method == existing ]]; then completion_row 'После продления:' "remnacust renew-$COMPONENT-certificate"
+        else completion_row 'Продление TLS:' "remnacust-acme-$(get project).timer"; fi
+    elif [[ $COMPONENT == panel && $proxy == caddy ]]; then
+        completion_row 'Сертификат:' 'Caddy получает и продлевает автоматически; хранилище /data в контейнере caddy'
+    fi
+    completion_row 'Состояние:' "remnacust status --component $COMPONENT"
+    completion_row 'Журнал приложений:' "remnacust logs --component $COMPONENT"
+    [[ -z $LOG ]] || completion_row 'Журнал установки:' "$LOG"
+    printf '\n'
 }
 helper_file_copy() {
     python3 - "$HELPER" "$1" "$2" <<'PY'
