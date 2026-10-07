@@ -15,7 +15,14 @@ p=Path(os.environ['FIXTURE']);args=sys.argv[1:];data=json.loads((p/'containers.j
 with (p/'requests').open('a') as f:f.write(' '.join(args)+'\n')
 if args[0]=='ps':
  if os.environ.get('MOCK_DAEMON_DOWN'):raise SystemExit(1)
- for c in data:print(c['Id'])
+ if '--filter' in args:
+  for i,arg in enumerate(args[:-1]):
+   if arg=='--filter':
+    label=args[i+1].removeprefix('label=');key,_,value=label.partition('=')
+    data=[c for c in data if c['Config']['Labels'].get(key)==value]
+ for c in data:
+  if '--format' in args:print(c['Id']+'|'+c['Config']['Labels']['com.docker.compose.project']+'|'+c['Config']['Image'])
+  else:print(c['Id'])
 elif args[0]=='inspect':
  selected=[c for c in data if c['Id'] in args[1:]]
  if len(selected)!=len(args)-1:raise SystemExit(1)
@@ -125,15 +132,24 @@ python3 - "$fixture" "$REMNACUST_ROOT" <<'PY'
 import json,sys
 from pathlib import Path
 p,root=map(Path,sys.argv[1:]);s=json.load(open(root/'registry/panel.json'))
-assert s['recoverable'] and s['uninstalled'] and s['tls']=={'method':'existing'}
+assert not s['recoverable'] and s['reinstallOnly'] and s['uninstalled'] and s['tls']=={'method':'existing'}
 assert s['panelDomain']=='panel.example.org'
 assert (p/'original-directory/.env').read_text()=='APP_SECRET=preserved-test-secret\n'
 assert (p/'original-directory/compose.yml').read_text()=='services: {}\n'
 assert (p/'original-directory/.remnacust-uninstalled').is_file()
 PY
-bash -c 'source "$1"; component_retained panel; show_menu' _ "$installer/installer.sh" > "$fixture/menu"
-grep -q 'start --component panel' "$fixture/menu"
-printf 'PASS retained Compose, secrets and TLS metadata allow the documented restore action\n'
+bash -c 'source "$1"; retired_installation panel; show_menu' _ "$installer/installer.sh" > "$fixture/menu"
+grep -q '1  install-panel' "$fixture/menu"
+! grep -q 'start --component panel' "$fixture/menu"
+! grep -q 'Для возврата' "$fixture/output"
+grep -q 'Повторная установка: remnacust install-panel' "$fixture/output"
+cp "$fixture/requests" "$fixture/requests.before"
+for action in start restart restore-panel; do
+    if bash "$installer/installer.sh" "$action" --component panel --yes > "$fixture/output" 2>&1; then exit 1; fi
+    grep -q 'Доступна только новая установка' "$fixture/output"
+    cmp "$fixture/requests" "$fixture/requests.before"
+done
+printf 'PASS retained Compose, secrets and TLS metadata are preserved; only fresh installation is offered and deleted deployments cannot be started or restored\n'
 prepare_case multiple
 if bash "$installer/installer.sh" uninstall-panel --yes > "$fixture/output" 2>&1; then exit 1; fi
 grep -q 'несколько установок' "$fixture/output"

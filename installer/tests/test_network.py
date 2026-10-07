@@ -128,7 +128,6 @@ wait_panel_https; [[ $count == 3 ]]
         script = self.root / 'installer.sh'
         overrides = '''
 component_installed() { return 1; }
-component_retained() { return 1; }
 assert_fresh_target() { :; }
 select_fresh_target() { :; }
 prepare_host() { :; }
@@ -171,7 +170,7 @@ main "$@"
                 if not chunk:
                     break
                 output += chunk
-                expected = ['Действие: ', 'Версия установки [latest]: ', 'Продолжить? yes/y/да/д или no/n/нет/н [no]: ', 'Действие: '][min(stage, 3)].encode()
+                expected = ['Действие: ', 'Версия установки [latest]: ', 'Продолжить? y/n [n]: ', 'Действие: '][min(stage, 3)].encode()
                 if stage < 4 and expected in output:
                     os.write(master, [b'1\n', b'\n', b'yes\n', b'0\n'][stage])
                     stage += 1

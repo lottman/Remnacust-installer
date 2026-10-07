@@ -10,7 +10,8 @@ import unittest
 
 
 INSTALLER = Path(__file__).resolve().parents[1] / 'installer.sh'
-CONFIRM_PROMPT = 'Продолжить? yes/y/да/д или no/n/нет/н [no]: '
+CONFIRM_PROMPT = 'Продолжить? y/n [n]: '
+COLORED_CHOICES = '\x1b[1;32my\x1b[0m/\x1b[1;31mn\x1b[0m [\x1b[1;31mn\x1b[0m]: '
 
 
 class InputWorkflowTests(unittest.TestCase):
@@ -19,11 +20,15 @@ class InputWorkflowTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
-    def terminal(self, command, exchanges, locale='C.UTF-8', script=None):
+    def terminal(self, command, exchanges, locale='C.UTF-8', script=None, color=False):
         master, slave = pty.openpty()
+        env = {**os.environ, 'LC_ALL': locale, 'NO_COLOR': '1', 'REMNACUST_ROOT': str(self.root)}
+        if color:
+            env.pop('NO_COLOR', None)
+            env['TERM'] = 'xterm-256color'
         process = subprocess.Popen(['bash', '-c', command, 'test', str(script or INSTALLER), str(self.root)],
                                    stdin=slave, stdout=slave, stderr=slave,
-                                   env={**os.environ, 'LC_ALL': locale, 'NO_COLOR': '1', 'REMNACUST_ROOT': str(self.root)})
+                                   env=env)
         os.close(slave)
         output = b''
         pending = b''
@@ -77,6 +82,29 @@ class InputWorkflowTests(unittest.TestCase):
                 self.assertIn('Действие отменено', output)
                 self.assertNotIn('UNEXPECTED-ACTION', output)
 
+    def test_both_prompts_show_only_bold_green_y_and_bold_red_n(self):
+        commands = [('source "$1"; confirm "Тест"; printf ACTION-CONFIRMED', 'Продолжить? ', 'ACTION-CONFIRMED'),
+                    ('source "$1"; WORK="$2"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; '
+                     'certificate_wizard; printf "NODE-DOMAIN=%s" "${NODE_DOMAIN:-none}"',
+                     'Настроить TLS/XHTTP на ноде? ', 'NODE-DOMAIN=none')]
+        for command, prompt, result in commands:
+            with self.subTest(prompt=prompt):
+                reply = 'y\n' if result == 'ACTION-CONFIRMED' else 'n\n'
+                code, output = self.terminal(command, [(prompt + COLORED_CHOICES, reply)], color=True)
+                self.assertEqual(code, 0, output)
+                self.assertIn(result, output)
+                self.assertNotIn('yes/y', output)
+                self.assertNotIn('no/n', output)
+
+    def test_colored_default_cancels_and_invalid_answer_repeats_colored_choices(self):
+        prompt = 'Продолжить? ' + COLORED_CHOICES
+        code, output = self.terminal('source "$1"; confirm "Тест"; printf UNEXPECTED-ACTION',
+                                     [(prompt, 'wrong\n'), (prompt, '\n')], color=True)
+        self.assertEqual(code, 0, output)
+        self.assertIn('Введите \x1b[1;32my\x1b[0m/\x1b[1;31mn\x1b[0m.', output)
+        self.assertIn('Действие отменено', output)
+        self.assertNotIn('UNEXPECTED-ACTION', output)
+
     def test_invalid_confirmation_repeats_question_in_place(self):
         code, output = self.terminal('source "$1"; confirm "Тест"; printf ACTION-CONFIRMED',
                                      [(CONFIRM_PROMPT, 'maybe\n'), (CONFIRM_PROMPT, 'д\n')])
@@ -104,7 +132,6 @@ class InputWorkflowTests(unittest.TestCase):
         script = self.root / 'installer.sh'
         overrides = '''
 component_installed() { return 1; }
-component_retained() { return 1; }
 run_action() { printf UNEXPECTED-ACTION; exit 33; }
 main "$@"
 '''
@@ -138,7 +165,7 @@ main "$@"
     def test_node_tls_prompt_uses_the_same_yes_no_answers(self):
         command = ('source "$1"; WORK="$2"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; TLS_METHOD=existing; '
                    'CERT_FILE=/test/cert; KEY_FILE=/test/key; certificate_wizard; printf "NODE-DOMAIN=%s" "$NODE_DOMAIN"')
-        code, output = self.terminal(command, [('Настроить TLS/XHTTP на ноде? yes/y/да/д или no/n/нет/н [no]: ', 'д\n'),
+        code, output = self.terminal(command, [('Настроить TLS/XHTTP на ноде? y/n [n]: ', 'д\n'),
                                               ('Домен ноды: ', 'edge.example.com\n')])
         self.assertEqual(code, 0, output)
         self.assertIn('NODE-DOMAIN=edge.example.com', output)

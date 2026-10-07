@@ -25,9 +25,16 @@ cleanup_test() {
 }
 trap cleanup_test EXIT
 docker image inspect postgres:18.4 >/dev/null 2>&1 || docker pull postgres:18.4 >/dev/null
-mkdir -p "$REMNACUST_ROOT/registry" "$fixture/source/panel/backend"
+mkdir -p "$REMNACUST_ROOT/registry" "$REMNACUST_ROOT/panel" "$fixture/source/panel/backend"
 touch "$fixture/source/panel/backend/.env.sample"
 printf 'POSTGRES_USER=postgres\nPOSTGRES_DB=postgres\nPOSTGRES_PASSWORD=previous-fixture-password\n' > "$fixture/old.env"
+cp "$fixture/old.env" "$REMNACUST_ROOT/panel/.env"
+python3 - "$REMNACUST_ROOT/panel/compose.json" "$old_project" "$old_volume" <<'PY'
+import json,sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({'name':sys.argv[2],'services':{'remnawave-db':{'image':'postgres:18.4','env_file':['.env'],'volumes':['database:/var/lib/postgresql']}},'volumes':{'database':{'external':True,'name':sys.argv[3]}}}))
+PY
+cp "$REMNACUST_ROOT/panel/compose.json" "$fixture/old-compose.json"
 docker volume create --label "com.docker.compose.project=$old_project" "$old_volume" >/dev/null
 old_db=$(docker run -d --name "$old_project-db" --env-file "$fixture/old.env" \
     --label "com.docker.compose.project=$old_project" --label com.docker.compose.service=remnawave-db \
@@ -47,6 +54,21 @@ wait_postgres "$old_db"
 docker exec "$old_db" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE TABLE retained_sentinel (value text); INSERT INTO retained_sentinel VALUES ($$old-database-preserved$$);' >/dev/null
 bash "$installer" uninstall-panel --project-name "$old_project" --yes
 docker volume inspect "$old_volume" >/dev/null
+cmp "$REMNACUST_ROOT/panel/.env" "$fixture/old.env"
+cmp "$REMNACUST_ROOT/panel/compose.json" "$fixture/old-compose.json"
+[[ -f $REMNACUST_ROOT/panel/.remnacust-uninstalled ]]
+for action in start restart restore-panel; do
+    if bash "$installer" "$action" --component panel --yes > "$fixture/denied" 2>&1; then exit 1; fi
+    grep -q 'Доступна только новая установка' "$fixture/denied"
+    [[ -z $(docker ps --all --quiet --filter "label=com.docker.compose.project=$old_project") ]]
+done
+
+# Previously published installers marked retained Compose as recoverable.
+python3 - "$REMNACUST_ROOT/registry/panel.json" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]);s=json.loads(p.read_text());s['recoverable']=True;s.pop('reinstallOnly',None);p.write_text(json.dumps(s))
+PY
 
 # Exercise main's install path. Only the app/image/HTTPS checks are replaced;
 # generated Compose, registry, secrets, volume ownership and PostgreSQL are real.
@@ -78,6 +100,8 @@ bash "$fixture/install-fixture.sh" "$installer"
 new_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' "$REMNACUST_ROOT/registry/panel.json")
 projects+=("$new_project")
 [[ $new_project != "$old_project" ]]
+cmp "$REMNACUST_ROOT/panel/.env" "$fixture/old.env"
+cmp "$REMNACUST_ROOT/panel/compose.json" "$fixture/old-compose.json"
 docker volume inspect "$old_volume" >/dev/null
 printf 'PASS main install path replaces the obsolete registry; new PostgreSQL accepts its new password and has a fresh database\n'
 

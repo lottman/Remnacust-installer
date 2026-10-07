@@ -60,10 +60,51 @@ grep -qx 'APP_SECRET=retained' "$ROOT/panel/.env"
 printf 'PASS nonempty old directory is preserved while new files use a separate directory\n'
 prepare restored
 mkdir -p "$ROOT/panel"; printf 'services: {}\n' > "$ROOT/panel/compose.json"
-component_retained panel
-if (assert_fresh_target) > "$fixture/output" 2>&1; then exit 1; fi
-grep -q 'start --component panel' "$fixture/output"
-printf 'PASS restored Compose is offered for recovery even if the old recoverable flag was false\n'
+printf 'APP_SECRET=old-secret\n' > "$ROOT/panel/.env"
+touch "$ROOT/panel/.remnacust-uninstalled"
+python3 - "$ROOT/registry/panel.json" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]);s=json.loads(p.read_text());s['recoverable']=True;p.write_text(json.dumps(s))
+PY
+retired_installation panel
+show_menu > "$fixture/menu"
+grep -q '1  install-panel' "$fixture/menu"
+! grep -q 'start --component panel' "$fixture/menu"
+for ACTION in start restart restore-panel; do
+    if (service_action) > "$fixture/output" 2>&1; then exit 1; fi
+    grep -q 'Доступна только новая установка' "$fixture/output"
+done
+ACTION=install-panel
+assert_fresh_target; select_fresh_target; fresh_files; archive_retired_registry
+helper_file_copy "$STATE" "$ROOT/registry/panel.json"
+grep -qx 'APP_SECRET=old-secret' "$ROOT/panel/.env"
+grep -qx 'services: {}' "$ROOT/panel/compose.json"
+[[ -f $ROOT/panel/.remnacust-uninstalled && $DEPLOY != "$ROOT/panel" ]]
+ACTION=start; assert_not_uninstalled
+printf 'PASS legacy recoverable=true and retained Compose allow only fresh installation; the old marker does not block the new deployment\n'
+prepare retained-node
+COMPONENT=node; ACTION=install-node
+mkdir -p "$ROOT/node"
+printf 'services: {}\n' > "$ROOT/node/compose.json"
+python3 - "$ROOT/registry/panel.json" "$ROOT/registry/node.json" "$ROOT/node" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]);s=json.loads(p.read_text());p.unlink()
+s.update(component='node',directory=sys.argv[3],project='remnacust-node',composeFiles=[sys.argv[3]+'/compose.json'],recoverable=True)
+Path(sys.argv[2]).write_text(json.dumps(s))
+PY
+retired_installation node
+show_menu > "$fixture/menu"
+grep -q '2  install-node' "$fixture/menu"
+! grep -q 'start --component node' "$fixture/menu"
+for ACTION in start restart; do
+    if (service_action) > "$fixture/output" 2>&1; then exit 1; fi
+    grep -q 'Доступна только новая установка' "$fixture/output"
+done
+ACTION=install-node; assert_fresh_target; select_fresh_target
+[[ $PROJECT == remnacust-node-* && $DIRECTORY == "$ROOT/node-"* ]]
+printf 'PASS retained legacy node also offers a fresh isolated installation and cannot be restarted\n'
 prepare vanished
 mkdir -p "$ROOT/panel"
 python3 - "$ROOT/registry/panel.json" <<'PY'
@@ -71,9 +112,9 @@ import json,sys
 from pathlib import Path
 p=Path(sys.argv[1]);s=json.loads(p.read_text());s['recoverable']=True;p.write_text(json.dumps(s))
 PY
-! component_retained panel
+retired_installation panel
 assert_fresh_target; select_fresh_target
-printf 'PASS stale recoverable=true does not offer a broken restore when Compose disappeared\n'
+printf 'PASS stale recoverable=true permits a fresh installation when Compose disappeared\n'
 prepare explicit
 PROJECT=remnacust-panel
 if (select_fresh_target) > "$fixture/output" 2>&1; then exit 1; fi

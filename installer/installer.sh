@@ -14,13 +14,15 @@ SERVER_IPS='' HTTPS_TIMEOUT=180
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
 TEAL='' PURPLE='' ROSE='' DIM='' RESET=''
+Y_LABEL=y N_LABEL=n
 if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
     TEAL=$'\033[38;2;25;190;160m'; PURPLE=$'\033[38;2;167;139;250m'
     ROSE=$'\033[38;2;239;128;153m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+    Y_LABEL=$'\033[1;32my\033[0m'; N_LABEL=$'\033[1;31mn\033[0m'
 fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
 die() { printf '%s  Ошибка: %s%s\n' "$ROSE" "$*" "$RESET" >&2; exit 1; }
-ask() { local value; [[ -t 0 ]] || die "Задайте параметр: $1"; read -r -p "$1${2:+ [$2]}: " value || return 1; printf '%s' "${value:-${2:-}}"; }
+ask() { local value display_default=${3:-${2:-}}; [[ -t 0 ]] || die "Задайте параметр: $1"; read -r -p "$1${2:+ [$display_default]}: " value || return 1; printf '%s' "${value:-${2:-}}"; }
 trim_answer() {
     local value=$1
     value=${value#"${value%%[![:space:]]*}"}; value=${value%"${value##*[![:space:]]}"}
@@ -38,14 +40,14 @@ discard_pending_input() {
 ask_yes_no() {
     local answer
     while true; do
-        answer=$(ask "$1" "${2:-no}") || return $?
+        answer=$(ask "$1 $Y_LABEL/$N_LABEL" n "$N_LABEL") || return $?
         answer=$(trim_answer "$answer")
-        [[ -n $answer ]] || answer=${2:-no}
+        [[ -n $answer ]] || answer=n
         # Literal Cyrillic alternatives also work with the byte-oriented C locale.
         case "${answer,,}" in
             y|yes|д|Д|да|Да|дА|ДА) printf yes; return 0;;
             n|no|н|Н|нет|Нет|нЕт|неТ|НЕт|НеТ|нЕТ|НЕТ) printf no; return 0;;
-            *) printf '  Введите yes/y/да/д или no/n/нет/н.\n' >&2; discard_pending_input;;
+            *) printf '  Введите %s/%s.\n' "$Y_LABEL" "$N_LABEL" >&2; discard_pending_input;;
         esac
     done
 }
@@ -65,7 +67,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.5] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.6] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -113,7 +115,8 @@ Remnacust · installer.sh
   --preserve-subhash        Перенос короткого токена подписки, если совместим
 
 Версия запрашивается перед установкой/обновлением/миграцией; Enter = latest.
-Подтверждение: yes/y/да/д; отказ: no/n/нет/н. Регистр и пробелы не важны.
+Подтверждение: y/n; Enter = n. Регистр и пробелы не важны.
+После удаления доступна только новая установка через install-panel/install-node.
 Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS, amd64 / arm64.
 SECRET_KEY вводится скрыто или через REMNACUST_NODE_SECRET. Секреты не печатаются.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
@@ -124,8 +127,6 @@ show_menu() {
     local panel_upgrade='Обновить панель · не установлена' node_upgrade='Обновить ноду · не установлена'
     if component_installed panel; then panel_action=uninstall-panel; panel_note='Удалить панель · данные сохраняются'; panel_upgrade='Обновить панель'; fi
     if component_installed node; then node_action=uninstall-node; node_note='Удалить ноду · файлы сохраняются'; node_upgrade='Обновить ноду целиком'; fi
-    if component_retained panel; then panel_action='start --component panel'; panel_note='Восстановить сохранённую панель'; fi
-    if component_retained node; then node_action='start --component node'; node_note='Восстановить сохранённую ноду'; fi
     printf '\n%s  ▌ REMNACUST%s  %sУстановка и обслуживание%s\n\n' "$PURPLE" "$RESET" "$DIM" "$RESET"
     printf '  1  %-26s %s\n  2  %-26s %s\n' "$panel_action" "$panel_note" "$node_action" "$node_note"
     printf '  3  upgrade-panel              %s\n  4  upgrade-node               %s\n' "$panel_upgrade" "$node_upgrade"
@@ -174,9 +175,7 @@ PY
         ) || directory="$ROOT/$component"
     fi
     [[ -z $DIRECTORY || $COMPONENT != "$component" ]] || directory=$DIRECTORY
-    component_retained "$component" && return 1
-    [[ ! -f $directory/.remnacust-uninstalled ]] || return 1
-    if [[ -d $directory && ! -L $directory ]]; then
+    if ! retired_installation "$component" && [[ ! -f $directory/.remnacust-uninstalled && -d $directory && ! -L $directory ]]; then
         for file in compose.json compose.yml compose.yaml docker-compose.yml docker-compose.yaml Dockerfile; do
             [[ ! -f $directory/$file || -L $directory/$file ]] || return 0
         done
@@ -201,7 +200,6 @@ component_project_containers() {
 }
 assert_fresh_target() {
     local directory="${DIRECTORY:-$ROOT/$COMPONENT}" project="${PROJECT:-remnacust-$COMPONENT}" existing
-    component_retained "$COMPONENT" && die "$COMPONENT удалён с сохранением данных. Выполните remnacust start --component $COMPONENT, чтобы восстановить установку."
     component_installed "$COMPONENT" && die "$COMPONENT уже установлен (в том числе остановленные контейнеры). Используйте upgrade-$COMPONENT; для старой установки укажите --directory или --container."
     if [[ -e $ROOT/registry/$COMPONENT.json || -L $ROOT/registry/$COMPONENT.json ]]; then
         retired_installation "$COMPONENT" || die 'Найдена запись установки, но её файлы недоступны. Проверьте каталог; новая установка поверх неё не выполняется.'
@@ -214,25 +212,10 @@ assert_fresh_target() {
     fi
     if command -v docker >/dev/null; then
         existing=$(docker ps --all --filter "label=com.docker.compose.project=$project" --format '{{.Names}} · {{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null) || die 'Не удалось проверить контейнеры: Docker daemon недоступен. Запустите Docker и повторите проверку.'
-        [[ -z $existing ]] || die "Проект $project уже существует: $existing. Восстановите его через существующий Compose; для перехода используйте upgrade/migrate с --directory."
+        [[ -z $existing ]] || die "Проект $project уже существует: $existing. Используйте upgrade/migrate с --directory."
     fi
 }
-component_retained() {
-    [[ -f $ROOT/registry/$1.json && ! -L $ROOT/registry/$1.json ]] || return 1
-    command -v python3 >/dev/null || return 1
-    python3 - "$ROOT/registry/$1.json" "$1" <<'PY'
-import json,sys
-from pathlib import Path
-try:
-    s=json.load(open(sys.argv[1]));p=Path(s['directory'])
-    files=s.get('composeFiles',[])
-    available=isinstance(files,list) and bool(files) and all(isinstance(f,str) and Path(f).is_file() and not Path(f).is_symlink() for f in files)
-    raise SystemExit(0 if s.get('component')==sys.argv[2] and s.get('uninstalled') is True and available and p.is_dir() and not p.is_symlink() else 1)
-except (OSError,ValueError,KeyError,TypeError): raise SystemExit(1)
-PY
-}
 retired_installation() {
-    component_retained "$1" && return 1
     [[ -f $ROOT/registry/$1.json && ! -L $ROOT/registry/$1.json ]] || return 1
     command -v python3 >/dev/null || return 1
     python3 - "$ROOT/registry/$1.json" "$1" <<'PY'
@@ -242,6 +225,13 @@ try:
     raise SystemExit(0 if isinstance(s,dict) and s.get('component')==sys.argv[2] and s.get('uninstalled') is True else 1)
 except (OSError,ValueError,TypeError):raise SystemExit(1)
 PY
+}
+assert_not_uninstalled() {
+    case "$ACTION" in start|restart|restore-panel)
+        if retired_installation "$COMPONENT" || [[ -n $DIRECTORY && -f $DIRECTORY/.remnacust-uninstalled || -n $DEPLOY && -f $DEPLOY/.remnacust-uninstalled ]]; then
+            die "$COMPONENT удалён. Доступна только новая установка: remnacust install-$COMPONENT. Прежние данные сохраняются."
+        fi;;
+    esac
 }
 project_has_volumes() {
     docker volume ls --quiet > "$WORK/existing-volumes" || die 'Не удалось проверить тома: Docker недоступен'
@@ -282,7 +272,7 @@ archive_retired_registry() {
 confirm() {
     $YES && return 0
     local answer
-    answer=$(ask_yes_no "$1. Продолжить? yes/y/да/д или no/n/нет/н" no) || exit 1
+    answer=$(ask_yes_no "$1. Продолжить?") || exit 1
     [[ $answer == yes ]] || { info 'Действие отменено'; exit 0; }
 }
 cleanup() {
@@ -589,8 +579,8 @@ interactive_menu() {
         show_menu
         choice=$(ask_menu_choice 10) || return $?
         case "$choice" in
-            1) if component_installed panel; then ACTION=uninstall-panel; elif component_retained panel; then ACTION=start; COMPONENT=panel; else ACTION=install-panel; fi;;
-            2) if component_installed node; then ACTION=uninstall-node; elif component_retained node; then ACTION=start; COMPONENT=node; else ACTION=install-node; fi;;
+            1) if component_installed panel; then ACTION=uninstall-panel; else ACTION=install-panel; fi;;
+            2) if component_installed node; then ACTION=uninstall-node; else ACTION=install-node; fi;;
             3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
             5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu || return $?;;10) ACTION=migrate-marzban-panel;;0) return 0;;
         esac
@@ -913,7 +903,7 @@ certificate_wizard() {
             [[ -n $PANEL_IP ]] || PANEL_IP=$(ask 'IP/CIDR панели для доступа к API (Enter — свой firewall)')
         fi
         if [[ -t 0 && -z $NODE_DOMAIN ]]; then
-            choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде? yes/y/да/д или no/n/нет/н' no)
+            choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде?')
             case "$choice" in yes) NODE_DOMAIN=$(ask 'Домен ноды');;no) ;;esac
         fi
         if [[ -z $NODE_DOMAIN ]]; then
@@ -1239,6 +1229,9 @@ service_action() {
         command -v docker >/dev/null || die 'Docker недоступен'
         lock_operation; uninstall_component; return
     fi
+    if [[ $ACTION != status || -n $COMPONENT ]]; then
+        COMPONENT=${COMPONENT:-panel}; assert_not_uninstalled
+    fi
     installed_helper; lock_operation
     if [[ $ACTION == status && -z $COMPONENT ]]; then
         local item found=false
@@ -1250,6 +1243,7 @@ service_action() {
         IMAGE=discovery-only
         find_existing
     else load_state; fi
+    assert_not_uninstalled
     case "$ACTION" in
         status) compose ps --all;;
         check-panel)
@@ -1271,12 +1265,6 @@ PY
             local extra
             for extra in "${EXTRAS[@]}"; do [[ " ${START_APPS[*]} " == *" $extra "* ]] || START_APPS+=("$extra"); done
             compose up -d --no-build --pull never "${START_APPS[@]}"
-            python3 - "$STATE" "$DEPLOY/.remnacust-uninstalled" <<'PY'
-import json,sys
-from pathlib import Path
-p=Path(sys.argv[1]);s=json.loads(p.read_text());s.pop('uninstalled',None)
-p.write_text(json.dumps(s,indent=2)+'\n');Path(sys.argv[2]).unlink(missing_ok=True)
-PY
             ;;
         stop) confirm 'Остановить приложения'; compose stop "${APPS[@]}" "${EXTRAS[@]}";;
         restart) confirm 'Перезапустить приложения'; compose restart "${APPS[@]}" "${EXTRAS[@]}";;
@@ -1360,10 +1348,9 @@ files=record.get('composeFiles',[]) if record.get('project')==project else []
 if not files:
  files=[str((Path(path)/f).resolve()) for f in labels(anchor).get('com.docker.compose.project.config_files','').split(',') if f]
 if compose_file:files=[str(Path(compose_file).resolve())]
-recoverable=bool(files) and all(isinstance(f,str) and Path(f).is_file() for f in files)
 state=record.copy() if record.get('project')==project else {}
 proxies=[service(c) for c in selected if image(c).split('@')[0].rsplit('/',1)[-1].split(':')[0] in {'caddy','nginx'} and service(c)]
-state.update({'schema':1,'component':kind,'directory':path,'project':project or expected,'composeFiles':files,'mainService':state.get('mainService') or service(anchor),'applications':state.get('applications') or list(dict.fromkeys(service(c) for c in selected if app(c) and service(c))),'extraServices':state.get('extraServices',proxies),'image':state.get('image') or image(anchor),'uninstalled':True,'recoverable':recoverable})
+state.update({'schema':1,'component':kind,'directory':path,'project':project or expected,'composeFiles':files,'mainService':state.get('mainService') or service(anchor),'applications':state.get('applications') or list(dict.fromkeys(service(c) for c in selected if app(c) and service(c))),'extraServices':state.get('extraServices',proxies),'image':state.get('image') or image(anchor),'uninstalled':True,'recoverable':False,'reinstallOnly':True})
 if 'runningApplications' not in state:state['runningApplications']=list(dict.fromkeys(service(c) for c in selected if c.get('State',{}).get('Running') and service(c) and (app(c) or service(c) in proxies)))
 if not state.get('ownedServices'):state['ownedServices']=list(dict.fromkeys(service(c) for c in selected if service(c)))
 p=Path(work)
@@ -1392,8 +1379,7 @@ if directory.is_dir() and not directory.is_symlink():(directory/'.remnacust-unin
 target=Path(sys.argv[3]);pending=target.with_suffix('.json.pending')
 pending.write_text(json.dumps(s,indent=2)+'\n');pending.chmod(0o600);os.replace(pending,target)
 print('Данные и прежний каталог: '+s['directory'])
-if not s['recoverable']:print('Compose отсутствует. Описания контейнеров сохранены: '+sys.argv[2]+'/containers.json. Для возврата восстановите исходный Compose.')
-else:print('Для возврата: remnacust start --component '+s['component'])
+print('Повторная установка: remnacust install-'+s['component'])
 PY
     info "$COMPONENT удалён. Копия описаний контейнеров: $snapshot"
 }
