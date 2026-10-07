@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.17] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.18] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -388,6 +388,11 @@ for family,address in [(socket.AF_INET,'0.0.0.0'),(socket.AF_INET6,'::')]:
     finally:s.close()
 PY
 }
+panel_processes_ready() {
+    local id=$1 service=$2
+    [[ $COMPONENT == panel && " ${APPS[*]} " == *" $service "* ]] || return 0
+    docker exec "$id" node -e 'const fs=require("node:fs");if(!fs.existsSync("/opt/pm2/package.json"))process.exit(0);try{const {execFileSync}=require("node:child_process");const rows=JSON.parse(execFileSync("pm2",["jlist"],{timeout:5000,maxBuffer:16*1024*1024,encoding:"utf8"}));const names=new Set(["remnawave-api","remnawave-jobs","remnawave-scheduler"]);const apps=rows.filter(x=>names.has(x.name));process.exit(apps.length&&apps.every(x=>x.pm2_env.status==="online"&&x.pm2_env.restart_time===0)?0:1);}catch{process.exit(1)}' >/dev/null 2>&1
+}
 wait_ready() {
     local service id state before attempt ready
     for service in "${START_APPS[@]}"; do
@@ -396,14 +401,14 @@ wait_ready() {
         ready=false
         for ((attempt=1; attempt<=90; attempt++)); do
             state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id")
-            if [[ $state == healthy ]]; then ready=true; break; fi
+            if [[ $state == healthy ]] && panel_processes_ready "$id" "$service"; then ready=true; break; fi
             if [[ $state == unhealthy || $state == exited || $state == dead ]]; then return 1; fi
             if (( $(docker inspect --format '{{.RestartCount}}' "$id") >= 3 )); then return 1; fi
             if [[ $state == running ]]; then
                 before=$(docker inspect --format '{{.State.Running}} {{.RestartCount}} {{.State.StartedAt}}' "$id")
                 sleep 5
                 if [[ $(docker inspect --format '{{.State.Running}} {{.RestartCount}} {{.State.StartedAt}}' "$id") == "$before" ]]; then
-                    if [[ $COMPONENT != node || $service != "$(get mainService)" ]] || docker exec "$id" node -e 'const s=require("net").connect(Number(process.env.NODE_PORT||2222),"127.0.0.1");s.on("connect",()=>{s.destroy();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),3000)' >/dev/null 2>&1; then ready=true; break; fi
+                    if { [[ $COMPONENT != node || $service != "$(get mainService)" ]] || docker exec "$id" node -e 'const s=require("net").connect(Number(process.env.NODE_PORT||2222),"127.0.0.1");s.on("connect",()=>{s.destroy();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),3000)' >/dev/null 2>&1; } && panel_processes_ready "$id" "$service"; then ready=true; break; fi
                 fi
             fi
             sleep 2

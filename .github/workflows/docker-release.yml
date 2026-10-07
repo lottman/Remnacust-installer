@@ -131,6 +131,7 @@ jobs:
           elif [ "$COMPONENT" = panel ]; then
             docker run --rm --env EXPECTED_VERSION="$EXPECTED_VERSION" --entrypoint node "$IMAGE" -e 'if(require("/opt/app/package.json").version!==process.env.EXPECTED_VERSION)process.exit(1)'
             python3 scripts/check-panel-build-metadata.py --image "$IMAGE" --version "$EXPECTED_VERSION" --commit "$EXPECTED_COMMIT" --branch main --build-time "$BUILD_TIME" --build-number "$GITHUB_RUN_NUMBER"
+            bash scripts/check-panel-runtime.sh "$IMAGE" "$EXPECTED_VERSION"
           fi
           docker push "$IMAGE"
           python3 scripts/export-image.py --source source --component "$COMPONENT" --architecture "$ARCHITECTURE" --tag "$RELEASE_TAG" --output exported
