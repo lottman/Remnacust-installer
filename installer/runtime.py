@@ -186,7 +186,8 @@ def transform(config, container, component, image, containers=()):
             service.pop('build', None)
             if component == 'node' and name == main:
                 current = environment(container)
-                protected = {key: current[key] for key in ['SECRET_KEY', 'NODE_PORT'] if key in current}
+                protected = {key: current[key] for key in ['SECRET_KEY'] if key in current}
+                protected['NODE_PORT'] = str(port(current.get('NODE_PORT', '2222')))
                 if isinstance(service.get('environment'), list):
                     service['environment'] = [entry.partition('=')[0] + '=' + protected[entry.partition('=')[0]]
                         if entry.partition('=')[0] in protected else entry for entry in service['environment']]

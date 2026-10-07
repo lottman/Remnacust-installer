@@ -23,7 +23,8 @@ class CompletionTests(unittest.TestCase):
             (root / 'state.json').write_text(json.dumps(state))
             result = subprocess.run(['bash', '-c',
                 'source "$1"; WORK="$2"; STATE="$2/state.json"; COMPONENT="$3"; ACTION="$4"; '
-                'TAG=v1.2.7; COMPONENT_VERSION=1.1.3; LOG=/test/install.log; completion_summary',
+                'TAG=v1.2.7; COMPONENT_VERSION=1.1.3; LOG=/test/install.log; '
+                'server_addresses() { printf "93.184.216.34\\n2606:4700:4700::1111\\n"; }; completion_summary',
                 'test', str(INSTALLER), directory, component, action],
                 capture_output=True, text=True, env={**os.environ, 'NO_COLOR': '1'}, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -46,6 +47,11 @@ class CompletionTests(unittest.TestCase):
                 self.assertIn(value, output)
             if component == 'node':
                 self.assertIn('TCP 2222', output)
+                self.assertIn('Адрес в панели:', output)
+                self.assertIn('93.184.216.34', output)
+                self.assertIn('2606:4700:4700::1111', output)
+                self.assertIn('Порт в панели: 2222', output)
+                self.assertIn('SSH:', output)
                 self.assertIn('/var/lib/remnacust/tls/fullchain.pem', output)
                 self.assertIn('edge.example.org', output)
 

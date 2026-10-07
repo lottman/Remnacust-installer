@@ -27,7 +27,7 @@ PY
 source "$installer_dir/installer.sh"
 ROOT="$test_root/root"; WORK="$test_root/work"; mkdir -p "$WORK" "$ROOT/registry"
 LOG="$test_root/operation.log"; SOURCE=$public_source; HELPER="$installer_dir/runtime.py"
-COMPONENT=node; ACTION=install-node; PORT=43874; DIRECTORY="$test_root/deploy"; PROJECT=$test_project
+COMPONENT=node; ACTION=install-node; PORT=${TEST_NODE_PORT:-2222}; DIRECTORY="$test_root/deploy"; PROJECT=$test_project
 IMAGE=$test_image; YES=true; VERSION=1.1.1
 prepare_host() { docker info >/dev/null; }
 release_source() { TAG=v1.1.1; SOURCE=$public_source; HELPER="$installer_dir/runtime.py"; IMAGE=$test_image; }
@@ -35,7 +35,7 @@ prepare_image() { docker image inspect "$IMAGE" >/dev/null; }
 install_cli() { :; }
 deploy
 old_id=$(compose ps --quiet remnanode)
-ACTION=upgrade-node; CONTAINER=$old_id; DIRECTORY=''; CHANGED=false
+ACTION=upgrade-node; CONTAINER=$old_id; DIRECTORY=''; PORT=''; CHANGED=false
 deploy
 [[ $(docker inspect --format '{{.Config.Image}}' "$(compose ps --quiet remnanode)") == "$test_image" ]]
 printf 'PASS fresh node certificate validation, API readiness and complete upgrade with preserved key/mounts/port\n'

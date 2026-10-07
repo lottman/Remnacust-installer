@@ -40,7 +40,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 | `renew-node-certificate` | Проверка и копирование обновлённого сертификата; перезапуск ноды/Nginx |
 | `renew-panel-certificate` | Проверка и копирование готового сертификата; reload Caddy без перезапуска панели |
 
-При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.2.14` закрепляет выпуск. Установщик 1.2.14 содержит панель версии 1.1.6, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
+При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.2.15` закрепляет выпуск. Установщик 1.2.15 содержит панель версии 1.1.7, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
 
 Вопросы подтверждения и настройки TLS/XHTTP ноды показывают только `y/n`: в цветном терминале `y` выделяется зелёным жирным, `n` — красным жирным. `y` подтверждает, `n` и Enter отменяют действие; в вопросе TLS Enter оставляет TLS выключенным. Регистр и пробелы по краям не важны. Незнакомый ответ повторяет вопрос на месте. При `NO_COLOR`, `TERM=dumb` или выводе в файл управляющие коды цвета не печатаются.
 
@@ -52,7 +52,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 
 ```bash
 sudo bash installer.sh install-panel --domain panel.example.com --email admin@example.com --version latest
-sudo remnacust upgrade-panel --version 1.2.14
+sudo remnacust upgrade-panel --version 1.2.15
 sudo remnacust status --component node
 sudo remnacust backup-panel
 sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
@@ -89,6 +89,8 @@ sudo bash installer.sh install-node --port 2222 --panel-ip 203.0.113.10
 sudo bash installer.sh install-node --port 2222 \
   --node-domain edge.example.com --email admin@example.com
 ```
+
+При новой установке скрипт спрашивает API-порт ноды; по умолчанию `2222`. Допустимы порты от 1 до 65535, занятый порт отклоняется до запуска. При обновлении и миграции сохраняется фактический `NODE_PORT` работающего контейнера; `--port` разрешён только для новой установки. В конце показаны адрес сервера и порт для раздела «Ноды». SSH-порт установщик не меняет.
 
 `--panel-ip` добавляет правила доступа к API только в уже активный UFW. Установщик не включает и не сбрасывает firewall. Если UFW не активен, ограничьте порт API адресом панели в firewall провайдера. Укажите этот же порт при добавлении ноды в панели. Xray начнёт обслуживать пользователей после назначения профиля.
 

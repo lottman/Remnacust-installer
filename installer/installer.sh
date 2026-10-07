@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.14] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.15] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -1138,6 +1138,7 @@ node_acl() {
     else info "UFW не активен. Разрешите TCP $PORT только от $PANEL_IP в firewall провайдера"; fi
 }
 deploy() {
+    [[ $ACTION == install-* || -z $PORT ]] || die '--port задаёт порт новой установки. Обновление и миграция сохраняют фактический порт существующего контейнера.'
     if [[ $ACTION == install-* ]]; then
         info "$ACTION · новая установка $COMPONENT"
     else info "$ACTION · сохраняем проект Compose, .env, сети и тома"; fi
@@ -1233,7 +1234,7 @@ if p.is_file():
 panel=sys.argv[2] or s.get('panelDomain') or env.get('FRONT_END_DOMAIN') or env.get('PANEL_DOMAIN','')
 if panel and not panel.startswith(('http://','https://')):panel='https://'+panel
 tls=s.get('tls',{})
-for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),sys.argv[4] or s.get('apiPort') or s.get('nodePort') or s.get('port') or env.get('NODE_PORT',''),s.get('proxy',sys.argv[5]),tls.get('method',sys.argv[6]),tls.get('certificate',sys.argv[7]),tls.get('key',sys.argv[8]),', '.join(s.get('composeFiles',[]))]:
+for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),s.get('apiPort') or s.get('nodePort') or s.get('port') or sys.argv[4] or env.get('NODE_PORT',''),s.get('proxy',sys.argv[5]),tls.get('method',sys.argv[6]),tls.get('certificate',sys.argv[7]),tls.get('key',sys.argv[8]),', '.join(s.get('composeFiles',[]))]:
  print(str(value).replace('\n',' ').replace('\r',' '))
 PY
     mapfile -t details < "$WORK/completion-details"
@@ -1253,8 +1254,16 @@ PY
             completion_row 'Сертификат:' 'Путь указан в конфигурации вашего proxy; установщик его не меняет'
         fi
     else
+        local addresses address
+        if addresses=$(server_addresses 2>/dev/null); then
+            while IFS= read -r address; do
+                completion_row 'Адрес в панели:' "$address"
+            done <<< "$addresses"
+        else completion_row 'Адрес в панели:' 'Публичный IP этого сервера (не IP панели)'; fi
         completion_row 'API ноды:' "Адрес этого сервера · TCP ${port:-2222}"
-        completion_row 'Подключение:' 'Добавьте адрес, API-порт и профиль в панели'
+        completion_row 'Порт в панели:' "${port:-2222}"
+        completion_row 'Подключение:' 'Ноды → создать/редактировать → адрес, порт ноды и профиль'
+        completion_row 'SSH:' 'Отдельный порт доступа к серверу; установщик его не меняет'
         [[ -z $node_domain ]] || completion_row 'TLS/XHTTP домен:' "$node_domain"
         if [[ $ACTION == install-node ]]; then completion_row 'Ключ ноды:' "$directory/.env · SECRET_KEY"
         else completion_row 'Ключ ноды:' 'Сохранён из прежнего контейнера · SECRET_KEY в Compose'; fi

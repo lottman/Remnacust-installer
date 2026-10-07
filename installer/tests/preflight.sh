@@ -58,4 +58,8 @@ printf 'PASS malformed registry still falls back to an existing Compose director
 if bash "$installer/installer.sh" upgrade-panel --email test@example.com > "$fixture/output" 2>&1; then exit 1; fi
 grep -q 'обновление сохраняет' "$fixture/output"
 printf 'PASS certificate creation options cannot change a proxy during upgrades\n'
+if (ACTION=upgrade-node; PORT=2222; deploy) > "$fixture/output" 2>&1; then exit 1; fi
+grep -q -- '--port задаёт порт новой установки' "$fixture/output"
+[[ ! -f $fixture/unexpected-download ]]
+printf 'PASS node upgrade cannot silently accept a replacement port\n'
 WORK=''

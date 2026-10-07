@@ -22,13 +22,21 @@ class RuntimeTests(unittest.TestCase):
         old = {'services': {'remnanode': {'image': 'remnacust-node:1.1.1',
             'environment': ['SECRET_KEY=original==', 'NODE_PORT=72', 'TOKEN=${KEEP_LITERAL}', 'FROM_HOST', 'EMPTY=', 'TOKEN=last=value'],
             'network_mode': 'host', 'volumes': ['/logs:/logs'], 'cap_add': ['NET_ADMIN']}}}
-        inspect = {'Config': {'Labels': {'com.docker.compose.service': 'remnanode'}}}
+        inspect = {'Config': {'Env': ['SECRET_KEY=original==', 'NODE_PORT=72'], 'Labels': {'com.docker.compose.service': 'remnanode'}}}
         expected = copy.deepcopy(old); expected['services']['remnanode']['image'] = 'new'
         result, apps = runtime.transform(old, inspect, 'node', 'new')
         self.assertEqual(result, expected)
         self.assertEqual(apps, ['remnanode'])
         self.assertEqual(old['services']['remnanode']['image'], 'remnacust-node:1.1.1')
         self.assertEqual(runtime.compose_environment(old['services']['remnanode']['environment'])['TOKEN'], 'last=value')
+
+    def test_node_without_explicit_port_keeps_the_runtime_default_despite_stale_compose(self):
+        old = {'services': {'node': {'image': 'old', 'network_mode': 'host',
+            'environment': {'NODE_PORT': '72', 'SECRET_KEY': 'stale'}}}}
+        live = {'Config': {'Env': ['SECRET_KEY=live'], 'Labels': {'com.docker.compose.service': 'node'}}}
+        result, apps = runtime.transform(old, live, 'node', 'new')
+        self.assertEqual(result['services']['node']['environment'], {'NODE_PORT': '2222', 'SECRET_KEY': 'live'})
+        self.assertEqual(old['services']['node']['environment']['NODE_PORT'], '72')
 
     def test_panel_list_environment_selects_workers_and_preserves_proxy(self):
         old = {'services': {'main': {'image': 'old', 'environment': ['APP_SECRET=${APP_SECRET}']},
