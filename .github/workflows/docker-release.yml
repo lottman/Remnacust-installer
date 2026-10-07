@@ -13,12 +13,17 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    outputs:
+      build_time: ${{ steps.metadata.outputs.build_time }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Record release build time
+        id: metadata
+        run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -29,6 +34,7 @@ jobs:
           bash tests/database-repair.test.sh
           python3 tests/package-release.test.py
           python3 tests/images.test.py
+          python3 tests/build-metadata.test.py
           bash installer/tests/uninstall-docker.sh
           bash installer/tests/reinstall-docker.sh
           python3 scripts/package-source-release.py "$RELEASE_TAG"
@@ -54,6 +60,7 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       COMPONENT: ${{ matrix.component }}
       ARCHITECTURE: ${{ matrix.architecture }}
+      BUILD_TIME: ${{ needs.prepare.outputs.build_time }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -74,9 +81,17 @@ jobs:
           contexts={'panel':'.','node':'node','subscription-page':'subscription-page'}
           dockerfiles={'panel':'panel/Dockerfile','node':'node/docker/Dockerfile','subscription-page':'subscription-page/Dockerfile'}
           with open(os.environ['GITHUB_OUTPUT'],'a') as output:
-              for k,v in {'version':pin['version'],'commit':pin['commit'],'context':'source/'+contexts[component],
+              for k,v in {'version':pin['version'],'commit':pin['commit'],'repository':pin['repository'],'context':'source/'+contexts[component],
                           'dockerfile':'source/'+dockerfiles[component],'image':f'ghcr.io/lottman/remnacust-{component}:{pin["version"]}-{tag}-{arch}'}.items():
                   output.write(k+'='+v+'\n')
+              if component == 'panel':
+                  metadata = {'VERSION': pin['version'], 'GIT_BACKEND_COMMIT': pin['commit'],
+                              'GIT_FRONTEND_COMMIT': pin['commit'], 'GIT_BRANCH': 'main',
+                              'BUILD_TIME': os.environ['BUILD_TIME'], 'BUILD_NUMBER': os.environ['GITHUB_RUN_NUMBER']}
+                  output.write('build_args<<REMNACUST_METADATA\n')
+                  for key, value in metadata.items():
+                      output.write('__RW_METADATA_' + key + '=' + value + '\n')
+                  output.write('REMNACUST_METADATA\n')
           PY
           if [ "$COMPONENT" = node ]; then python3 source/node/docker/package-remnacust-core.py; fi
       - uses: docker/setup-buildx-action@v3
@@ -94,8 +109,9 @@ jobs:
           load: true
           provenance: false
           tags: ${{ steps.source.outputs.image }}
+          build-args: ${{ steps.source.outputs.build_args }}
           labels: |
-            org.opencontainers.image.source=https://github.com/lottman/Remnacust-installer
+            org.opencontainers.image.source=https://github.com/${{ steps.source.outputs.repository }}
             org.opencontainers.image.version=${{ steps.source.outputs.version }}
             org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
           cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.architecture }}
@@ -104,11 +120,13 @@ jobs:
         env:
           IMAGE: ${{ steps.source.outputs.image }}
           EXPECTED_VERSION: ${{ steps.source.outputs.version }}
+          EXPECTED_COMMIT: ${{ steps.source.outputs.commit }}
         run: |
           if [ "$COMPONENT" = node ]; then
             docker run --rm --entrypoint /usr/local/bin/xray "$IMAGE" version
           elif [ "$COMPONENT" = panel ]; then
             docker run --rm --env EXPECTED_VERSION="$EXPECTED_VERSION" --entrypoint node "$IMAGE" -e 'if(require("/opt/app/package.json").version!==process.env.EXPECTED_VERSION)process.exit(1)'
+            python3 scripts/check-panel-build-metadata.py --image "$IMAGE" --version "$EXPECTED_VERSION" --commit "$EXPECTED_COMMIT" --branch main --build-time "$BUILD_TIME" --build-number "$GITHUB_RUN_NUMBER"
           fi
           docker push "$IMAGE"
           python3 scripts/export-image.py --source source --component "$COMPONENT" --architecture "$ARCHITECTURE" --tag "$RELEASE_TAG" --output exported
