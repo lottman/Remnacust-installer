@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Test the standalone entry point against real containers; never use an existing project.
 set -Eeuo pipefail
+[[ $EUID == 0 ]] || exec sudo env PATH="$PATH" bash "$0" "$@"
 installer=${1:-$(cd "$(dirname "$0")/.." && pwd)/installer.sh}
 fixture=$(mktemp -d -t remnacust-uninstall-docker.XXXXXXXX)
 token="remnacust-uninstall-test-$(date +%s)-$$"

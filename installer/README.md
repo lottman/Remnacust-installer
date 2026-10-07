@@ -35,11 +35,11 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 | `renew-node-certificate` | Проверка и копирование обновлённого сертификата; перезапуск ноды/Nginx |
 | `renew-panel-certificate` | Проверка и копирование готового сертификата; reload Caddy без перезапуска панели |
 
-При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.2.1` закрепляет выпуск. Установщик 1.2.1 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
+При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.2.2` закрепляет выпуск. Установщик 1.2.2 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
 
 ```bash
 sudo bash installer.sh install-panel --domain panel.example.com --email admin@example.com --version latest
-sudo remnacust upgrade-panel --version 1.2.1
+sudo remnacust upgrade-panel --version 1.2.2
 sudo remnacust status --component node
 sudo remnacust backup-panel
 sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID

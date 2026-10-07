@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the downloaded entry point without installed helpers, Compose or network.
 set -Eeuo pipefail
+[[ $EUID == 0 ]] || exec sudo env PATH="$PATH" bash "$0" "$@"
 installer=$(cd "$(dirname "$0")/.." && pwd)
 fixture=$(mktemp -d -t remnacust-uninstall.XXXXXXXX)
 trap '[[ $fixture == /tmp/remnacust-uninstall.* ]] && rm -rf -- "$fixture"' EXIT
