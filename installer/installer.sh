@@ -7,7 +7,7 @@ ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 PORT='' PROXY=caddy YES=false WORK='' SOURCE='' HELPER='' LOG=''
-STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG=''
+STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
@@ -25,12 +25,14 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.1.3] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.1.4] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
   upgrade-panel             Все процессы панели; БД и настройки сохраняются
   upgrade-node              Полное обновление ноды и встроенного Xray
+  uninstall-panel           Удалить контейнеры панели; сохранить данные и копии
+  uninstall-node            Удалить контейнеры ноды; сохранить конфигурацию
   migrate-remnawave-panel    Переход существующей панели на Remnacust
   migrate-remnawave-node     Переход существующей ноды на Remnacust
   migrate-marzban-panel      Перенос пользователей Marzban через API
@@ -70,16 +72,22 @@ SECRET_KEY вводится скрыто или через REMNACUST_NODE_SECRET
 HELP
 }
 show_menu() {
+    local panel_action=install-panel node_action=install-node panel_note='Панель с нуля' node_note='Нода + Xray'
+    local panel_upgrade='Обновить панель · не установлена' node_upgrade='Обновить ноду · не установлена'
+    if component_installed panel; then panel_action=uninstall-panel; panel_note='Удалить панель · данные сохраняются'; panel_upgrade='Обновить панель'; fi
+    if component_installed node; then node_action=uninstall-node; node_note='Удалить ноду · файлы сохраняются'; node_upgrade='Обновить ноду целиком'; fi
+    if component_retained panel; then panel_action='start --component panel'; panel_note='Восстановить сохранённую панель'; fi
+    if component_retained node; then node_action='start --component node'; node_note='Восстановить сохранённую ноду'; fi
     printf '\n%s  ▌ REMNACUST%s  %sУстановка и обслуживание%s\n\n' "$PURPLE" "$RESET" "$DIM" "$RESET"
-    printf '  1  install-panel              Панель с нуля\n  2  install-node               Нода + Xray\n'
-    printf '  3  upgrade-panel              Обновить панель\n  4  upgrade-node               Обновить ноду целиком\n'
+    printf '  1  %-26s %s\n  2  %-26s %s\n' "$panel_action" "$panel_note" "$node_action" "$node_note"
+    printf '  3  upgrade-panel              %s\n  4  upgrade-node               %s\n' "$panel_upgrade" "$node_upgrade"
     printf '  5  migrate-remnawave-panel    Перенести существующую панель\n  6  migrate-remnawave-node     Перенести существующую ноду\n'
     printf '  7  --check-release            Проверить выпуск\n  8  status                     Состояние\n  9  Обслуживание                Журналы, запуск, копии\n 10  migrate-marzban-panel       Перенести пользователей Marzban\n  0  Выход\n\n'
 }
 parse_args() {
     while (($#)); do
         case "$1" in
-            install-panel|install-node|upgrade-panel|upgrade-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate)
+            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
             --version|--component|--directory|--compose-file|--container|--project-name|--domain|--port|--proxy|--node-domain|--email|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
@@ -100,6 +108,38 @@ parse_args() {
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
     if [[ $ACTION != migrate-marzban-panel ]] && { $DRY_RUN || $PRESERVE_SUBHASH || [[ -n $MARZBAN_URL$DESTINATION_URL$INTERNAL_SQUAD ]]; }; then die 'Параметры Marzban предназначены только для migrate-marzban-panel'; fi
+}
+component_installed() {
+    local component=$1 directory="$ROOT/$1" registry="$ROOT/registry/$1.json" file
+    if [[ -f $registry && ! -L $registry ]] && command -v python3 >/dev/null; then
+        directory=$(python3 - "$registry" "$component" <<'PY'
+import json,sys
+try:
+    state=json.load(open(sys.argv[1]))
+    if state.get('component')!=sys.argv[2] or state.get('uninstalled'): raise SystemExit(1)
+    print(state['directory'])
+except (OSError,ValueError,KeyError,TypeError): raise SystemExit(1)
+PY
+        ) || return 1
+    fi
+    [[ -z $DIRECTORY || $COMPONENT != "$component" ]] || directory=$DIRECTORY
+    [[ -d $directory && ! -L $directory && ! -f $directory/.remnacust-uninstalled ]] || return 1
+    for file in compose.json compose.yml compose.yaml docker-compose.yml docker-compose.yaml Dockerfile; do
+        [[ ! -f $directory/$file || -L $directory/$file ]] || return 0
+    done
+    return 1
+}
+component_retained() {
+    [[ -f $ROOT/registry/$1.json && ! -L $ROOT/registry/$1.json ]] || return 1
+    command -v python3 >/dev/null || return 1
+    python3 - "$ROOT/registry/$1.json" "$1" <<'PY'
+import json,sys
+from pathlib import Path
+try:
+    s=json.load(open(sys.argv[1]));p=Path(s['directory'])
+    raise SystemExit(0 if s.get('component')==sys.argv[2] and s.get('uninstalled') is True and p.is_dir() and not p.is_symlink() else 1)
+except (OSError,ValueError,KeyError,TypeError): raise SystemExit(1)
+PY
 }
 confirm() { $YES && return 0; [[ $(ask "$1. Введите yes для продолжения") == yes ]] || exit 0; }
 cleanup() {
@@ -232,14 +272,31 @@ wait_ready() {
         $ready || return 1
     done
 }
-build_image() {
-    if [[ $COMPONENT == node ]]; then
-        python3 "$SOURCE/node/docker/package-remnacust-core.py"
-        docker build --tag "$IMAGE" --file "$SOURCE/node/docker/Dockerfile" "$SOURCE/node"
-    else
-        docker build --tag "$IMAGE" --file "$SOURCE/panel/Dockerfile" "$SOURCE"
+prepare_image() {
+    [[ -f $SOURCE/images.json ]] || die 'В этом старом выпуске нет готовых Docker-образов. Выберите latest; сборка на сервере отключена.'
+    if docker image inspect "$IMAGE" > "$WORK/image.inspect.json" 2>/dev/null; then
+        python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json"
+        return
     fi
+    local docker_directory free_kb needed_kb
+    docker_directory=$(docker info --format '{{.DockerRootDir}}')
+    free_kb=$(df -Pk "$docker_directory" | awk 'NR==2 {print $4}')
+    needed_kb=$(( $(image_field size) * 4 / 1024 + 512 * 1024 ))
+    ((free_kb >= needed_kb)) || die 'Недостаточно места для скачивания и распаковки Docker-образа; текущая установка не изменена'
+    if docker pull "$(image_field registry)"; then
+        docker tag "$(image_field registry)" "$IMAGE"
+        docker image inspect "$IMAGE" > "$WORK/image.inspect.json"
+        python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json"
+        return
+    fi
+    info 'GHCR недоступен; скачиваем тот же проверенный образ из GitHub Release'
+    download "$(image_field url)" "$WORK/image.tar.gz"
+    python3 "$SOURCE/installer/images.py" archive --image "$WORK/image.json" --file "$WORK/image.tar.gz"
+    docker load --input "$WORK/image.tar.gz"
+    docker image inspect "$IMAGE" > "$WORK/image.inspect.json"
+    python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json"
 }
+image_field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$WORK/image.json" "$1"; }
 find_existing() {
     local main id
     main=remnawave; [[ $COMPONENT != node ]] || main=remnanode
@@ -266,7 +323,7 @@ find_existing() {
 import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
- for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image']:
+ for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices']:
   if key in old:new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
@@ -367,7 +424,9 @@ main() {
     if [[ -z $ACTION ]]; then
         show_menu
         case "$(ask 'Действие')" in
-            1) ACTION=install-panel;;2) ACTION=install-node;;3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
+            1) if component_installed panel; then ACTION=uninstall-panel; elif component_retained panel; then ACTION=start; COMPONENT=panel; else ACTION=install-panel; fi;;
+            2) if component_installed node; then ACTION=uninstall-node; elif component_retained node; then ACTION=start; COMPONENT=node; else ACTION=install-node; fi;;
+            3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
             5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu;;10) ACTION=migrate-marzban-panel;;0) return 0;;*) die 'Неизвестное действие';;
         esac
     fi
@@ -381,6 +440,13 @@ main() {
     mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
     LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     case "$ACTION" in *panel) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
+    case "$ACTION" in
+        upgrade-*|uninstall-*)
+            if ! component_installed "$COMPONENT" && [[ -z $CONTAINER ]]; then
+                die "$COMPONENT не установлен. Сначала install-$COMPONENT; для существующего Remnawave используйте migrate-remnawave-$COMPONENT с --directory или --container."
+            fi;;
+        install-*) if component_installed "$COMPONENT"; then die "$COMPONENT уже установлен. Используйте upgrade-$COMPONENT или uninstall-$COMPONENT."; fi;;
+    esac
     case "$ACTION" in
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
@@ -408,9 +474,10 @@ if release.get('draft') or (requested=='latest' and release.get('prerelease')):
 if requested!='latest' and tag!='v'+requested.removeprefix('v'):
     raise SystemExit('Версия ответа GitHub не совпадает с выбранной')
 assets={a['name']:a for a in release.get('assets',[]) if a.get('state')=='uploaded'}
-name=f'remnacust-source-{tag}.tar.gz'
+runtime=f'remnacust-runtime-{tag}.tar.gz'
+name=runtime if runtime in assets else f'remnacust-source-{tag}.tar.gz'
 expected=f'https://github.com/{repo}/releases/download/{tag}/'
-result={'tag':tag}
+result={'tag':tag,'archive':name,'kind':'runtime' if name==runtime else 'source'}
 for key, asset_name in [('source',name),('checksums','SHA256SUMS')]:
     asset=assets.get(asset_name,{})
     url=asset.get('browser_download_url','')
@@ -424,10 +491,10 @@ PY
 json_value() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$WORK/resolved.json" "$1"; }
 fetch_source() {
     local archive
-    archive="remnacust-source-$TAG.tar.gz"
+    archive=$(json_value archive)
     download "$(json_value checksums)" "$WORK/SHA256SUMS"
     download "$(json_value source)" "$WORK/$archive"
-    python3 - "$WORK" "$archive" <<'PY'
+    python3 - "$WORK" "$archive" "$REPO" <<'PY'
 import hashlib,json,pathlib,re,sys,tarfile
 root=pathlib.Path(sys.argv[1]);name=sys.argv[2]
 lines=(root/'SHA256SUMS').read_text().splitlines()
@@ -453,7 +520,10 @@ with tarfile.open(root/name) as archive:
         if p in paths: raise SystemExit('Повторяющийся путь в архиве')
         paths.add(p)
     archive.extractall(destination, members=members, filter='data') if sys.version_info >= (3,12) else archive.extractall(destination,members=members)
-for required in ['installer/installer.sh','installer/runtime.py','installer/database.cjs','installer/marzban.py','panel/Dockerfile','node/docker/Dockerfile','panel/backend/.env.sample','xray/core/core.go']:
+kind=json.load(open(root/'resolved.json'))['kind']
+required_files=['installer/installer.sh','installer/runtime.py','installer/database.cjs','installer/marzban.py','panel/backend/.env.sample']
+required_files+=['installer/images.py','images.json','component-sources.json'] if kind=='runtime' else ['panel/Dockerfile','node/docker/Dockerfile','xray/core/core.go']
+for required in required_files:
     if not (destination/required).is_file(): raise SystemExit('Неполный архив: '+required)
 version=json.load(open(root/'resolved.json'))['tag'][1:]
 if (destination/'VERSION').read_text().strip()!=version:
@@ -470,6 +540,12 @@ for kind in ['panel','node','core']:
     if not isinstance(expected,str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?',expected):
         raise SystemExit('Неверная версия компонента: '+kind)
     versions[kind]=expected
+if json.load(open(root/'resolved.json'))['kind']=='runtime':
+    import subprocess
+    subprocess.run([sys.executable,str(destination/'installer/images.py'),'validate','--root',str(destination),
+        '--tag','v'+version,'--assets',str(root/'release.json'),'--repository',sys.argv[3]],check=True)
+    (root/'source.sha256').write_text(actual+'\n')
+    raise SystemExit(0)
 for package in ['panel/frontend','panel/backend','node','subscription-page/frontend','subscription-page/backend']:
     actual_version=json.load(open(destination/package/'package.json'))['version']
     expected=versions['node' if package=='node' else 'panel']
@@ -497,18 +573,24 @@ release_source() {
         read -r -s -p 'SECRET_KEY из панели: ' REMNACUST_NODE_SECRET; printf '\n'; export REMNACUST_NODE_SECRET
     fi
     TAG=$(resolve_release)
-    step "Проверка исходников $TAG" fetch_source
+    step "Проверка выпуска $TAG" fetch_source
     SOURCE="$WORK/source"; HELPER="$SOURCE/installer/runtime.py"
     bash -n "$SOURCE/installer/installer.sh"
-    local digest; digest=$(cat "$WORK/source.sha256")
-    IMAGE="remnacust-$COMPONENT:${TAG#v}-${digest:0:12}"
+    [[ -f $SOURCE/images.json ]] || die 'В этом старом выпуске нет готовых Docker-образов. Выберите latest; сборка на сервере отключена.'
+    python3 "$SOURCE/installer/images.py" select --root "$SOURCE" --tag "$TAG" --assets "$WORK/release.json" \
+        --repository "$REPO" --component "$COMPONENT" --architecture "$(dpkg --print-architecture)" > "$WORK/image.json"
+    IMAGE=$(image_field image)
+    COMPONENT_VERSION=$(image_field version)
 }
 installed_helper() {
     local location
     location=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
     if [[ -f $location/runtime.py ]]; then HELPER="$location/runtime.py"
     else HELPER=/usr/local/lib/remnacust-installer/runtime.py; fi
-    [[ -f $HELPER ]] || die 'Нет помощника установщика; скачайте installer.sh и выберите обновление/миграцию'
+    if [[ ! -f $HELPER ]]; then
+        VERSION=${VERSION:-latest}; TAG=$(resolve_release); fetch_source
+        SOURCE="$WORK/source"; HELPER="$SOURCE/installer/runtime.py"
+    fi
 }
 lock_operation() {
     command -v flock >/dev/null || die 'Нужен util-linux (flock)'
@@ -644,13 +726,10 @@ deploy() {
     prepare_host; lock_operation
     trap recover ERR
     release_source
-    local docker_directory; docker_directory=$(docker info --format '{{.DockerRootDir}}')
-    local free_kb; free_kb=$(df -Pk "$docker_directory" | awk 'NR==2 {print $4}')
-    ((free_kb>=8*1024*1024)) || die 'Для сборки нужно минимум 8 GiB свободного места в Docker'
-    step "Сборка $COMPONENT $TAG" build_image
+    step "Готовый Docker-образ $COMPONENT" prepare_image
     if [[ $ACTION == install-* ]]; then
         fresh_files
-        helper record --state "$STATE" --version "${TAG#v}" --image "$IMAGE" --running "${START_APPS[@]}"
+        helper record --state "$STATE" --version "${COMPONENT_VERSION:-${TAG#v}}" --image "$IMAGE" --running "${START_APPS[@]}"
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
         # Keep recovery commands available if first boot or certificate issuance fails.
         install_cli
@@ -694,12 +773,18 @@ PY
         helper compare --source "$WORK/container.before.json" --inspect "$WORK/container.after.json"
         if [[ $COMPONENT == panel ]]; then step 'Проверка сохранности данных' verify_database; fi
     fi
-    helper record --state "$STATE" --version "${TAG#v}" --image "$IMAGE" --running "${START_APPS[@]}"
+    helper record --state "$STATE" --version "${COMPONENT_VERSION:-${TAG#v}}" --image "$IMAGE" --running "${START_APPS[@]}"
     helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     if [[ $ACTION != install-* ]]; then install_cli; fi
     CHANGED=false; trap - ERR
-    info "$COMPONENT $TAG готов · remnacust status --component $COMPONENT"
-    if [[ $ACTION == install-panel ]]; then info "Панель: https://$DOMAIN · создайте администратора при первом входе"; fi
+    info "$COMPONENT v${COMPONENT_VERSION:-${TAG#v}} готов · выпуск $TAG · remnacust status --component $COMPONENT"
+    if [[ $ACTION == install-panel ]]; then
+        info "Панель: https://$DOMAIN · создайте администратора при первом входе"
+        if [[ $PROXY == caddy ]]; then
+            info 'HTTPS: Caddy в Docker; системный nginx.service не устанавливается'
+            info 'Панель и прокси: remnacust logs --component panel'
+        else info 'HTTPS обслуживает ваш существующий reverse proxy'; fi
+    fi
     if [[ $ACTION == install-node ]]; then info "API ноды: TCP $PORT · добавьте адрес, порт и профиль в панели"; fi
 }
 helper_file_copy() {
@@ -716,16 +801,27 @@ service_action() {
         for item in panel node; do if [[ -f $ROOT/registry/$item.json ]]; then STATE="$ROOT/registry/$item.json"; load_state; compose ps --all; found=true; fi; done
         $found || info 'Нет зарегистрированных установок'; return 0
     fi
-    COMPONENT=${COMPONENT:-panel}; STATE="$ROOT/registry/$COMPONENT.json"; load_state
+    COMPONENT=${COMPONENT:-panel}; STATE="$ROOT/registry/$COMPONENT.json"
+    if [[ ! -f $STATE ]]; then
+        DIRECTORY=${DIRECTORY:-$ROOT/$COMPONENT}; IMAGE=discovery-only
+        find_existing
+    else load_state; fi
     case "$ACTION" in
         status) compose ps --all;;
-        logs) compose logs --tail 100 --no-color "${APPS[@]}";;
+        logs) compose logs --tail 100 --no-color "${APPS[@]}" "${EXTRAS[@]}";;
         start)
             mapfile -t START_APPS < <(get runningApplications)
             ((${#START_APPS[@]})) || START_APPS=("${APPS[@]}")
             local extra
             for extra in "${EXTRAS[@]}"; do [[ " ${START_APPS[*]} " == *" $extra "* ]] || START_APPS+=("$extra"); done
-            compose up -d --no-build --pull never "${START_APPS[@]}";;
+            compose up -d --no-build --pull never "${START_APPS[@]}"
+            python3 - "$STATE" "$DEPLOY/.remnacust-uninstalled" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]);s=json.loads(p.read_text());s.pop('uninstalled',None)
+p.write_text(json.dumps(s,indent=2)+'\n');Path(sys.argv[2]).unlink(missing_ok=True)
+PY
+            ;;
         stop) confirm 'Остановить приложения'; compose stop "${APPS[@]}" "${EXTRAS[@]}";;
         restart) confirm 'Перезапустить приложения'; compose restart "${APPS[@]}" "${EXTRAS[@]}";;
         backup-panel)
@@ -733,8 +829,33 @@ service_action() {
             IMAGE=$(get image); database_environment; backup_current;;
         restore-panel) restore_panel;;
         renew-node-certificate) renew_certificate;;
+        uninstall-panel|uninstall-node) uninstall_component;;
         *) die 'Неизвестное действие обслуживания';;
     esac
+}
+uninstall_component() {
+    confirm "Удалить контейнеры $COMPONENT. База, тома, .env, сертификаты и копии сохраняются"
+    local -a removed=("${APPS[@]}" "${EXTRAS[@]}")
+    python3 - "$STATE" "${removed[@]}" > "$WORK/uninstall-services" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]));services=s.get('ownedServices',sys.argv[2:])
+if not services or any(not isinstance(v,str) or not v or v.startswith('-') for v in services): raise SystemExit('Неверный список сервисов')
+print('\n'.join(dict.fromkeys(services)))
+PY
+    mapfile -t removed < "$WORK/uninstall-services"
+    ((${#removed[@]})) || die 'Нет подтверждённых сервисов для удаления'
+    step 'Остановка контейнеров компонента' compose stop "${removed[@]}"
+    step 'Удаление контейнеров без удаления томов' compose rm --force "${removed[@]}"
+    python3 - "$STATE" "$DEPLOY/.remnacust-uninstalled" <<'PY'
+import json,sys
+from pathlib import Path
+s=json.load(open(sys.argv[1]));s['uninstalled']=True
+Path(sys.argv[2]).touch(mode=0o600)
+Path(sys.argv[1]).write_text(json.dumps(s,indent=2)+'\n')
+PY
+    helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
+    info "$COMPONENT удалён. Данные и конфигурация: $DEPLOY"
+    info 'Для возврата сохранённой установки: remnacust start --component '"$COMPONENT"
 }
 restore_panel() {
     [[ -n $BACKUP && -d $BACKUP && ! -L $BACKUP ]] || die 'Укажите --backup с каталогом копии'

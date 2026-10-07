@@ -146,6 +146,11 @@ def transform(config, container, component, image, containers=()):
     applications = []
     roles = {(c.get('Config', {}).get('Labels') or {}).get('com.docker.compose.service'): environment(c).get('INSTANCE_TYPE') for c in containers}
     for name, service in services.items():
+        repository = (service.get('image') or '').split('@', 1)[0].rsplit('/', 1)[-1].split(':', 1)[0]
+        if repository in {'caddy', 'nginx', 'nginx-proxy', 'nginx-proxy-manager', 'traefik', 'postgres', 'postgresql', 'valkey', 'redis'}:
+            if name == main:
+                fail('Основной контейнер является прокси или БД, а не приложением')
+            continue
         env = service.get('environment') or {}
         if not isinstance(env, dict):
             fail('Compose environment должен быть нормализован в объект')
@@ -261,7 +266,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
              'composeFiles': [str(directory / 'compose.json')], 'mainService': main,
              'applications': [main], 'extraServices': extras, 'nodeDomain': node_domain,
              'panelDomain': hostname if component == 'panel' else '', 'proxy': proxy,
-             'apiPort': number}
+             'apiPort': number, 'ownedServices': list(services)}
     return result, state
 
 

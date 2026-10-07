@@ -1,0 +1,167 @@
+name: Publish Docker release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing installer tag (for example v1.1.4)
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: docker-release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test installer and package pinned source
+        run: |
+          bash -n installer/installer.sh
+          bash tests/installer.test.sh
+          bash tests/database-repair.test.sh
+          python3 tests/package-release.test.py
+          python3 tests/images.test.py
+          python3 scripts/package-source-release.py "$RELEASE_TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-input
+          path: release/
+          compression-level: 0
+          retention-days: 3
+  images:
+    needs: prepare
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [panel, node, subscription-page]
+        architecture: [amd64, arm64]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 90
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      COMPONENT: ${{ matrix.component }}
+      ARCHITECTURE: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-input
+          path: release
+      - name: Prepare exact component sources
+        id: source
+        run: |
+          mkdir source
+          tar -xzf "release/remnacust-source-$RELEASE_TAG.tar.gz" -C source
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          component=os.environ['COMPONENT'];arch=os.environ['ARCHITECTURE'];tag=os.environ['RELEASE_TAG']
+          lock=json.loads(Path('source/component-sources.json').read_text())
+          pin=lock['node' if component=='node' else 'panel']
+          contexts={'panel':'.','node':'node','subscription-page':'subscription-page'}
+          dockerfiles={'panel':'panel/Dockerfile','node':'node/docker/Dockerfile','subscription-page':'subscription-page/Dockerfile'}
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              for k,v in {'version':pin['version'],'commit':pin['commit'],'context':'source/'+contexts[component],
+                          'dockerfile':'source/'+dockerfiles[component],'image':f'ghcr.io/lottman/remnacust-{component}:{pin["version"]}-{tag}-{arch}'}.items():
+                  output.write(k+'='+v+'\n')
+          PY
+          if [ "$COMPONENT" = node ]; then python3 source/node/docker/package-remnacust-core.py; fi
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build on native architecture
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.source.outputs.context }}
+          file: ${{ steps.source.outputs.dockerfile }}
+          platforms: linux/${{ matrix.architecture }}
+          load: true
+          provenance: false
+          tags: ${{ steps.source.outputs.image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/lottman/Remnacust-installer
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.architecture }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.architecture }}
+      - name: Verify executable and publish exact image
+        env:
+          IMAGE: ${{ steps.source.outputs.image }}
+          EXPECTED_VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          if [ "$COMPONENT" = node ]; then
+            docker run --rm --entrypoint /usr/local/bin/xray "$IMAGE" version
+          elif [ "$COMPONENT" = panel ]; then
+            docker run --rm --env EXPECTED_VERSION="$EXPECTED_VERSION" --entrypoint node "$IMAGE" -e 'if(require("/opt/app/package.json").version!==process.env.EXPECTED_VERSION)process.exit(1)'
+          fi
+          docker push "$IMAGE"
+          python3 scripts/export-image.py --source source --component "$COMPONENT" --architecture "$ARCHITECTURE" --tag "$RELEASE_TAG" --output exported
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.component }}-${{ matrix.architecture }}
+          path: exported/
+          compression-level: 0
+          retention-days: 3
+  assemble:
+    needs: images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-input
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: images
+      - name: Validate all images and package runtime
+        run: |
+          mkdir source
+          tar -xzf "release/remnacust-source-$RELEASE_TAG.tar.gz" -C source
+          python3 scripts/package-docker-release.py --source source --images images --output release --tag "$RELEASE_TAG"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-architecture manifests
+        run: |
+          python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          manifest=json.loads(Path('source/images.json').read_text());tag=os.environ['RELEASE_TAG']
+          for component,entry in manifest['components'].items():
+              sources=[x['registry'] for x in entry['architectures'].values()]
+              subprocess.run(['docker','buildx','imagetools','create','--tag',f'ghcr.io/lottman/remnacust-{component}:{entry["version"]}-{tag}',*sources],check=True)
+          PY
+      - name: Create draft release with verified images
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Release already exists. Use a new tag; existing assets are preserved.' >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Remnacust Installer $RELEASE_TAG" --notes 'Готовые Docker-образы: установка без сборки на сервере. Caddy в Docker обеспечивает HTTPS панели. README описывает проверку установки, обновление и удаление с сохранением данных.'
+          gh release upload "$RELEASE_TAG" release/*
+          echo 'Draft is complete. Verify anonymous GHCR access and publish it as latest.' >> "$GITHUB_STEP_SUMMARY"

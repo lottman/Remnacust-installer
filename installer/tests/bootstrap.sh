@@ -140,7 +140,7 @@ set +e
     ACTION=install-panel; COMPONENT=panel; VERSION=1.1.1; YES=true
     ROOT="$fixture/new-root"; WORK="$fixture/new-work"; LOG="$fixture/new-install.log"
     mkdir -p "$WORK" "$ROOT/registry"
-    prepare_host() { :; }; lock_operation() { :; }; build_image() { :; }
+    prepare_host() { :; }; lock_operation() { :; }; prepare_image() { :; }
     release_source() { TAG=v1.1.1; }
     docker() { printf /tmp; }
     df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\ntest 16000000 1 15999999 1%% /tmp\n'; }

@@ -24,7 +24,7 @@ DIRECTORY="$test_root/deploy"; PROJECT=$test_project
 YES=true; VERSION=1.1.1
 prepare_host() { docker info >/dev/null; }
 release_source() { TAG=v1.1.1; SOURCE=$public_source; HELPER="$installer_dir/runtime.py"; IMAGE=$test_image; }
-build_image() { docker image inspect "$IMAGE" >/dev/null; }
+prepare_image() { docker image inspect "$IMAGE" >/dev/null; }
 install_cli() { :; }
 deploy
 [[ -s $ROOT/registry/panel.json ]]

@@ -1,4 +1,4 @@
-name: Publish source release
+name: Publish legacy source release
 on:
   workflow_dispatch:
     inputs:
@@ -18,7 +18,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Validate and package the selected tag
-        run: python3 scripts/package-source-release.py "$RELEASE_TAG"
+        run: |
+          if git cat-file -e "$RELEASE_TAG:installer/images.py" 2>/dev/null; then
+            echo 'This tag requires Publish Docker release; source-only publication is disabled.' >&2
+            exit 1
+          fi
+          python3 scripts/package-source-release.py "$RELEASE_TAG"
       - name: Create a draft, upload all assets, then publish
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

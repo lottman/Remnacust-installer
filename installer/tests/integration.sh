@@ -49,7 +49,7 @@ SQL
 old_id=$(compose ps --quiet remnawave); old_db=$(compose ps --quiet remnawave-db)
 prepare_host() { docker info >/dev/null; }
 release_source() { TAG=v1.1.1; SOURCE=$public_source; HELPER="$installer_dir/runtime.py"; IMAGE=$test_image; }
-build_image() { docker image inspect "$IMAGE" >/dev/null; }
+prepare_image() { docker image inspect "$IMAGE" >/dev/null; }
 install_cli() { :; }
 YES=true; VERSION=latest; ACTION=migrate-remnawave-panel; CONTAINER=$old_id; DIRECTORY=''
 deploy

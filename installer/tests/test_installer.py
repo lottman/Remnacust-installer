@@ -72,6 +72,23 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(apps, ['main', 'worker', 'remnawave-scheduler'])
         self.assertEqual(old['services']['main']['image'], 'old')
 
+    def test_panel_upgrade_preserves_both_reverse_proxies(self):
+        for proxy, image in [('caddy', 'caddy:2-alpine'), ('nginx', 'nginx:1.28-alpine')]:
+            with self.subTest(proxy=proxy):
+                old = {'services': {'main': {'image': 'remnawave/backend:3.4.4', 'environment': {}},
+                    'processor': {'image': 'remnawave/backend:3.4.4', 'environment': {'INSTANCE_TYPE': 'processor'}},
+                    proxy: {'image': image, 'environment': {'INSTANCE_TYPE': 'processor'},
+                            'ports': ['80:80', '443:443'], 'volumes': ['./config:/etc/proxy:ro', 'certs:/certs'],
+                            'networks': ['frontend'], 'restart': 'always'},
+                    'db': {'image': 'postgres:17.6', 'environment': {'INSTANCE_TYPE': 'processor'}}},
+                    'volumes': {'certs': {'external': True}}, 'networks': {'frontend': {'external': True}}}
+                result, apps = runtime.transform(old, {'Config': {'Labels': {'com.docker.compose.service': 'main'}}}, 'panel', 'new')
+                self.assertEqual(apps, ['main', 'processor'])
+                self.assertEqual(result['services'][proxy], old['services'][proxy])
+                self.assertEqual(result['services']['db'], old['services']['db'])
+                self.assertEqual(result['networks'], old['networks'])
+                self.assertEqual(result['volumes'], old['volumes'])
+
     def test_discovery_preserves_project_and_multiple_files(self):
         with tempfile.TemporaryDirectory(prefix='install with spaces ') as t:
             p = Path(t); (p/'a.yml').touch(); (p/'b.json').touch()
