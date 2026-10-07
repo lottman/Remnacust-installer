@@ -28,9 +28,11 @@ port_free() { [[ $1 == 80 || $1 == 443 ]] || fixture_port_free "$1"; }
 fresh_files
 tls_helper copy --domain "$DOMAIN" --certificate "$CERT_FILE" --key "$KEY_FILE" --directory "$DEPLOY"
 tls_helper record --state "$STATE" --method existing --certificate "$CERT_FILE" --key "$KEY_FILE"
-python3 - "$DEPLOY/compose.json" <<'PY'
+mkdir -p "$fixture/www/api/auth"
+printf '{"response":{"isLoginAllowed":false,"isRegisterAllowed":true}}' > "$fixture/www/api/auth/status"
+python3 - "$DEPLOY/compose.json" "$fixture/www" <<'PY'
 import json,sys
-p=sys.argv[1];c=json.load(open(p));c['services']={'caddy':c['services']['caddy'],'remnawave':{'image':'python:3.12-alpine','command':['python','-m','http.server','3000']}}
+p=sys.argv[1];c=json.load(open(p));c['services']={'caddy':c['services']['caddy'],'remnawave':{'image':'python:3.12-alpine','command':['python','-m','http.server','3000','--directory','/www'],'volumes':[sys.argv[2]+':/www:ro']}}
 c['services']['caddy']['ports']=['127.0.0.1:43876:443'];json.dump(c,open(p,'w'))
 PY
 compose up -d >/dev/null
@@ -39,6 +41,18 @@ for i in {1..30}; do
  sleep 1
 done
 [[ -s $WORK/page ]]
+DOMAIN=panel.example.com:43876; HTTPS_TIMEOUT=1
+if (wait_panel_https) > "$WORK/untrusted" 2>&1; then printf 'FAIL untrusted certificate accepted\n'; exit 1; fi
+curl() { command curl --cacert "$CERT_FILE" --resolve 'panel.example.com:43876:127.0.0.1' "$@"; }
+HTTPS_TIMEOUT=15; wait_panel_https
+printf '<html>wrong backend</html>' > "$fixture/www/api/auth/status"
+HTTPS_TIMEOUT=1
+if (wait_panel_https) > "$WORK/wrong-backend" 2>&1; then printf 'FAIL wrong HTTPS backend accepted\n'; exit 1; fi
+grep -q 'не вернул ответ панели' "$WORK/wrong-backend"
+printf '{"response":{"isLoginAllowed":false,"isRegisterAllowed":true}}' > "$fixture/www/api/auth/status"
+HTTPS_TIMEOUT=15; wait_panel_https
+unset -f curl; DOMAIN=panel.example.com
+printf 'PASS HTTPS readiness checks actual Caddy TLS, certificate trust and panel API response\n'
 app_id=$(compose ps --quiet remnawave); proxy_id=$(compose ps --quiet caddy)
 started=$(docker inspect --format '{{.State.StartedAt}}' "$proxy_id")
 fingerprint() { openssl s_client -connect 127.0.0.1:43876 -servername "$DOMAIN" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256; }

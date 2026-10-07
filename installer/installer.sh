@@ -10,6 +10,7 @@ PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_C
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
 REINSTALL_RECORD=''
+SERVER_IPS='' HTTPS_TIMEOUT=180
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
 TEAL='' PURPLE='' ROSE='' DIM='' RESET=''
@@ -19,14 +20,14 @@ if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
 fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
 die() { printf '%s  Ошибка: %s%s\n' "$ROSE" "$*" "$RESET" >&2; exit 1; }
-ask() { local value; [[ -t 0 ]] || die "Задайте параметр: $1"; read -r -p "$1${2:+ [$2]}: " value; printf '%s' "${value:-${2:-}}"; }
+ask() { local value; [[ -t 0 ]] || die "Задайте параметр: $1"; read -r -p "$1${2:+ [$2]}: " value || return 1; printf '%s' "${value:-${2:-}}"; }
 valid_version() { [[ $1 == latest || $1 =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$ ]]; }
 download() { curl --fail --show-error --silent --location --retry 3 --connect-timeout 15 --max-time 600 --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2"; }
 usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.3] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.4] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -39,6 +40,7 @@ Remnacust · installer.sh
   migrate-marzban-panel      Перенос пользователей Marzban через API
   --check-release           Скачать и проверить выпуск без установки
   status                    Состояние установленных компонентов
+  check-panel               Проверить DNS и HTTPS без изменения установки
   logs                      Журнал приложения, последние 100 строк
   start | stop | restart    Управление процессами приложения
   backup-panel              Копия БД и конфигурации панели
@@ -53,6 +55,7 @@ Remnacust · installer.sh
   --container NAME          Контейнер приложения при миграции
   --project-name NAME       Имя новой установки Compose
   --domain DOMAIN           Домен новой панели
+  --server-ip IP[,IP]        Публичные IP сервера для проверки A/AAAA (NAT)
   --port PORT               Порт панели на loopback / API ноды
   --proxy caddy|existing    Новый Caddy (по умолчанию) / собственный proxy
   --node-domain DOMAIN      TLS и Nginx для XHTTP/self-steal на новой ноде
@@ -93,13 +96,14 @@ show_menu() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
                     --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2; PROXY_SET=true;;
+                    --server-ip) SERVER_IPS=$2;;
                     --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;;
                     --source-url) MARZBAN_URL=$2;; --destination-url) DESTINATION_URL=$2;; --internal-squad) INTERNAL_SQUAD=$2;; --quota-mode) QUOTA_MODE=$2;;
                 esac; shift ;;
@@ -519,21 +523,44 @@ install_cli() {
 }
 service_menu() {
     COMPONENT=$(ask 'Компонент: panel или node' panel)
-    printf '  1 status\n  2 logs\n  3 start\n  4 stop\n  5 restart\n  6 backup-panel\n  7 restore-panel\n  8 renew-node-certificate\n  0 Выход\n'
-    case "$(ask 'Действие')" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate;;0) exit 0;;*) die 'Неизвестное действие';;esac
+    printf '  1 status\n  2 logs\n  3 start\n  4 stop\n  5 restart\n  6 backup-panel\n  7 restore-panel\n  8 renew-node-certificate\n  9 check-panel\n  0 Назад\n'
+    case "$(ask 'Действие')" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate;;9) ACTION=check-panel; COMPONENT=panel;;0) ACTION='';;*) ACTION=''; info 'Неизвестное действие';;esac
 }
 main() {
     local result
     parse_args "$@" || { result=$?; [[ $result == 10 ]] && return 0; return "$result"; }
     if [[ -z $ACTION ]]; then
+        interactive_menu "$@"
+        return
+    fi
+    run_action
+}
+interactive_menu() {
+    local choice
+    local -a selection=()
+    while true; do
+        ACTION=''; COMPONENT=''
         show_menu
-        case "$(ask 'Действие')" in
+        choice=$(ask 'Действие') || return $?
+        case "$choice" in
             1) if component_installed panel; then ACTION=uninstall-panel; elif component_retained panel; then ACTION=start; COMPONENT=panel; else ACTION=install-panel; fi;;
             2) if component_installed node; then ACTION=uninstall-node; elif component_retained node; then ACTION=start; COMPONENT=node; else ACTION=install-node; fi;;
             3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
-            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu;;10) ACTION=migrate-marzban-panel;;0) return 0;;*) die 'Неизвестное действие';;
+            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu;;10) ACTION=migrate-marzban-panel;;0) return 0;;*) info 'Неизвестное действие'; continue;;
         esac
-    fi
+        [[ -n $ACTION ]] || continue
+        selection=("$ACTION")
+        [[ -z $COMPONENT ]] || selection+=(--component "$COMPONENT")
+        # A separate shell preserves errexit and confines exit/traps/locks to one action.
+        if bash "${BASH_SOURCE[0]}" "${selection[@]}" "$@"; then
+            info 'Возврат в меню'
+        else
+            info 'Действие не завершено. Исправьте указанную причину и повторите его в меню.'
+        fi
+    done
+}
+run_action() {
+    local result
     WORK=$(mktemp -d -t remnacust-installer.XXXXXXXX); touch "$WORK/.installer-owned"; trap cleanup EXIT
     if [[ $ACTION == --check-release ]]; then
         for result in curl python3 tar; do command -v "$result" >/dev/null || die "Нужен $result"; done
@@ -894,6 +921,123 @@ certificate_preflight() {
         tls_helper credentials --method "$TLS_METHOD" --source "$DNS_CREDENTIALS" --target "$WORK/dns-validated.ini"
     elif [[ $TLS_METHOD == http ]]; then port_free 80; fi
 }
+dns_addresses() {
+    # Query public DNS rather than /etc/hosts; bound even hostname resolution time.
+    timeout 25 python3 - "$1" <<'PY'
+import ipaddress,json,re,sys,urllib.request
+host=sys.argv[1]
+if not re.fullmatch(r'(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}',host):
+    raise SystemExit('Некорректный домен; укажите имя без https://, порта и пути')
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):return None
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+addresses=None
+for endpoint in ['https://dns.google/resolve','https://cloudflare-dns.com/dns-query']:
+    try:
+        found=set()
+        for kind in [1,28]:
+            request=urllib.request.Request(endpoint+'?name='+host+'&type='+str(kind),headers={'Accept':'application/dns-json'})
+            with opener.open(request,timeout=5) as response:body=response.read(131073)
+            if len(body)>131072:raise ValueError()
+            data=json.loads(body)
+            if not isinstance(data,dict) or type(data.get('Status')) is not int or data['Status'] not in [0,3] or data.get('TC') is not False:raise ValueError()
+            for row in data.get('Answer',[]):
+                if row.get('type')==kind:
+                    address=ipaddress.ip_address(row['data'])
+                    if address.version!=(4 if kind==1 else 6):raise ValueError()
+                    found.add(str(address))
+        addresses=found;break
+    except (OSError,ValueError,KeyError,TypeError,AttributeError):continue
+if addresses is None:raise SystemExit('Публичный DNS недоступен или ответ A/AAAA неполный: '+host)
+if not addresses:raise SystemExit('У домена нет A/AAAA: '+host)
+print('\n'.join(sorted(addresses)))
+PY
+}
+server_addresses() {
+    local addresses='' external family endpoint
+    if [[ -n $SERVER_IPS ]]; then
+        addresses=${SERVER_IPS//,/$'\n'}
+    else
+        # Public interfaces cover multihomed servers; HTTPS discovery also covers NAT.
+        addresses=$(python3 - <<'PY'
+import ipaddress,json,subprocess
+try:
+    rows=json.loads(subprocess.run(['ip','-j','address','show','scope','global'],capture_output=True,text=True,check=True,timeout=5).stdout)
+    print('\n'.join(a['local'] for row in rows for a in row.get('addr_info',[]) if ipaddress.ip_address(a['local']).is_global))
+except (OSError,ValueError,KeyError,subprocess.SubprocessError):pass
+PY
+        )
+        for family in 4 6; do
+            endpoint=https://api.ipify.org
+            [[ $family != 6 ]] || endpoint=https://api6.ipify.org
+            if external=$(curl "-$family" --fail --silent --show-error --noproxy '*' --connect-timeout 3 --max-time 5 --max-filesize 128 --proto '=https' "$endpoint" 2>/dev/null); then
+                addresses+=$'\n'"$external"
+            fi
+        done
+    fi
+    python3 - "$addresses" <<'PY'
+import ipaddress,sys
+try:
+    addresses={ipaddress.ip_address(value.strip()) for value in sys.argv[1].splitlines() if value.strip()}
+    if not addresses or any(not a.is_global for a in addresses):raise ValueError()
+except ValueError:raise SystemExit('Не удалось определить публичные IP сервера. Укажите --server-ip IPv4[,IPv6].')
+print('\n'.join(sorted(map(str,addresses))))
+PY
+}
+check_dns() {
+    local domain=$1 actual expected address mismatch=false
+    if ! actual=$(dns_addresses "$domain"); then
+        printf '  DNS %s не подтверждён. Проверьте записи A/AAAA и доступность DNS; повторите действие.\n' "$domain" >&2
+        return 1
+    fi
+    expected=$(server_addresses) || return $?
+    info "DNS $domain: ${actual//$'\n'/, }"
+    info "IP сервера: ${expected//$'\n'/, }"
+    while IFS= read -r address; do
+        if ! grep -Fxq -- "$address" <<< "$expected"; then mismatch=true; fi
+    done <<< "$actual"
+    if $mismatch; then
+        printf '  A/AAAA %s ведут на другой IP. Исправьте записи, включая IPv6, и дождитесь обновления DNS.\n  Для сервера за NAT укажите --server-ip IPv4[,IPv6].\n' "$domain" >&2
+        return 1
+    fi
+    info "✓ A/AAAA $domain указывают на сервер"
+}
+dns_preflight() {
+    # DNS-01 and an external proxy may legitimately use a different frontend IP.
+    [[ $TLS_METHOD == auto || $TLS_METHOD == http ]] || return 0
+    [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
+    check_dns "${NODE_DOMAIN:-$DOMAIN}" || die 'DNS не соответствует серверу. Контейнеры установки не созданы; исправьте домен и повторите действие.'
+}
+valid_panel_response() {
+    python3 - "$1" <<'PY'
+import json,sys
+try:
+    data=json.load(open(sys.argv[1]));response=data.get('response') if isinstance(data,dict) else None
+    if not isinstance(response,dict) or any(type(response.get(k)) is not bool for k in ['isLoginAllowed','isRegisterAllowed']):raise ValueError()
+except (OSError,ValueError,TypeError):raise SystemExit('Адрес отвечает, но /api/auth/status не вернул ответ панели. Проверьте домен и reverse proxy.')
+PY
+}
+wait_panel_https() {
+    local deadline=$((SECONDS+HTTPS_TIMEOUT)) remaining limit
+    while ((SECONDS<deadline)); do
+        remaining=$((deadline-SECONDS)); limit=8
+        ((remaining>=limit)) || limit=$remaining
+        if curl --fail --silent --show-error --noproxy '*' --connect-timeout 3 --max-time "$limit" --max-filesize 1048576 --proto '=https' \
+            "https://$DOMAIN/api/auth/status" -o "$WORK/https-status.json" 2> "$WORK/https-error.txt"; then
+            if valid_panel_response "$WORK/https-status.json" 2> "$WORK/https-error.txt"; then return 0; fi
+        fi
+        ((SECONDS<deadline)) || break
+        sleep 2
+    done
+    cat "$WORK/https-error.txt" >&2
+    return 1
+}
+https_diagnostics() {
+    printf '  HTTPS %s не подтверждён. Проверьте A/AAAA, доступ к TCP 80/443 и firewall сервера/провайдера.\n' "$DOMAIN" >&2
+    if [[ -f $WORK/https-error.txt ]]; then head -c 600 "$WORK/https-error.txt" >&2; printf '\n' >&2; fi
+    if [[ " ${EXTRAS[*]} " == *' caddy '* ]]; then compose logs --tail 30 --no-color caddy >> "$LOG" 2>&1 || true; fi
+    printf '  Запущенная панель и данные сохранены. После исправления: sudo bash installer.sh check-panel\n  Журнал, включая Caddy: %s\n' "$LOG" >&2
+}
 obtain_certificate() {
     local domain=${NODE_DOMAIN:-$DOMAIN} lineage
     [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
@@ -964,6 +1108,7 @@ deploy() {
         port_free "$PORT"
         if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
         certificate_preflight
+        dns_preflight
     fi
     step "Готовый Docker-образ $COMPONENT" prepare_image
     if [[ $ACTION == install-* ]]; then
@@ -1012,7 +1157,7 @@ PY
     fi
     step 'Проверка готовности приложений' wait_ready
     if [[ $ACTION == install-panel && $PROXY == caddy ]]; then
-        step 'Проверка HTTPS панели' curl --fail --silent --show-error --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 --proto '=https' "https://$DOMAIN/api/auth/status" -o "$WORK/https-status.json"
+        if ! step 'Ожидание HTTPS панели (до 3 минут)' wait_panel_https; then https_diagnostics; return 1; fi
     fi
     if [[ $ACTION != install-* ]]; then
         docker inspect "$(compose ps --all --quiet "$(get mainService)")" > "$WORK/container.after.json"
@@ -1059,6 +1204,18 @@ service_action() {
     else load_state; fi
     case "$ACTION" in
         status) compose ps --all;;
+        check-panel)
+            DOMAIN=${DOMAIN:-$(get panelDomain)}
+            [[ -n $DOMAIN ]] || die 'Домен не записан в старой установке; укажите check-panel --domain DOMAIN'
+            PROXY=$(get proxy)
+            TLS_METHOD=$(python3 - "$STATE" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1])).get('tls',{}).get('method','auto'))
+PY
+            )
+            if [[ $PROXY == caddy && $TLS_METHOD == auto ]]; then check_dns "$DOMAIN" || return 1; fi
+            if ! step 'Ожидание HTTPS панели (до 3 минут)' wait_panel_https; then https_diagnostics; return 1; fi
+            info "✓ Панель отвечает по HTTPS: https://$DOMAIN";;
         logs) compose logs --tail 100 --no-color "${APPS[@]}" "${EXTRAS[@]}";;
         start)
             mapfile -t START_APPS < <(get runningApplications)
