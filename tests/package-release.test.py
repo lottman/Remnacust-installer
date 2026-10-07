@@ -60,5 +60,9 @@ class ReleaseTests(unittest.TestCase):
     def test_runtime_data_is_rejected(self):
         self.write(self.root,{'backups/database.dump':'fixture'});self.retag()
         with self.assertRaisesRegex(ValueError,'Runtime data'):module.package(self.root,'v1.1.1',self.parent)
+    def test_backup_api_contract_is_source_code(self):
+        self.write(self.root,{'panel/frontend/vendor/backend-contract/build/backend/commands/backups/create-backup.command.d.ts':'export declare class CreateBackup {}\n'})
+        self.retag()
+        module.package(self.root,'v1.1.1',self.parent,check=True)
 
 if __name__=='__main__':unittest.main()
