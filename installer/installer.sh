@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.18] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.19] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -720,7 +720,8 @@ for kind in ['panel','node','core']:
     entry=lock.get(kind,{})
     if not isinstance(entry,dict): raise SystemExit('Неверный компонент: '+kind)
     expected=entry.get('version',version)
-    if not isinstance(expected,str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?',expected):
+    version_pattern=r'\d+\.\d+\.\d+'+(r'(?:\.\d+)?' if kind=='panel' else '')+r'(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?'
+    if not isinstance(expected,str) or not re.fullmatch(version_pattern,expected):
         raise SystemExit('Неверная версия компонента: '+kind)
     versions[kind]=expected
 if json.load(open(root/'resolved.json'))['kind']=='runtime':

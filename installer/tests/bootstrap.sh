@@ -191,11 +191,13 @@ pass 'first boot failure retains registry and recovery CLI'
 )
 pass 'installing an older bundle preserves current CLI policy and supports self-update'
 make_patch_release() {
-    python3 - "$fixture" "$1" <<'PY'
+    python3 - "$fixture" "$1" "${2:-1.1.1}" <<'PY'
 import hashlib,json,pathlib,sys,tarfile
-root=pathlib.Path(sys.argv[1]);source=root/'archive';version=sys.argv[2]
+root=pathlib.Path(sys.argv[1]);source=root/'archive';version=sys.argv[2];panel_version=sys.argv[3]
 (source/'VERSION').write_text('1.1.2\n')
-(source/'component-sources.json').write_text(json.dumps({kind:{'repository':'lottman/Remnacust-'+kind,'commit':'a'*40,'version':version if kind=='node' else '1.1.1'} for kind in ['panel','node','core']}))
+(source/'component-sources.json').write_text(json.dumps({kind:{'repository':'lottman/Remnacust-'+kind,'commit':'a'*40,'version':version if kind=='node' else panel_version if kind=='panel' else '1.1.1'} for kind in ['panel','node','core']}))
+for package in ['panel/frontend','panel/backend','subscription-page/frontend','subscription-page/backend']:
+    (source/package/'package.json').write_text(json.dumps({'version':panel_version}))
 name='remnacust-source-v1.1.2.tar.gz'
 with tarfile.open(root/name,'w:gz') as archive:archive.add(source,arcname='.')
 digest=hashlib.sha256((root/name).read_bytes()).hexdigest()
@@ -209,6 +211,15 @@ PY
 make_patch_release 1.1.1
 bash "$project/installer.sh" --check-release --version 1.1.2 > "$fixture/result"
 pass 'installer patch accepts independently pinned application versions'
+make_patch_release 1.1.1 1.1.7.1
+bash "$project/installer.sh" --check-release --version 1.1.2 > "$fixture/result"
+pass 'downloaded source accepts four-part panel and subscription versions'
+make_patch_release 1.1.1 1.1.7.1.1
+reject 'five-part panel versions remain invalid' bash "$project/installer.sh" --check-release --version 1.1.2
+grep -q 'Неверная версия компонента: panel' "$fixture/result"
+make_patch_release 1.1.1.1 1.1.7.1
+reject 'four-part versions are limited to the panel' bash "$project/installer.sh" --check-release --version 1.1.2
+grep -q 'Неверная версия компонента: node' "$fixture/result"
 make_patch_release 1.1.0
 reject 'valid archive checksum cannot conceal an incorrect pinned component version' bash "$project/installer.sh" --check-release --version 1.1.2
 grep -q 'Версия исходников не совпадает с закреплённым компонентом: node' "$fixture/result"
