@@ -9,6 +9,7 @@ PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP='
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
+REINSTALL_RECORD=''
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
 TEAL='' PURPLE='' ROSE='' DIM='' RESET=''
@@ -25,7 +26,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.2] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.3] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -159,10 +160,14 @@ assert_fresh_target() {
     local directory="${DIRECTORY:-$ROOT/$COMPONENT}" project="${PROJECT:-remnacust-$COMPONENT}" existing
     component_retained "$COMPONENT" && die "$COMPONENT удалён с сохранением данных. Выполните remnacust start --component $COMPONENT, чтобы восстановить установку."
     component_installed "$COMPONENT" && die "$COMPONENT уже установлен (в том числе остановленные контейнеры). Используйте upgrade-$COMPONENT; для старой установки укажите --directory или --container."
-    [[ ! -e $ROOT/registry/$COMPONENT.json ]] || die 'Найдена запись установки, но её файлы недоступны. Проверьте каталог; новая установка поверх неё не выполняется.'
+    if [[ -e $ROOT/registry/$COMPONENT.json || -L $ROOT/registry/$COMPONENT.json ]]; then
+        retired_installation "$COMPONENT" || die 'Найдена запись установки, но её файлы недоступны. Проверьте каталог; новая установка поверх неё не выполняется.'
+    fi
     [[ $directory == /* && $directory != / && ! -L $directory ]] || die 'Укажите безопасный абсолютный каталог'
     if [[ -d $directory && -n $(find "$directory" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
-        die "Каталог $directory не пуст. Используйте upgrade/migrate или другой --directory."
+        if [[ -n $DIRECTORY ]] || ! retired_installation "$COMPONENT"; then
+            die "Каталог $directory не пуст. Используйте upgrade/migrate или другой --directory."
+        fi
     fi
     if command -v docker >/dev/null; then
         existing=$(docker ps --all --filter "label=com.docker.compose.project=$project" --format '{{.Names}} · {{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null) || die 'Не удалось проверить контейнеры: Docker daemon недоступен. Запустите Docker и повторите проверку.'
@@ -177,9 +182,59 @@ import json,sys
 from pathlib import Path
 try:
     s=json.load(open(sys.argv[1]));p=Path(s['directory'])
-    raise SystemExit(0 if s.get('component')==sys.argv[2] and s.get('uninstalled') is True and s.get('recoverable',True) and p.is_dir() and not p.is_symlink() else 1)
+    files=s.get('composeFiles',[])
+    available=isinstance(files,list) and bool(files) and all(isinstance(f,str) and Path(f).is_file() and not Path(f).is_symlink() for f in files)
+    raise SystemExit(0 if s.get('component')==sys.argv[2] and s.get('uninstalled') is True and available and p.is_dir() and not p.is_symlink() else 1)
 except (OSError,ValueError,KeyError,TypeError): raise SystemExit(1)
 PY
+}
+retired_installation() {
+    component_retained "$1" && return 1
+    [[ -f $ROOT/registry/$1.json && ! -L $ROOT/registry/$1.json ]] || return 1
+    command -v python3 >/dev/null || return 1
+    python3 - "$ROOT/registry/$1.json" "$1" <<'PY'
+import json,sys
+try:
+    s=json.load(open(sys.argv[1]))
+    raise SystemExit(0 if isinstance(s,dict) and s.get('component')==sys.argv[2] and s.get('uninstalled') is True else 1)
+except (OSError,ValueError,TypeError):raise SystemExit(1)
+PY
+}
+project_has_volumes() {
+    docker volume ls --quiet > "$WORK/existing-volumes" || die 'Не удалось проверить тома: Docker недоступен'
+    python3 - "$WORK/existing-volumes" "$1" <<'PY'
+import sys
+raise SystemExit(0 if any(n.startswith(sys.argv[2]+'_') for n in open(sys.argv[1]).read().splitlines()) else 1)
+PY
+}
+select_fresh_target() {
+    local stamp project="${PROJECT:-remnacust-$COMPONENT}" collision=false
+    stamp="$(date -u +%Y%m%d%H%M%S)-$$"
+    REINSTALL_RECORD=''
+    if retired_installation "$COMPONENT"; then
+        REINSTALL_RECORD="$WORK/retired-registry.json"
+        install -m 0600 "$ROOT/registry/$COMPONENT.json" "$REINSTALL_RECORD"
+        [[ -n $PROJECT ]] || project="remnacust-$COMPONENT-$stamp"
+        [[ -n $DIRECTORY ]] || DIRECTORY="$ROOT/$COMPONENT-$stamp"
+        info 'Новая установка будет отдельно от сохранённых файлов и томов прежней установки.'
+    fi
+    if project_has_volumes "$project"; then collision=true; fi
+    if $collision; then
+        [[ -z $PROJECT ]] || die "Тома проекта $PROJECT уже существуют. Для новой установки укажите другое --project-name; прежние данные сохраняются."
+        project="remnacust-$COMPONENT-$stamp"
+        [[ -n $DIRECTORY ]] || DIRECTORY="$ROOT/$COMPONENT-$stamp"
+        info 'Прежние тома сохраняются; для новой установки выбран отдельный проект Docker.'
+    fi
+    PROJECT=$project
+    info "Каталог: ${DIRECTORY:-$ROOT/$COMPONENT} · проект: $PROJECT"
+}
+archive_retired_registry() {
+    [[ -n $REINSTALL_RECORD ]] || return 0
+    local snapshot="$ROOT/backups/reinstall-$COMPONENT-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    cmp -- "$REINSTALL_RECORD" "$ROOT/registry/$COMPONENT.json" >/dev/null || die 'Запись прежней установки изменилась; повторите установку'
+    install -d -m 0700 "$snapshot"
+    install -m 0600 "$REINSTALL_RECORD" "$snapshot/registry.json"
+    info "Параметры прежней установки сохранены: $snapshot/registry.json"
 }
 confirm() { $YES && return 0; [[ $(ask "$1. Введите yes для продолжения") == yes ]] || exit 0; }
 cleanup() {
@@ -707,7 +762,9 @@ fresh_files() {
     DEPLOY=${DIRECTORY:-$ROOT/$COMPONENT}; PROJECT=${PROJECT:-remnacust-$COMPONENT}
     [[ $DEPLOY == /* && $DEPLOY != / && ! -L $DEPLOY ]] || die 'Укажите безопасный абсолютный каталог'
     if [[ -d $DEPLOY ]] && [[ -n $(find "$DEPLOY" -mindepth 1 -maxdepth 1 -print -quit) ]]; then die 'Каталог не пуст: выберите upgrade или migrate'; fi
-    [[ ! -f $ROOT/registry/$COMPONENT.json ]] || die 'Компонент уже зарегистрирован'
+    if [[ -e $ROOT/registry/$COMPONENT.json || -L $ROOT/registry/$COMPONENT.json ]]; then
+        [[ -n $REINSTALL_RECORD && ! -L $ROOT/registry/$COMPONENT.json ]] && cmp -- "$REINSTALL_RECORD" "$ROOT/registry/$COMPONENT.json" >/dev/null || die 'Компонент уже зарегистрирован'
+    fi
     if [[ $COMPONENT == panel ]]; then
         [[ -z $NODE_DOMAIN$PANEL_IP ]] || die '--node-domain и --panel-ip предназначены для install-node'
         [[ -n $DOMAIN ]] || DOMAIN=$(ask 'Домен панели')
@@ -726,6 +783,7 @@ fresh_files() {
     local project_containers
     project_containers=$(docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT") || die 'Не удалось повторно проверить проект Compose: Docker недоступен'
     [[ -z $project_containers ]] || die 'Проект Compose уже существует; используйте upgrade или migrate'
+    if project_has_volumes "$PROJECT"; then die 'Тома выбранного проекта уже существуют; для новой установки выберите другое --project-name'; fi
     port_free "$PORT"
     if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
     if [[ $COMPONENT == node ]]; then step 'Проверка ключа ноды' validate_node_key; fi
@@ -895,7 +953,7 @@ deploy() {
     choose_version
     confirm "Выполнить $ACTION ($VERSION)"
     prepare_host; lock_operation
-    if [[ $ACTION == install-* ]]; then assert_fresh_target; certificate_wizard; fi
+    if [[ $ACTION == install-* ]]; then assert_fresh_target; select_fresh_target; certificate_wizard; fi
     trap recover ERR
     release_source
     if [[ $ACTION == install-* ]]; then
@@ -912,6 +970,7 @@ deploy() {
         obtain_certificate
         fresh_files
         helper record --state "$STATE" --version "${COMPONENT_VERSION:-${TAG#v}}" --image "$IMAGE" --running "${START_APPS[@]}"
+        archive_retired_registry
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
         # Keep recovery commands available if first boot or certificate issuance fails.
         install_cli

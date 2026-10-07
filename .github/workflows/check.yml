@@ -15,6 +15,7 @@ jobs:
       - run: python3 tests/package-release.test.py
       - run: python3 tests/images.test.py
       - run: bash installer/tests/uninstall-docker.sh
+      - run: bash installer/tests/reinstall-docker.sh
   proxy:
     runs-on: ubuntu-24.04
     steps:

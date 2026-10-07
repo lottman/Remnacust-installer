@@ -30,6 +30,7 @@ jobs:
           python3 tests/package-release.test.py
           python3 tests/images.test.py
           bash installer/tests/uninstall-docker.sh
+          bash installer/tests/reinstall-docker.sh
           python3 scripts/package-source-release.py "$RELEASE_TAG"
       - uses: actions/upload-artifact@v4
         with:
