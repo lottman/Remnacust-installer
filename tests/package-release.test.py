@@ -64,5 +64,11 @@ class ReleaseTests(unittest.TestCase):
         self.write(self.root,{'panel/frontend/vendor/backend-contract/build/backend/commands/backups/create-backup.command.d.ts':'export declare class CreateBackup {}\n'})
         self.retag()
         module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_windows_checkout_preferences_do_not_change_release_bytes(self):
+        self.write(self.root,{'.gitattributes':'* text=auto\n*.sh text eol=lf\n'})
+        self.git(self.root,'config','core.eol','crlf');self.retag()
+        destination=module.package(self.root,'v1.1.1',self.parent)
+        contents=module.read_archive((destination/'remnacust-source-v1.1.1.tar.gz').read_bytes())
+        self.assertEqual(contents['NOTICE.md'],b'fixture notice\n')
 
 if __name__=='__main__':unittest.main()
