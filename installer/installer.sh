@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.13] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.14] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -1260,7 +1260,7 @@ PY
         else completion_row 'Ключ ноды:' 'Сохранён из прежнего контейнера · SECRET_KEY в Compose'; fi
     fi
     completion_row 'Файл настроек:' "$directory/.env"
-    [[ -z ${details[9]:-} ]] || completion_row 'Compose:' "${details[9]}"
+    [[ -z ${details[8]:-} ]] || completion_row 'Compose:' "${details[8]}"
     if [[ -n $certificate ]]; then
         completion_row 'Исходный сертификат:' "$certificate"
         completion_row 'Исходный ключ TLS:' "$key"
