@@ -38,10 +38,11 @@ grep -q -- '--all.*com.docker.compose.service=remnawave' "$fixture/docker-calls"
 printf 'PASS stopped/legacy Compose app detected before confirmation, domain and network access\n'
 export MOCK_DOCKER=db
 if bash "$installer/installer.sh" install-panel > "$fixture/output" 2>&1; then exit 1; fi
-grep -q 'Проект remnacust-panel уже существует' "$fixture/output"
-grep -q /opt/previous-panel "$fixture/output"
+grep -q 'уже установлен' "$fixture/output"
+show_menu > "$fixture/menu"
+grep -q uninstall-panel "$fixture/menu"
 [[ ! -f $fixture/unexpected-download ]]
-printf 'PASS surviving infrastructure collision includes the old working directory before prompts\n'
+printf 'PASS surviving own infrastructure is detected before prompts\n'
 export MOCK_DOCKER=unavailable
 if bash "$installer/installer.sh" install-panel --yes > "$fixture/output" 2>&1; then exit 1; fi
 grep -q 'Docker daemon недоступен' "$fixture/output"

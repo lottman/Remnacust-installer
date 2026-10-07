@@ -25,7 +25,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.0] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.1] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -137,7 +137,7 @@ PY
             [[ ! -f $directory/$file || -L $directory/$file ]] || return 0
         done
     fi
-    [[ -n $(component_containers "$component") ]]
+    [[ -n $(component_containers "$component") || -n $(component_project_containers "$component") ]]
 }
 component_containers() {
     # Also find installations made before the registry existed, including stopped containers.
@@ -149,6 +149,11 @@ component_containers() {
         [[ -n $id ]] || continue
         if [[ $name == "$project" || $image == *remnacust-"$component"* ]]; then printf '%s\n' "$id"; fi
     done <<< "$rows"
+}
+component_project_containers() {
+    command -v docker >/dev/null || return 0
+    docker ps --all --quiet --filter "label=com.docker.compose.project=${PROJECT:-remnacust-$1}" 2>/dev/null || true
+    docker ps --all --quiet --filter "label=io.remnacust.installer-managed=$1" 2>/dev/null || true
 }
 assert_fresh_target() {
     local directory="${DIRECTORY:-$ROOT/$COMPONENT}" project="${PROJECT:-remnacust-$COMPONENT}" existing
@@ -172,7 +177,7 @@ import json,sys
 from pathlib import Path
 try:
     s=json.load(open(sys.argv[1]));p=Path(s['directory'])
-    raise SystemExit(0 if s.get('component')==sys.argv[2] and s.get('uninstalled') is True and p.is_dir() and not p.is_symlink() else 1)
+    raise SystemExit(0 if s.get('component')==sys.argv[2] and s.get('uninstalled') is True and s.get('recoverable',True) and p.is_dir() and not p.is_symlink() else 1)
 except (OSError,ValueError,KeyError,TypeError): raise SystemExit(1)
 PY
 }
@@ -482,7 +487,7 @@ main() {
     fi
     case "$ACTION" in *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
     case "$ACTION" in
-        upgrade-*|uninstall-*)
+        upgrade-*)
             if ! component_installed "$COMPONENT" && [[ -z $CONTAINER ]]; then
                 die "$COMPONENT не установлен. Сначала install-$COMPONENT; для существующего Remnawave используйте migrate-remnawave-$COMPONENT с --directory или --container."
             fi;;
@@ -977,6 +982,11 @@ m.write(sys.argv[3],m.load(sys.argv[2]))
 PY
 }
 service_action() {
+    if [[ $ACTION == uninstall-* ]]; then
+        command -v python3 >/dev/null || die 'Для удаления нужен python3'
+        command -v docker >/dev/null || die 'Docker недоступен'
+        lock_operation; uninstall_component; return
+    fi
     installed_helper; lock_operation
     if [[ $ACTION == status && -z $COMPONENT ]]; then
         local item found=false
@@ -985,7 +995,7 @@ service_action() {
     fi
     COMPONENT=${COMPONENT:-panel}; STATE="$ROOT/registry/$COMPONENT.json"
     if [[ ! -f $STATE ]]; then
-        DIRECTORY=${DIRECTORY:-$ROOT/$COMPONENT}; IMAGE=discovery-only
+        IMAGE=discovery-only
         find_existing
     else load_state; fi
     case "$ACTION" in
@@ -1016,28 +1026,123 @@ PY
     esac
 }
 uninstall_component() {
-    confirm "Удалить контейнеры $COMPONENT. База, тома, .env, сертификаты и копии сохраняются"
-    local -a removed=("${APPS[@]}" "${EXTRAS[@]}")
-    python3 - "$STATE" "${removed[@]}" > "$WORK/uninstall-services" <<'PY'
-import json,sys
-s=json.load(open(sys.argv[1]));services=s.get('ownedServices',sys.argv[2:])
-if not services or any(not isinstance(v,str) or not v or v.startswith('-') for v in services): raise SystemExit('Неверный список сервисов')
-print('\n'.join(dict.fromkeys(services)))
-PY
-    mapfile -t removed < "$WORK/uninstall-services"
-    ((${#removed[@]})) || die 'Нет подтверждённых сервисов для удаления'
-    step 'Остановка контейнеров компонента' compose stop "${removed[@]}"
-    step 'Удаление контейнеров без удаления томов' compose rm --force "${removed[@]}"
-    python3 - "$STATE" "$DEPLOY/.remnacust-uninstalled" <<'PY'
-import json,sys
+    local -a ids=() removed=()
+    local snapshot="$ROOT/backups/uninstall-$COMPONENT-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    docker ps --all --quiet --no-trunc > "$WORK/uninstall-inventory.ids" || die 'Не удалось проверить Docker; удаление не выполнялось'
+    mapfile -t ids < "$WORK/uninstall-inventory.ids"
+    if ((${#ids[@]})); then docker inspect "${ids[@]}" > "$WORK/uninstall-inventory.json" || die 'Не удалось прочитать контейнеры; повторите удаление'
+    else printf '[]' > "$WORK/uninstall-inventory.json"; fi
+    python3 - "$WORK/uninstall-inventory.json" "$ROOT/registry/$COMPONENT.json" "$COMPONENT" "$DIRECTORY" "$CONTAINER" "$PROJECT" "$COMPOSE_FILE" "$ROOT" "$WORK" <<'PY'
+import json,re,sys
 from pathlib import Path
-s=json.load(open(sys.argv[1]));s['uninstalled']=True
-Path(sys.argv[2]).touch(mode=0o600)
-Path(sys.argv[1]).write_text(json.dumps(s,indent=2)+'\n')
+inventory,registry,kind,directory,container,project,compose_file,root,work=sys.argv[1:]
+all_containers=json.load(open(inventory));record={};registry_path=Path(registry)
+if registry_path.is_symlink():raise SystemExit('Запись установки не должна быть символьной ссылкой')
+if registry_path.is_file():
+ try:record=json.loads(registry_path.read_text())
+ except (ValueError,OSError):record={}
+ if not isinstance(record,dict) or record.get('component')!=kind:record={}
+def labels(c):return c.get('Config',{}).get('Labels') or {}
+def group(c):return labels(c).get('com.docker.compose.project','')
+def service(c):return labels(c).get('com.docker.compose.service','')
+def image(c):return c.get('Config',{}).get('Image','')
+def protected(c):return image(c).split('@')[0].rsplit('/',1)[-1].split(':')[0] in {'caddy','nginx','nginx-proxy','nginx-proxy-manager','traefik','postgres','postgresql','valkey','redis'}
+def app(c):
+ env=dict(v.split('=',1) for v in c.get('Config',{}).get('Env',[]) if '=' in v)
+ return not protected(c) and (service(c)==('remnawave' if kind=='panel' else 'remnanode') or ('remnacust-'+kind) in image(c) or (kind=='panel' and env.get('INSTANCE_TYPE') in {'api','processor','scheduler'}))
+def working(c):
+ value=labels(c).get('com.docker.compose.project.working_dir','')
+ return str(Path(value).resolve()) if value else ''
+selector=directory or (str(Path(compose_file).resolve().parent) if compose_file else '')
+if selector:selector=str(Path(selector).resolve())
+expected='remnacust-'+kind
+explicit=[]
+if container:
+ explicit=[c for c in all_containers if c['Id'].startswith(container) or c.get('Name','').lstrip('/')==container]
+ if len(explicit)!=1:raise SystemExit('Контейнер не найден либо идентификатор неоднозначен')
+ if not app(explicit[0]) and not (group(explicit[0])==expected or labels(explicit[0]).get('io.remnacust.installer-managed')==kind):raise SystemExit('Указанный контейнер не принадлежит выбранному компоненту')
+ project=group(explicit[0]) or ''
+ if selector and working(explicit[0])!=selector:raise SystemExit('Указанный каталог не совпадает с контейнером')
+elif project:
+ explicit=[c for c in all_containers if group(c)==project and (not selector or working(c)==selector)]
+elif record.get('project') and (not selector or str(Path(record.get('directory','')).resolve())==selector):
+ project=record['project']
+ explicit=[c for c in all_containers if group(c)==project]
+else:
+ candidates=[c for c in all_containers if (not selector or working(c)==selector) and (group(c)==expected or labels(c).get('io.remnacust.installer-managed')==kind or (app(c) and 'remnacust-'+kind in image(c)))]
+ projects={group(c) for c in candidates if group(c)}
+ if len(projects)>1:raise SystemExit('Найдено несколько установок: укажите --container или --directory')
+ project=next(iter(projects),'')
+ explicit=candidates
+if project:
+ peers=[c for c in all_containers if group(c)==project]
+ anchors=[c for c in explicit if app(c)]
+ same_record=record.get('project')==project
+ owned=record.get('ownedServices') if same_record else None
+ if owned is not None and (not isinstance(owned,list) or any(not isinstance(v,str) or not v or v.startswith('-') for v in owned)):raise SystemExit('Неверный список собственных сервисов в записи установки')
+ if owned is not None:selected=[c for c in peers if service(c) in owned]
+ elif project==expected:selected=peers
+ else:
+  app_images={image(c) for c in anchors}
+  selected=[c for c in peers if labels(c).get('io.remnacust.installer-managed')==kind or (app(c) and (image(c) in app_images or service(c) in record.get('applications',[])))]
+else:selected=explicit
+if not selected and not record and not selector:raise SystemExit('Не найдены контейнеры компонента; укажите --container или --directory')
+if any(not re.fullmatch(r'[a-f0-9]{64}',c.get('Id','')) for c in selected):raise SystemExit('Некорректный идентификатор контейнера')
+anchor=next((c for c in selected if app(c)),selected[0] if selected else {})
+path=selector or (record.get('directory') if record.get('project')==project else '') or working(anchor) or str(Path(root)/kind)
+path=str(Path(path).resolve())
+if path in {'/','/opt','/usr','/etc','/root'}:raise SystemExit('Небезопасный каталог установки')
+files=record.get('composeFiles',[]) if record.get('project')==project else []
+if not files:
+ files=[str((Path(path)/f).resolve()) for f in labels(anchor).get('com.docker.compose.project.config_files','').split(',') if f]
+if compose_file:files=[str(Path(compose_file).resolve())]
+recoverable=bool(files) and all(isinstance(f,str) and Path(f).is_file() for f in files)
+state=record.copy() if record.get('project')==project else {}
+proxies=[service(c) for c in selected if image(c).split('@')[0].rsplit('/',1)[-1].split(':')[0] in {'caddy','nginx'} and service(c)]
+state.update({'schema':1,'component':kind,'directory':path,'project':project or expected,'composeFiles':files,'mainService':state.get('mainService') or service(anchor),'applications':state.get('applications') or list(dict.fromkeys(service(c) for c in selected if app(c) and service(c))),'extraServices':state.get('extraServices',proxies),'image':state.get('image') or image(anchor),'uninstalled':True,'recoverable':recoverable})
+if 'runningApplications' not in state:state['runningApplications']=list(dict.fromkeys(service(c) for c in selected if c.get('State',{}).get('Running') and service(c) and (app(c) or service(c) in proxies)))
+if not state.get('ownedServices'):state['ownedServices']=list(dict.fromkeys(service(c) for c in selected if service(c)))
+p=Path(work)
+(p/'uninstall-containers.json').write_text(json.dumps(selected,indent=2)+'\n')
+(p/'uninstall-state.json').write_text(json.dumps(state,indent=2)+'\n')
+(p/'uninstall-targets.ids').write_text(''.join(c['Id']+'\n' for c in selected))
 PY
-    helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
-    info "$COMPONENT удалён. Данные и конфигурация: $DEPLOY"
-    info 'Для возврата сохранённой установки: remnacust start --component '"$COMPONENT"
+    mapfile -t removed < "$WORK/uninstall-targets.ids"
+    info "Будут удалены контейнеры $COMPONENT (${#removed[@]}):"
+    python3 - "$WORK/uninstall-containers.json" <<'PY'
+import json,sys
+for c in json.load(open(sys.argv[1])):print('    '+c.get('Name',c['Id']).lstrip('/'))
+PY
+    confirm "Удалить контейнеры $COMPONENT. Томы, БД, файлы и сертификаты сохраняются"
+    install -d -m 0700 "$snapshot"
+    install -m 0600 "$WORK/uninstall-containers.json" "$snapshot/containers.json"
+    install -m 0600 "$WORK/uninstall-state.json" "$snapshot/state.json"
+    [[ ! -f $ROOT/registry/$COMPONENT.json ]] || install -m 0600 "$ROOT/registry/$COMPONENT.json" "$snapshot/registry.before.json"
+    if ((${#removed[@]})); then step 'Удаление найденных контейнеров' remove_container_ids "${removed[@]}"; fi
+    python3 - "$WORK/uninstall-state.json" "$snapshot" "$ROOT/registry/$COMPONENT.json" <<'PY'
+import json,os,sys
+from pathlib import Path
+p=Path(sys.argv[1]);s=json.loads(p.read_text());s['uninstallSnapshot']=sys.argv[2]
+directory=Path(s['directory'])
+if directory.is_dir() and not directory.is_symlink():(directory/'.remnacust-uninstalled').touch(mode=0o600)
+target=Path(sys.argv[3]);pending=target.with_suffix('.json.pending')
+pending.write_text(json.dumps(s,indent=2)+'\n');pending.chmod(0o600);os.replace(pending,target)
+print('Данные и прежний каталог: '+s['directory'])
+if not s['recoverable']:print('Compose отсутствует. Описания контейнеров сохранены: '+sys.argv[2]+'/containers.json. Для возврата восстановите исходный Compose.')
+else:print('Для возврата: remnacust start --component '+s['component'])
+PY
+    info "$COMPONENT удалён. Копия описаний контейнеров: $snapshot"
+}
+remove_container_ids() {
+    # IDs are immutable; never remove by a name that another process can reuse.
+    docker stop --time 30 "$@" || true
+    docker rm --force "$@" || true
+    docker ps --all --quiet --no-trunc > "$WORK/uninstall-after.ids" || return 1
+    python3 - "$WORK/uninstall-after.ids" "$@" <<'PY'
+import sys
+remaining=set(open(sys.argv[1]).read().splitlines()).intersection(sys.argv[2:])
+if remaining:raise SystemExit('Docker не удалил все выбранные контейнеры; данные и запись установки сохранены')
+PY
 }
 restore_panel() {
     [[ -n $BACKUP && -d $BACKUP && ! -L $BACKUP ]] || die 'Укажите --backup с каталогом копии'

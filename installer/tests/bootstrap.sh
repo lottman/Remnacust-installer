@@ -47,9 +47,15 @@ case "$url" in
     *) exit 22;;
 esac
 MOCK
-chmod +x "$fixture/bin/curl"
+cat > "$fixture/bin/docker" <<'MOCK'
+#!/usr/bin/env bash
+# Bootstrap checks must not depend on containers running on the test host.
+exit 0
+MOCK
+chmod +x "$fixture/bin/curl" "$fixture/bin/docker"
 export PATH="$fixture/bin:$PATH"
 export REMNACUST_REPOSITORY=lottman/Remnacust-installer
+export REMNACUST_ROOT="$fixture/root"
 pass() { printf 'PASS %s\n' "$1"; }
 reject() {
     local description=$1;shift

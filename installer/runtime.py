@@ -224,6 +224,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
     number = port(number)
     logging = {'driver': 'json-file', 'options': {'max-size': '30m', 'max-file': '5'}}
     common = {'restart': 'unless-stopped', 'logging': logging,
+              'labels': {'io.remnacust.installer-managed': component},
               'ulimits': {'nofile': {'soft': 1048576, 'hard': 1048576}}}
     if component == 'panel':
         app = dict(common, image=image, env_file=[str(directory / '.env')],
