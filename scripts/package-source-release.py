@@ -70,7 +70,7 @@ def validate(files, version):
             raise ValueError('Working environment in source: ' + name)
         if any(p in {'.git', 'node_modules', 'dist', 'coverage', '__pycache__', '.cache'} for p in path.parts):
             raise ValueError('Runtime or build output in source: ' + name)
-        code_root = path.parts[:3] in {('panel', 'backend', 'src'), ('panel', 'backend', 'libs'), ('panel', 'frontend', 'src')} or path.parts[:2] in {('node', 'src'), ('node', 'libs')}
+        code_root = path.parts[:3] in {('panel', 'backend', 'src'), ('panel', 'backend', 'libs'), ('panel', 'frontend', 'src')} or path.parts[:2] in {('node', 'src'), ('node', 'libs')} or path.parts[:5] == ('panel', 'frontend', 'vendor', 'backend-contract', 'build')
         if not code_root and any(p in {'dumps', 'backups', 'release'} for p in path.parts):
             raise ValueError('Runtime data in source: ' + name)
         if path.suffix == '.sh' and b'\r' in data:
