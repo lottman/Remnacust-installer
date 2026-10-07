@@ -13,8 +13,12 @@ import secrets
 import tempfile
 
 
+class ConfigurationError(ValueError):
+    """A diagnostic written by the installer without rejected secret values."""
+
+
 def fail(message):
-    raise ValueError(message)
+    raise ConfigurationError(message)
 
 
 def load(path):
@@ -63,6 +67,24 @@ def environment(container):
             key, content = value.split('=', 1)
             result[key] = content
     return result
+
+
+def compose_environment(value):
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        result = {}
+        for entry in value:
+            if not isinstance(entry, str):
+                fail('В списке Compose environment должны быть строки KEY=VALUE или KEY')
+            key, separator, content = entry.partition('=')
+            if not key:
+                fail('В Compose environment найдено пустое имя переменной')
+            result[key] = content if separator else None
+        return result
+    fail('Compose environment должен быть объектом или списком переменных')
 
 
 def inspect_one(path):
@@ -151,9 +173,7 @@ def transform(config, container, component, image, containers=()):
             if name == main:
                 fail('Основной контейнер является прокси или БД, а не приложением')
             continue
-        env = service.get('environment') or {}
-        if not isinstance(env, dict):
-            fail('Compose environment должен быть нормализован в объект')
+        env = compose_environment(service.get('environment'))
         role = roles.get(name) or env.get('INSTANCE_TYPE')
         worker = component == 'panel' and (role in {'api', 'processor', 'scheduler'} or name in {'remnawave-processor', 'remnawave-scheduler'})
         same_image = bool(original_image) and service.get('image') == original_image
@@ -347,6 +367,10 @@ def main():
 if __name__ == '__main__':
     try:
         main()
+    except ConfigurationError as error:
+        import sys
+        print('Ошибка конфигурации установщика: ' + str(error), file=sys.stderr)
+        raise SystemExit(1)
     except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
         # Inputs may include node secrets: never print rejected values or full JSON.
         import sys

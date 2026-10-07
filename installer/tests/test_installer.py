@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import tracemalloc
 import unittest
@@ -17,6 +18,69 @@ import marzban
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_node_upgrade_preserves_list_environment_without_resolving_values(self):
+        old = {'services': {'remnanode': {'image': 'remnacust-node:1.1.1',
+            'environment': ['SECRET_KEY=original==', 'NODE_PORT=72', 'TOKEN=${KEEP_LITERAL}', 'FROM_HOST', 'EMPTY=', 'TOKEN=last=value'],
+            'network_mode': 'host', 'volumes': ['/logs:/logs'], 'cap_add': ['NET_ADMIN']}}}
+        inspect = {'Config': {'Labels': {'com.docker.compose.service': 'remnanode'}}}
+        expected = copy.deepcopy(old); expected['services']['remnanode']['image'] = 'new'
+        result, apps = runtime.transform(old, inspect, 'node', 'new')
+        self.assertEqual(result, expected)
+        self.assertEqual(apps, ['remnanode'])
+        self.assertEqual(old['services']['remnanode']['image'], 'remnacust-node:1.1.1')
+        self.assertEqual(runtime.compose_environment(old['services']['remnanode']['environment'])['TOKEN'], 'last=value')
+
+    def test_panel_list_environment_selects_workers_and_preserves_proxy(self):
+        old = {'services': {'main': {'image': 'old', 'environment': ['APP_SECRET=${APP_SECRET}']},
+            'worker': {'image': 'worker-old', 'environment': ['INSTANCE_TYPE=processor']},
+            'proxy': {'image': 'nginx:1.28-alpine', 'environment': ['INSTANCE_TYPE=processor']}}}
+        expected = copy.deepcopy(old)
+        for service in ['main', 'worker']: expected['services'][service]['image'] = 'new'
+        result, apps = runtime.transform(old, {'Config': {'Labels': {'com.docker.compose.service': 'main'}}}, 'panel', 'new')
+        self.assertEqual(result, expected)
+        self.assertEqual(apps, ['main', 'worker'])
+
+    def test_invalid_compose_environment_does_not_echo_rejected_values(self):
+        secret = 'PRIVATE_VALUE_DO_NOT_ECHO'
+        for invalid in [secret, [{'SECRET_KEY': secret}], ['=' + secret]]:
+            with self.assertRaises(runtime.ConfigurationError) as caught:
+                runtime.compose_environment(invalid)
+            self.assertNotIn(secret, str(caught.exception))
+
+    def test_runtime_cli_reports_known_reason_and_hides_unexpected_parse_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root/'compose.json'; inspect = root/'container.json'; state = root/'state.json'
+            secret = 'PRIVATE_VALUE_DO_NOT_ECHO'
+            config.write_text(json.dumps({'services': {'node': {'image': 'old', 'environment': secret}}}))
+            inspect.write_text(json.dumps([{'Config': {'Labels': {'com.docker.compose.service': 'node'}}}]))
+            state.write_text('{}')
+            command = [sys.executable, runtime.__file__, 'transform', '--source', str(config), '--inspect', str(inspect),
+                '--component', 'node', '--image', 'new', '--target', str(root/'after.json'), '--state', str(state)]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('environment', result.stderr)
+            self.assertIn('объектом или списком', result.stderr)
+            self.assertNotIn(secret, result.stderr)
+            config.write_text(secret)
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('Проверьте путь', result.stderr)
+            self.assertNotIn(secret, result.stderr)
+
+    @unittest.skipIf(os.name == 'nt', 'Bash helper logging is checked on Linux')
+    def test_bash_helper_logs_the_safe_reason_and_preserves_failure_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory)/'operation.log'
+            installer = Path(runtime.__file__).with_name('installer.sh')
+            result = subprocess.run(['bash', '-c',
+                'source "$1"; HELPER="$2"; LOG="$3"; helper validate --port PRIVATE_VALUE_DO_NOT_ECHO',
+                'test', str(installer), runtime.__file__, str(log)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('Порт должен быть', result.stderr)
+            self.assertIn('Порт должен быть', log.read_text())
+            self.assertNotIn('PRIVATE_VALUE_DO_NOT_ECHO', result.stderr + log.read_text())
+
     def test_large_backup_hashing_is_bounded_and_matches_sha256(self):
         with tempfile.TemporaryDirectory() as t:
             p=Path(t)/'database.dump';chunk=b'backup-fixture\0'*65536

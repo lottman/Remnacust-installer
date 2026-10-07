@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.11] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.12] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -293,7 +293,10 @@ step() {
     if ((status)); then printf '%s  × %s · журнал: %s%s\n' "$ROSE" "$title" "$LOG" "$RESET" >&2; return "$status"; fi
     info "✓ $title"
 }
-helper() { python3 "$HELPER" "$@"; }
+helper() {
+    if [[ -n ${LOG:-} ]]; then python3 "$HELPER" "$@" 2> >(tee -a -- "$LOG" >&2)
+    else python3 "$HELPER" "$@"; fi
+}
 get() { helper get --state "$STATE" --key "$1"; }
 compose() {
     local -a args=(); local file
