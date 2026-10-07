@@ -152,9 +152,12 @@ def discover(container, component, directory=None, compose_file=None):
             fail('Нужны исходные DATABASE_URL и APP_SECRET; существующие секреты не заменяются')
     elif not env.get('SECRET_KEY'):
         fail('У существующей ноды нет SECRET_KEY')
-    return {'schema': 1, 'component': component, 'directory': str(working), 'project': project,
+    state = {'schema': 1, 'component': component, 'directory': str(working), 'project': project,
             'composeFiles': files, 'mainService': service, 'container': container['Id'],
             'applications': [service], 'extraServices': []}
+    if component == 'node':
+        state['apiPort'] = port(env.get('NODE_PORT', '2222'))
+    return state
 
 
 def transform(config, container, component, image, containers=()):
@@ -181,6 +184,15 @@ def transform(config, container, component, image, containers=()):
             applications.append(name)
             service['image'] = image
             service.pop('build', None)
+            if component == 'node' and name == main:
+                current = environment(container)
+                protected = {key: current[key] for key in ['SECRET_KEY', 'NODE_PORT'] if key in current}
+                if isinstance(service.get('environment'), list):
+                    service['environment'] = [entry.partition('=')[0] + '=' + protected[entry.partition('=')[0]]
+                        if entry.partition('=')[0] in protected else entry for entry in service['environment']]
+                    service['environment'].extend(key + '=' + value for key, value in protected.items() if key not in env)
+                elif protected:
+                    service['environment'] = {**env, **protected}
     return result, applications
 
 

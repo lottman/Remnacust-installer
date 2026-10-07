@@ -8,7 +8,7 @@ import unittest
 INSTALLER = Path(__file__).resolve().parents[1] / 'installer.sh'
 
 class CompletionTests(unittest.TestCase):
-    def summary(self, component='panel', proxy='caddy', tls=None, action='install-panel'):
+    def summary(self, component='panel', proxy='caddy', tls=None, action='install-panel', api_port=None):
         with tempfile.TemporaryDirectory(prefix='remnacust-completion-') as directory:
             root = Path(directory)
             deploy = root / 'deployment'
@@ -18,6 +18,8 @@ class CompletionTests(unittest.TestCase):
             state = {'component': component, 'directory': str(deploy), 'project': 'remnacust-' + component,
                      'proxy': proxy, 'nodeDomain': 'edge.example.org' if component == 'node' else ''}
             if tls: state['tls'] = tls
+            if api_port is not None:
+                state.update(apiPort=api_port, composeFiles=[str(deploy/'compose.remnacust.json')])
             (root / 'state.json').write_text(json.dumps(state))
             result = subprocess.run(['bash', '-c',
                 'source "$1"; WORK="$2"; STATE="$2/state.json"; COMPONENT="$3"; ACTION="$4"; '
@@ -57,6 +59,13 @@ class CompletionTests(unittest.TestCase):
         self.assertIn('https://panel.example.org', output)
         self.assertIn('Прежние имя пользователя и пароль', output)
         self.assertNotIn('Создайте аккаунт', output)
+
+    def test_node_upgrade_shows_live_port_and_managed_compose_despite_stale_env(self):
+        output = self.summary(component='node', action='upgrade-node', api_port=72)
+        self.assertIn('TCP 72', output)
+        self.assertNotIn('TCP 2222', output)
+        self.assertIn('compose.remnacust.json', output)
+        self.assertIn('Сохранён из прежнего контейнера', output)
 
 if __name__ == '__main__':
     unittest.main()

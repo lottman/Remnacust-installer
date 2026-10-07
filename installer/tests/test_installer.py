@@ -40,6 +40,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertEqual(apps, ['main', 'worker'])
 
+    def test_node_upgrade_preserves_live_port_and_key_when_files_have_drifted(self):
+        live = {'Config': {'Labels': {'com.docker.compose.service': 'node'},
+            'Env': ['NODE_PORT=72', 'SECRET_KEY=live-key==']}}
+        for values in [{'NODE_PORT': '2222', 'SECRET_KEY': '${OLD_KEY}', 'OTHER': '${UNCHANGED}'},
+                       ['NODE_PORT=2222', 'SECRET_KEY=${OLD_KEY}', 'OTHER=${UNCHANGED}', 'NODE_PORT=3333'],
+                       ['OTHER=${UNCHANGED}'], None]:
+            with self.subTest(environment=values):
+                original = {'services': {'node': {'image': 'old', 'environment': values,
+                    'env_file': ['/original/.env'], 'network_mode': 'host'}}}
+                saved = copy.deepcopy(original)
+                updated, applications = runtime.transform(original, live, 'node', 'new')
+                environment = runtime.compose_environment(updated['services']['node']['environment'])
+                self.assertEqual(environment['NODE_PORT'], '72')
+                self.assertEqual(environment['SECRET_KEY'], 'live-key==')
+                if values is not None: self.assertEqual(environment['OTHER'], '${UNCHANGED}')
+                self.assertEqual(updated['services']['node']['env_file'], ['/original/.env'])
+                self.assertEqual(updated['services']['node']['network_mode'], 'host')
+                self.assertEqual(applications, ['node'])
+                self.assertEqual(original, saved)
+
     def test_invalid_compose_environment_does_not_echo_rejected_values(self):
         secret = 'PRIVATE_VALUE_DO_NOT_ECHO'
         for invalid in [secret, [{'SECRET_KEY': secret}], ['=' + secret]]:
@@ -174,6 +194,15 @@ class RuntimeTests(unittest.TestCase):
         new, apps = runtime.transform(old, main, 'panel', 'new', [worker])
         self.assertEqual(apps, ['main', 'hidden-worker'])
         self.assertEqual(new['services']['hidden-worker']['image'], 'new')
+
+    def test_node_discovery_records_the_live_api_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            compose = Path(directory)/'compose.json'; compose.write_text('{}')
+            node = {'Id': 'node', 'Config': {'Env': ['SECRET_KEY=original', 'NODE_PORT=72'], 'Labels': {
+                'com.docker.compose.project': 'node', 'com.docker.compose.service': 'node',
+                'com.docker.compose.project.working_dir': directory,
+                'com.docker.compose.project.config_files': str(compose)}}}
+            self.assertEqual(runtime.discover(node, 'node')['apiPort'], 72)
 
     def test_defaults_have_matching_strong_secrets(self):
         text = runtime.panel_env('APP_SECRET=change_me\nPOSTGRES_PASSWORD=change_me\n', 'panel.example.com', '3000')

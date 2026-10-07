@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.12] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.13] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -469,7 +469,7 @@ import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
  for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls']:
-  if key in old:new[key]=old[key]
+  if key in old and (key != 'apiPort' or key not in new):new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
     fi
@@ -1233,7 +1233,7 @@ if p.is_file():
 panel=sys.argv[2] or s.get('panelDomain') or env.get('FRONT_END_DOMAIN') or env.get('PANEL_DOMAIN','')
 if panel and not panel.startswith(('http://','https://')):panel='https://'+panel
 tls=s.get('tls',{})
-for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),sys.argv[4] or s.get('nodePort') or s.get('port') or env.get('NODE_PORT',''),s.get('proxy',sys.argv[5]),tls.get('method',sys.argv[6]),tls.get('certificate',sys.argv[7]),tls.get('key',sys.argv[8])]:
+for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),sys.argv[4] or s.get('apiPort') or s.get('nodePort') or s.get('port') or env.get('NODE_PORT',''),s.get('proxy',sys.argv[5]),tls.get('method',sys.argv[6]),tls.get('certificate',sys.argv[7]),tls.get('key',sys.argv[8]),', '.join(s.get('composeFiles',[]))]:
  print(str(value).replace('\n',' ').replace('\r',' '))
 PY
     mapfile -t details < "$WORK/completion-details"
@@ -1256,9 +1256,11 @@ PY
         completion_row 'API ноды:' "Адрес этого сервера · TCP ${port:-2222}"
         completion_row 'Подключение:' 'Добавьте адрес, API-порт и профиль в панели'
         [[ -z $node_domain ]] || completion_row 'TLS/XHTTP домен:' "$node_domain"
-        completion_row 'Ключ ноды:' "$directory/.env · SECRET_KEY"
+        if [[ $ACTION == install-node ]]; then completion_row 'Ключ ноды:' "$directory/.env · SECRET_KEY"
+        else completion_row 'Ключ ноды:' 'Сохранён из прежнего контейнера · SECRET_KEY в Compose'; fi
     fi
     completion_row 'Файл настроек:' "$directory/.env"
+    [[ -z ${details[9]:-} ]] || completion_row 'Compose:' "${details[9]}"
     if [[ -n $certificate ]]; then
         completion_row 'Исходный сертификат:' "$certificate"
         completion_row 'Исходный ключ TLS:' "$key"
