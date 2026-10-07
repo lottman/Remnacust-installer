@@ -167,9 +167,9 @@ supported_ubuntu_codename() {
     esac
 }
 prepare_host() {
-    [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Для установки нужен root на Linux'
     local id=ubuntu codename
     codename=$(supported_ubuntu_codename) || return $?
+    [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Для установки нужен root на Linux'
     case "$(uname -m)" in x86_64|aarch64) ;; *) die 'Нужна архитектура amd64 или arm64';; esac
     if ! command -v python3 >/dev/null || ! command -v curl >/dev/null || ! command -v flock >/dev/null || ! command -v tar >/dev/null; then
         step 'Подготовка системных пакетов' apt-get update

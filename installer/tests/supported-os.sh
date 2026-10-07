@@ -31,3 +31,11 @@ printf 'PASS missing version fails with a readable error\n'
     if prepare_host; then exit 1; else [[ $? == 1 ]]; fi
 )
 printf 'PASS unsupported OS stops before package and Docker changes\n'
+if [[ $EUID != 0 ]]; then
+    if (
+        supported_ubuntu_codename() { printf noble; }
+        prepare_host
+    ) > "$fixture/result" 2>&1; then exit 1; fi
+    grep -q 'Для установки нужен root на Linux' "$fixture/result"
+    printf 'PASS supported OS still requires root for installation\n'
+fi
