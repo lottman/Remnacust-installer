@@ -25,7 +25,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.1.4] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.1.5] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -436,9 +436,6 @@ main() {
         [[ -n $VERSION ]] || VERSION=latest
         TAG=$(resolve_release); fetch_source; info "Выпуск $TAG: SHA-256, пути архива и версии проверены"; return 0
     fi
-    [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Нужен root на Linux'
-    mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
-    LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     case "$ACTION" in *panel) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
     case "$ACTION" in
         upgrade-*|uninstall-*)
@@ -447,6 +444,9 @@ main() {
             fi;;
         install-*) if component_installed "$COMPONENT"; then die "$COMPONENT уже установлен. Используйте upgrade-$COMPONENT или uninstall-$COMPONENT."; fi;;
     esac
+    [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Нужен root на Linux'
+    mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
+    LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     case "$ACTION" in
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
