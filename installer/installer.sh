@@ -69,7 +69,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.2.8] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.9] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -119,7 +119,7 @@ Remnacust · installer.sh
 Версия запрашивается перед установкой/обновлением/миграцией; Enter = latest.
 Подтверждение: y/n; Enter = n. Регистр и пробелы не важны.
 После удаления доступна только новая установка через install-panel/install-node.
-Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS, amd64 / arm64.
+Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS / 26.04 LTS, amd64 / arm64.
 SECRET_KEY вводится скрыто или через REMNACUST_NODE_SECRET. Секреты не печатаются.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
 HELP
@@ -338,7 +338,8 @@ supported_ubuntu_codename() {
     case "$id:$version" in
         ubuntu:22.04) printf jammy;;
         ubuntu:24.04) printf noble;;
-        *) die "Поддерживаются только Ubuntu 22.04 LTS и Ubuntu 24.04 LTS. Обнаружено: ${id:-неизвестно} ${version:-неизвестно}";;
+        ubuntu:26.04) printf resolute;;
+        *) die "Поддерживаются только Ubuntu 22.04 LTS, Ubuntu 24.04 LTS и Ubuntu 26.04 LTS. Обнаружено: ${id:-неизвестно} ${version:-неизвестно}";;
     esac
 }
 prepare_host() {
