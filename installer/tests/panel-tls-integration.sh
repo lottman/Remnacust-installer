@@ -20,6 +20,11 @@ IMAGE=nginx:1.28-alpine; PROXY=caddy; TLS_METHOD=existing; PORT=43874
 CERT_FILE="$fixture/cert"; KEY_FILE="$fixture/key"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" -days 3 -subj /CN=panel.example.com -addext subjectAltName=DNS:panel.example.com >/dev/null 2>&1
 certificate_preflight
+# This fixture publishes TLS on 43876, so host listeners on 80/443 are irrelevant.
+# Keep the production port check intact and bypass only those two unused bindings.
+original_port_check=$(declare -f port_free)
+eval "${original_port_check/port_free/fixture_port_free}"
+port_free() { [[ $1 == 80 || $1 == 443 ]] || fixture_port_free "$1"; }
 fresh_files
 tls_helper copy --domain "$DOMAIN" --certificate "$CERT_FILE" --key "$KEY_FILE" --directory "$DEPLOY"
 tls_helper record --state "$STATE" --method existing --certificate "$CERT_FILE" --key "$KEY_FILE"
