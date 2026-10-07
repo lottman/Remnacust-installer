@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import tarfile
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--component', required=True, choices=['panel', 'node', 'subscription-page'])
@@ -33,8 +34,13 @@ digest = hashlib.sha256()
 with (args.output/filename).open('rb') as stream:
     for chunk in iter(lambda: stream.read(1024 * 1024), b''):
         digest.update(chunk)
+with tarfile.open(args.output/filename, 'r:gz') as archive:
+    manifest = json.load(archive.extractfile('manifest.json'))
+    assert len(manifest) == 1 and manifest[0]['RepoTags'] == [name]
+    config = archive.extractfile(manifest[0]['Config']).read()
+    config_id = 'sha256:' + hashlib.sha256(config).hexdigest()
 metadata = {'component': args.component, 'version': pin['version'], 'commit': pin['commit'],
             'architecture': args.architecture, 'file': filename, 'image': name, 'registry': registry,
-            'imageId': image['Id'], 'sha256': digest.hexdigest()}
+            'imageId': config_id, 'sha256': digest.hexdigest()}
 (args.output/f'image-{args.component}-{args.architecture}.json').write_text(json.dumps(metadata, indent=2)+'\n')
 print('Verified image:', args.component, args.architecture, pin['version'], registry)

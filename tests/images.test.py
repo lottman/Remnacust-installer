@@ -115,6 +115,40 @@ class ImageTests(unittest.TestCase):
         image = self.selected()
         with self.assertRaisesRegex(ValueError, 'другой образ'): images.verify_inspect([{'Id': 'sha256:'+'f'*64}], image)
 
+    def inspected(self, image, identity):
+        return [{'Id': identity, 'Architecture': image['architecture'], 'Os': 'linux', 'Config': {'Labels': {
+            'org.opencontainers.image.version': image['version'], 'org.opencontainers.image.revision': image['commit']}}}]
+
+    def test_classic_docker_config_id(self):
+        image = self.selected()
+        images.verify_inspect(self.inspected(image, image['imageId']), image)
+
+    def test_containerd_manifest_id(self):
+        image = self.selected()
+        images.verify_inspect(self.inspected(image, image['registry'].split('@')[1]), image)
+
+    def test_containerd_id_still_checks_architecture(self):
+        image = self.selected()
+        inspected = self.inspected(image, image['registry'].split('@')[1]); inspected[0]['Architecture'] = 'arm64'
+        with self.assertRaisesRegex(ValueError, 'Архитектура'): images.verify_inspect(inspected, image)
+
+    def saved_stream(self, image, tags=None):
+        path = self.archive(image, tags=tags)
+        import gzip
+        return io.BytesIO(gzip.decompress(path.read_bytes()))
+
+    def test_imported_image_stream_config_identity(self):
+        image = self.selected(); stream = self.saved_stream(image)
+        images.verify_saved(stream, image)
+
+    def test_imported_image_stream_rejects_foreign_config(self):
+        image = self.selected(); stream = self.saved_stream(image); image['imageId'] = 'sha256:'+'f'*64
+        with self.assertRaisesRegex(ValueError, 'Идентификатор'): images.verify_saved(stream, image)
+
+    def test_imported_image_stream_rejects_foreign_tag(self):
+        image = self.selected(); stream = self.saved_stream(image, tags=['postgres:latest'])
+        with self.assertRaisesRegex(ValueError, 'другой образ'): images.verify_saved(stream, image)
+
 
 if __name__ == '__main__':
     unittest.main()

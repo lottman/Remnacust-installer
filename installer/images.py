@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import sys
 import tarfile
 
 
@@ -99,15 +100,48 @@ def verify_archive(path, image):
 
 
 def verify_inspect(inspected, image):
-    if len(inspected) != 1 or inspected[0]['Id'] != image['imageId']:
+    # Classic Docker reports the config digest; containerd reports the manifest digest.
+    allowed = {image['imageId'], image['registry'].rsplit('@', 1)[1]}
+    if len(inspected) != 1 or inspected[0]['Id'] not in allowed:
         raise ValueError('Docker загрузил другой образ')
     item = inspected[0]
     check_config({'architecture': item['Architecture'], 'os': item['Os'], 'config': item['Config']}, image)
 
 
+def verify_saved(stream, image):
+    """Check the actual named image after an import that regenerated its manifest."""
+    listing = None
+    configs = {}
+    names = set()
+    size = 0
+    with tarfile.open(fileobj=stream, mode='r|') as archive:
+        for member in archive:
+            name = PurePosixPath(member.name)
+            if name.is_absolute() or '..' in name.parts or '\\' in member.name or not (member.isdir() or member.isfile()):
+                raise ValueError('Небезопасный путь в Docker-образе')
+            size += member.size
+            if name in names or len(names) >= 10000 or size > 8 * 1024**3:
+                raise ValueError('Неверный архив загруженного Docker-образа')
+            names.add(name)
+            if not member.isfile() or member.size > 1024 * 1024:
+                continue
+            if member.name == 'manifest.json':
+                listing = json.load(archive.extractfile(member))
+            elif member.name.endswith('.json') or name.parts[:2] == ('blobs', 'sha256'):
+                content = archive.extractfile(member).read()
+                if 'sha256:' + hashlib.sha256(content).hexdigest() == image['imageId']:
+                    configs[member.name] = content
+    if not listing or len(listing) != 1 or listing[0].get('RepoTags') != [image['image']]:
+        raise ValueError('Архив содержит другой образ или несколько образов')
+    content = configs.get(listing[0].get('Config'))
+    if content is None:
+        raise ValueError('Идентификатор загруженного Docker-образа не совпадает')
+    check_config(json.loads(content), image)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['validate', 'select', 'archive', 'inspect'])
+    parser.add_argument('action', choices=['validate', 'select', 'archive', 'inspect', 'saved'])
     parser.add_argument('--root', type=Path)
     parser.add_argument('--tag')
     parser.add_argument('--assets', type=Path)
@@ -116,6 +150,7 @@ if __name__ == '__main__':
     parser.add_argument('--architecture')
     parser.add_argument('--image', type=Path)
     parser.add_argument('--file', type=Path)
+    parser.add_argument('--quiet', action='store_true')
     args = parser.parse_args()
     if args.action in {'validate', 'select'}:
         assets = json.loads(args.assets.read_text())
@@ -126,7 +161,14 @@ if __name__ == '__main__':
             print(json.dumps(select(args.root, args.tag, assets, args.component, args.architecture)))
     else:
         image = json.loads(args.image.read_text())
-        if args.action == 'archive':
-            verify_archive(args.file, image)
-        else:
-            verify_inspect(json.loads(args.file.read_text()), image)
+        try:
+            if args.action == 'archive':
+                verify_archive(args.file, image)
+            elif args.action == 'saved':
+                verify_saved(sys.stdin.buffer, image)
+            else:
+                verify_inspect(json.loads(args.file.read_text()), image)
+        except (ValueError, KeyError, tarfile.TarError) as error:
+            if not args.quiet:
+                print(str(error), file=sys.stderr)
+            raise SystemExit(1)

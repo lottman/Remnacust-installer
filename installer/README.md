@@ -34,11 +34,11 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 | `backup-panel`, `restore-panel` | Копия БД и конфигурации / восстановление выбранной копии |
 | `renew-node-certificate` | Копирование обновлённого сертификата и перезапуск ноды/Nginx |
 
-При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.1.5` закрепляет выпуск. Установщик 1.1.5 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
+При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.1.6` закрепляет выпуск. Установщик 1.1.6 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
 
 ```bash
 sudo bash installer.sh install-panel --domain panel.example.com --version latest
-sudo remnacust upgrade-panel --version 1.1.5
+sudo remnacust upgrade-panel --version 1.1.6
 sudo remnacust status --component node
 sudo remnacust backup-panel
 sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID

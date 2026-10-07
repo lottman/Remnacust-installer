@@ -275,7 +275,7 @@ wait_ready() {
 prepare_image() {
     [[ -f $SOURCE/images.json ]] || die 'В этом старом выпуске нет готовых Docker-образов. Выберите latest; сборка на сервере отключена.'
     if docker image inspect "$IMAGE" > "$WORK/image.inspect.json" 2>/dev/null; then
-        python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json"
+        verify_loaded_image
         return
     fi
     local docker_directory free_kb needed_kb
@@ -286,7 +286,7 @@ prepare_image() {
     if docker pull "$(image_field registry)"; then
         docker tag "$(image_field registry)" "$IMAGE"
         docker image inspect "$IMAGE" > "$WORK/image.inspect.json"
-        python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json"
+        verify_loaded_image
         return
     fi
     info 'GHCR недоступен; скачиваем тот же проверенный образ из GitHub Release'
@@ -294,7 +294,13 @@ prepare_image() {
     python3 "$SOURCE/installer/images.py" archive --image "$WORK/image.json" --file "$WORK/image.tar.gz"
     docker load --input "$WORK/image.tar.gz"
     docker image inspect "$IMAGE" > "$WORK/image.inspect.json"
-    python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json"
+    verify_loaded_image
+}
+verify_loaded_image() {
+    if python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json" --quiet; then return; fi
+    # Import into containerd may regenerate the manifest. Verify its exact config,
+    # including layer digests, without writing another image copy to the server.
+    docker save "$IMAGE" | python3 "$SOURCE/installer/images.py" saved --image "$WORK/image.json"
 }
 image_field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$WORK/image.json" "$1"; }
 find_existing() {
