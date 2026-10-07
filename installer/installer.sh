@@ -25,7 +25,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.1.8] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.2.0] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -704,6 +704,7 @@ fresh_files() {
     if [[ -d $DEPLOY ]] && [[ -n $(find "$DEPLOY" -mindepth 1 -maxdepth 1 -print -quit) ]]; then die 'Каталог не пуст: выберите upgrade или migrate'; fi
     [[ ! -f $ROOT/registry/$COMPONENT.json ]] || die 'Компонент уже зарегистрирован'
     if [[ $COMPONENT == panel ]]; then
+        [[ -z $NODE_DOMAIN$PANEL_IP ]] || die '--node-domain и --panel-ip предназначены для install-node'
         [[ -n $DOMAIN ]] || DOMAIN=$(ask 'Домен панели')
         PORT=${PORT:-3000}
     else
@@ -769,6 +770,10 @@ certificate_wizard() {
         fi
         domain=$DOMAIN; suggested=auto
     else
+        if [[ -t 0 ]]; then
+            [[ -n $PORT ]] || PORT=$(ask 'Порт API ноды' 2222)
+            [[ -n $PANEL_IP ]] || PANEL_IP=$(ask 'IP/CIDR панели для доступа к API (Enter — свой firewall)')
+        fi
         if [[ -t 0 && -z $NODE_DOMAIN ]]; then
             choice=$(ask 'Настроить TLS/XHTTP на ноде? yes/no' no)
             case "$choice" in yes) NODE_DOMAIN=$(ask 'Домен ноды');;no) ;;*) die 'Введите yes или no';;esac
@@ -817,6 +822,8 @@ certificate_wizard() {
 certificate_preflight() {
     local domain=${NODE_DOMAIN:-$DOMAIN}
     [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
+    if [[ $COMPONENT == panel && ( $PORT == 80 || $PORT == 443 ) ]]; then die 'Порты 80/443 нужны Caddy. Выберите другой --port для backend панели (по умолчанию 3000).'; fi
+    if [[ $COMPONENT == node && $TLS_METHOD == http && $PORT == 80 ]]; then die 'HTTP-01 и его продление используют порт 80. Выберите другой API-порт ноды или DNS/готовый сертификат.'; fi
     [[ -n $TLS_METHOD ]] || return 0
     if [[ $TLS_METHOD == existing ]]; then
         tls_helper validate --domain "$domain" --certificate "$CERT_FILE" --key "$KEY_FILE"
@@ -888,7 +895,9 @@ deploy() {
     release_source
     if [[ $ACTION == install-* ]]; then
         if [[ $COMPONENT == panel ]]; then PORT=${PORT:-3000}; else PORT=${PORT:-2222}; fi
-        helper validate --domain "$DOMAIN" --node-domain "$NODE_DOMAIN" --port "$PORT" --project "${PROJECT:-remnacust-$COMPONENT}"
+        local -a installation_validation=(--domain "$DOMAIN" --node-domain "$NODE_DOMAIN" --port "$PORT" --project "${PROJECT:-remnacust-$COMPONENT}")
+        [[ -z $PANEL_IP ]] || installation_validation+=(--key "$PANEL_IP")
+        helper validate "${installation_validation[@]}"
         port_free "$PORT"
         if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
         certificate_preflight

@@ -24,6 +24,14 @@ cp "$FIXTURE/key" "$config/live/$domain/privkey.pem"
 MOCK
 chmod +x "$ROOT/tools/certbot/bin/certbot"
 port_free() { printf '%s\n' "$1" >> "$fixture/ports"; }
+COMPONENT=panel; PROXY=caddy; PORT=443; TLS_METHOD=auto
+if (certificate_preflight) > "$fixture/reserved-panel" 2>&1; then exit 1; fi
+grep -q 'Порты 80/443 нужны Caddy' "$fixture/reserved-panel"
+COMPONENT=node; PORT=80; TLS_METHOD=http
+if (certificate_preflight) > "$fixture/reserved-node" 2>&1; then exit 1; fi
+grep -q 'продление используют порт 80' "$fixture/reserved-node"
+PORT=2222
+printf 'PASS application API ports cannot conflict with the new proxy or HTTP renewal\n'
 for method in http cloudflare gcore; do
  COMPONENT=node; DOMAIN=''; NODE_DOMAIN=node.example.com; TLS_METHOD=$method; EMAIL=admin@example.com; PROJECT="fixture-$method"
  DNS_CREDENTIALS=''

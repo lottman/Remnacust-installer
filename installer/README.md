@@ -35,11 +35,11 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 | `renew-node-certificate` | Проверка и копирование обновлённого сертификата; перезапуск ноды/Nginx |
 | `renew-panel-certificate` | Проверка и копирование готового сертификата; reload Caddy без перезапуска панели |
 
-При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.1.8` закрепляет выпуск. Установщик 1.1.8 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
+При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.2.0` закрепляет выпуск. Установщик 1.2.0 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
 
 ```bash
 sudo bash installer.sh install-panel --domain panel.example.com --email admin@example.com --version latest
-sudo remnacust upgrade-panel --version 1.1.8
+sudo remnacust upgrade-panel --version 1.2.0
 sudo remnacust status --component node
 sudo remnacust backup-panel
 sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
@@ -53,7 +53,7 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 
 Установщик добавляет Docker только при его отсутствии. Если установлен Docker без Compose v2, добавляется только пакет Compose. Существующий daemon не переустанавливается. SSH, системные sysctl и посторонние службы не перенастраиваются.
 
-Панель получает случайные `APP_SECRET`, пароль PostgreSQL, пароль метрик и секрет webhook. HWID включён по умолчанию для новой установки. Backend публикуется только на `127.0.0.1`, БД и кеш не имеют публичных портов. Перед установкой запрашиваются домен, reverse proxy и способ получения сертификата. Для автоматического HTTPS также нужна почта ACME. Caddy обслуживает домен на 80/443; A/AAAA должны указывать на сервер, оба порта должны быть доступны. При `--proxy existing` HTTPS настраивается вашим reverse proxy. После запуска создайте администратора в панели.
+Панель получает случайные `APP_SECRET`, пароль PostgreSQL, пароль метрик и секрет webhook. HWID включён по умолчанию для новой установки. Backend публикуется только на `127.0.0.1`, БД и кеш не имеют публичных портов. Перед установкой запрашиваются домен, reverse proxy и способ получения сертификата. Для автоматического HTTPS также нужна почта ACME. Backend панели с новым Caddy должен использовать другой порт (по умолчанию 3000). Caddy обслуживает домен на 80/443; A/AAAA должны указывать на сервер, оба порта должны быть доступны. При `--proxy existing` HTTPS настраивается вашим reverse proxy. После запуска создайте администратора в панели.
 
 Caddy работает в Docker, поэтому `systemctl status nginx` на новой установке панели возвращает «Unit could not be found». Проверяйте `sudo remnacust status --component panel` и `sudo remnacust logs --component panel`: там видны приложение и Caddy. При миграции установщик сохраняет прежний Caddy или Nginx, его образ, конфигурацию, сертификаты и порты; новый прокси не устанавливается.
 
@@ -129,7 +129,7 @@ sudo bash installer.sh migrate-remnawave-panel --directory /opt/remnawave
 
 ### TLS и XHTTP
 
-`--node-domain` включает настройку TLS и Nginx. В интерактивном режиме установщик сам предлагает её; без TLS достаточно SECRET_KEY и API-порта. Способы получения сертификата одинаковы с панелью, кроме автоматического Caddy: на ноде вместо него используется Certbot HTTP-01. DNS должен быть настроен, а для HTTP-01 порт 80 должен быть свободен и доступен извне. Сертификаты хранятся в `certs`, общий каталог сокетов — в `run`. Nginx принимает TLS с PROXY protocol на `/var/lib/remnacust/run/nginx.sock`; путь `/xhttppath/` направлен на `/var/lib/remnacust/run/xhttp.sock`. После продления сертификата deploy-hook копирует его и перезапускает Nginx и ноду.
+`--node-domain` включает настройку TLS и Nginx. В интерактивном режиме установщик сам предлагает её; без TLS достаточно SECRET_KEY и API-порта. Способы получения сертификата одинаковы с панелью, кроме автоматического Caddy: на ноде вместо него используется Certbot HTTP-01. DNS должен быть настроен, а для HTTP-01 порт 80 должен быть свободен и доступен извне. API-порт ноды должен отличаться от 80 для этого способа, иначе продление станет невозможным. В меню запрашиваются также API-порт и адрес панели для ограничения доступа. Сертификаты хранятся в `certs`, общий каталог сокетов — в `run`. Nginx принимает TLS с PROXY protocol на `/var/lib/remnacust/run/nginx.sock`; путь `/xhttppath/` направлен на `/var/lib/remnacust/run/xhttp.sock`. После продления сертификата deploy-hook копирует его и перезапускает Nginx и ноду.
 
 Настройте в профиле Xray Unix inbound XHTTP: `listen` = `/var/lib/remnacust/run/xhttp.sock,0666`, `path` = `/xhttppath/`. Суффикс `0666` нужен для доступа worker Nginx к сокету. Для fallback на Nginx задайте `dest` = `/var/lib/remnacust/run/nginx.sock` и `xver: 1`. Сертификат и ключ доступны в `/var/lib/remnacust/tls/fullchain.pem` и `/var/lib/remnacust/tls/privkey.pem`. Публичный listener 443 принадлежит Xray. Профили панели автоматически не переписываются. Для REALITY без собственного TLS-сайта `--node-domain` не нужен.
 
