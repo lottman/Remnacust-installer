@@ -12,7 +12,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 
 [Скачать installer.sh](https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh). Для установки без меню добавьте в конец строки `install-panel` или `install-node`.
 
-Для просмотра справки достаточно Bash: `bash installer.sh --help`. В меню установленный компонент получает действие «Удалить» вместо «Установить». Обновить отсутствующий компонент нельзя. Наличие установки проверяется по каталогу, Docker/Compose-файлу и записи установщика; остановленные контейнеры тоже считаются установленными. Цвета отключаются через `NO_COLOR=1`; журнал операции хранится в `/opt/remnacust/logs` с доступом только для root.
+Для просмотра справки достаточно Bash: `bash installer.sh --help`. В меню установленный компонент получает действие «Удалить» вместо «Установить». Обновить отсутствующий компонент нельзя. Наличие установки проверяется по каталогу, Docker/Compose-файлу, записи установщика и контейнерам Compose; остановленные контейнеры тоже считаются установленными. Цвета отключаются через `NO_COLOR=1`; журнал операции хранится в `/opt/remnacust/logs` с доступом только для root.
 
 Если репозиторий скачан целиком, файл находится в `installer/installer.sh`.
 
@@ -32,13 +32,14 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 | `status`, `logs` | Состояние контейнеров, последние 100 строк журнала |
 | `start`, `stop`, `restart` | Управление приложением; остановка не удаляет БД и тома |
 | `backup-panel`, `restore-panel` | Копия БД и конфигурации / восстановление выбранной копии |
-| `renew-node-certificate` | Копирование обновлённого сертификата и перезапуск ноды/Nginx |
+| `renew-node-certificate` | Проверка и копирование обновлённого сертификата; перезапуск ноды/Nginx |
+| `renew-panel-certificate` | Проверка и копирование готового сертификата; reload Caddy без перезапуска панели |
 
-При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.1.6` закрепляет выпуск. Установщик 1.1.6 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
+При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.1.7` закрепляет выпуск. Установщик 1.1.7 содержит панель версии 1.1.2, ноду и ядро 1.1.1: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
 
 ```bash
-sudo bash installer.sh install-panel --domain panel.example.com --version latest
-sudo remnacust upgrade-panel --version 1.1.6
+sudo bash installer.sh install-panel --domain panel.example.com --email admin@example.com --version latest
+sudo remnacust upgrade-panel --version 1.1.7
 sudo remnacust status --component node
 sudo remnacust backup-panel
 sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
@@ -52,7 +53,7 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 
 Установщик добавляет Docker только при его отсутствии. Если установлен Docker без Compose v2, добавляется только пакет Compose. Существующий daemon не переустанавливается. SSH, системные sysctl и посторонние службы не перенастраиваются.
 
-Панель получает случайные `APP_SECRET`, пароль PostgreSQL, пароль метрик и секрет webhook. HWID включён по умолчанию для новой установки. Backend публикуется только на `127.0.0.1`, БД и кеш не имеют публичных портов. Caddy обслуживает домен на 80/443; A/AAAA должны указывать на сервер, оба порта должны быть доступны. При `--proxy existing` HTTPS настраивается вашим reverse proxy. После запуска создайте администратора в панели.
+Панель получает случайные `APP_SECRET`, пароль PostgreSQL, пароль метрик и секрет webhook. HWID включён по умолчанию для новой установки. Backend публикуется только на `127.0.0.1`, БД и кеш не имеют публичных портов. Перед установкой запрашиваются домен, reverse proxy и способ получения сертификата. Для автоматического HTTPS также нужна почта ACME. Caddy обслуживает домен на 80/443; A/AAAA должны указывать на сервер, оба порта должны быть доступны. При `--proxy existing` HTTPS настраивается вашим reverse proxy. После запуска создайте администратора в панели.
 
 Caddy работает в Docker, поэтому `systemctl status nginx` на новой установке панели возвращает «Unit could not be found». Проверяйте `sudo remnacust status --component panel` и `sudo remnacust logs --component panel`: там видны приложение и Caddy. При миграции установщик сохраняет прежний Caddy или Nginx, его образ, конфигурацию, сертификаты и порты; новый прокси не устанавливается.
 
@@ -68,9 +69,67 @@ sudo bash installer.sh install-node --port 2222 \
 
 `--panel-ip` добавляет правила доступа к API только в уже активный UFW. Установщик не включает и не сбрасывает firewall. Если UFW не активен, ограничьте порт API адресом панели в firewall провайдера. Укажите этот же порт при добавлении ноды в панели. Xray начнёт обслуживать пользователей после назначения профиля.
 
+### Сертификат и почта
+
+При новой установке с HTTPS доступны четыре варианта:
+
+| Вариант | Что потребуется | Продление |
+| --- | --- | --- |
+| Автоматический Caddy для панели / HTTP-01 для ноды | Домен и email ACME; доступный TCP 80 | Caddy автоматически; для ноды — отдельный systemd timer |
+| Cloudflare DNS | Email ACME и API token с правом DNS Edit нужной зоны | Certbot и отдельный systemd timer |
+| Gcore DNS | Email ACME и API token с правом изменения DNS нужной зоны | Certbot и отдельный systemd timer |
+| Готовый сертификат | Пути к fullchain.pem и privkey.pem | Продлевается прежним способом; затем команда renew-panel-certificate / renew-node-certificate |
+
+Email и токен DNS — разные данные. В меню токен вводится скрыто; в автоматизации используйте `--dns-credentials` с INI-файлом и правами `600`. Установщик сохраняет копию в закрытом каталоге `/opt/remnacust/acme/PROJECT`, чтобы продление не зависело от временного файла. GitHub-токен для скачивания не нужен.
+
+```bash
+# Автоматический HTTPS панели
+sudo bash installer.sh install-panel --domain panel.example.com --email admin@example.com --yes
+
+# Сертификат через Cloudflare DNS
+sudo bash installer.sh install-panel --domain panel.example.com \
+  --tls-method cloudflare --email admin@example.com --dns-credentials /root/cloudflare.ini
+
+# Уже есть подходящий сертификат
+sudo bash installer.sh install-panel --domain panel.example.com --tls-method existing \
+  --cert-file /etc/letsencrypt/live/panel.example.com/fullchain.pem \
+  --key-file /etc/letsencrypt/live/panel.example.com/privkey.pem
+
+# Панель за своим действующим reverse proxy
+sudo bash installer.sh install-panel --domain panel.example.com --proxy existing
+```
+
+Содержимое `/root/cloudflare.ini`:
+
+```ini
+dns_cloudflare_api_token = YOUR_TOKEN
+```
+
+Для Gcore используйте `--tls-method gcore` и поле `dns_gcore_apitoken` в INI. `chmod 600 /root/cloudflare.ini` закрывает доступ другим пользователям. DNS-метод не требует HTTP-01 на порту 80, но новый Caddy всё равно занимает 80/443 для панели. Wildcard-сертификат можно подключить как готовый файл, если он покрывает указанный домен; hostname панели и ноды должен быть конкретным.
+
+Готовая пара проверяется до создания установки: домен, срок действия с запасом минимум сутки, формат PEM и соответствие приватного ключа. RSA и ECDSA поддерживаются. Сертификат копируется в `certs` с правами `600`; после обновления исходных файлов выполните `sudo remnacust renew-panel-certificate` или `sudo remnacust renew-node-certificate`. Для доверия клиентов сертификат должен быть выдан доверенным центром и содержать полную цепочку.
+
+Caddy сам получает и продлевает автоматический сертификат. Для HTTP/DNS Certbot находится в отдельной Python venv с закреплёнными версиями; системный Python не изменяется, пакеты берутся готовыми wheel. У каждой установки собственные ACME-файлы и таймер `remnacust-acme-PROJECT.timer`. Deploy-hook копирует только её сертификат: на панели вызывает Caddy reload, на ноде перезапускает Nginx и Xray. Таймеры, SSH и firewall посторонних приложений не перенастраиваются.
+
+При `--proxy existing` установщик не управляет сертификатом. При upgrade/migrate мастер TLS не запускается: Nginx/Caddy, сертификаты, почта ACME, сети и порты сохраняются. Параметры создания нового TLS с этими командами отклоняются до изменений.
+
+### Если предыдущая установка осталась на сервере
+
+Работающие и остановленные контейнеры учитываются до запроса версии, подтверждения и домена. Если записи установщика нет, но проект Compose остался, повторный `install-panel` завершается с указанием существующего проекта/каталога. Не удаляйте каталог и тома ради повторной установки: это не обновление.
+
+```bash
+sudo bash installer.sh upgrade-panel --directory /opt/remnacust/panel
+# Если панель установлена в другом месте, укажите её реальный каталог или контейнер:
+sudo bash installer.sh upgrade-panel --container YOUR_PANEL_CONTAINER
+# Для существующего Remnawave:
+sudo bash installer.sh migrate-remnawave-panel --directory /opt/remnawave
+```
+
+Если осталась только БД/инфраструктура без контейнера панели, сначала восстановите приложение через его исходный Compose. Если компонент удалялся через меню с сохранением данных, используйте `sudo remnacust start --component panel`. При недоступном Docker daemon установщик просит восстановить доступ к Docker и не считает сервер пустым. Проверка повторяется после получения блокировки, чтобы параллельный запуск не создал вторую установку.
+
 ### TLS и XHTTP
 
-`--node-domain` запрашивает сертификат Certbot через HTTP-01: DNS должен быть настроен, порт 80 — свободен. Сертификаты хранятся в `certs`, общий каталог сокетов — в `run`. Nginx принимает TLS с PROXY protocol на `/var/lib/remnacust/run/nginx.sock`; путь `/xhttppath/` направлен на `/var/lib/remnacust/run/xhttp.sock`. После продления сертификата deploy-hook копирует его и перезапускает Nginx и ноду.
+`--node-domain` включает настройку TLS и Nginx. В интерактивном режиме установщик сам предлагает её; без TLS достаточно SECRET_KEY и API-порта. Способы получения сертификата одинаковы с панелью, кроме автоматического Caddy: на ноде вместо него используется Certbot HTTP-01. DNS должен быть настроен, а для HTTP-01 порт 80 должен быть свободен и доступен извне. Сертификаты хранятся в `certs`, общий каталог сокетов — в `run`. Nginx принимает TLS с PROXY protocol на `/var/lib/remnacust/run/nginx.sock`; путь `/xhttppath/` направлен на `/var/lib/remnacust/run/xhttp.sock`. После продления сертификата deploy-hook копирует его и перезапускает Nginx и ноду.
 
 Настройте в профиле Xray Unix inbound XHTTP: `listen` = `/var/lib/remnacust/run/xhttp.sock,0666`, `path` = `/xhttppath/`. Суффикс `0666` нужен для доступа worker Nginx к сокету. Для fallback на Nginx задайте `dest` = `/var/lib/remnacust/run/nginx.sock` и `xver: 1`. Сертификат и ключ доступны в `/var/lib/remnacust/tls/fullchain.pem` и `/var/lib/remnacust/tls/privkey.pem`. Публичный listener 443 принадлежит Xray. Профили панели автоматически не переписываются. Для REALITY без собственного TLS-сайта `--node-domain` не нужен.
 
@@ -125,10 +184,14 @@ sudo bash installer.sh migrate-marzban-panel \
 bash -n installer/installer.sh
 bash installer/tests/bootstrap.sh
 bash installer/tests/service-state.sh
+bash installer/tests/preflight.sh
+bash installer/tests/certificate-workflow.sh
+PYTHONDONTWRITEBYTECODE=1 python3 installer/tests/test_tls.py
 PYTHONDONTWRITEBYTECODE=1 python3 installer/tests/test_installer.py
 bash installer/tests/proxy-config.sh
 # На выделенном Docker-стенде; создаёт и удаляет только собственный проект:
 PYTHONDONTWRITEBYTECODE=1 bash installer/tests/panel-fresh.sh "$PWD" YOUR_PANEL_IMAGE
+PYTHONDONTWRITEBYTECODE=1 bash installer/tests/panel-tls-integration.sh /path/to/Remnacust-panel
 PYTHONDONTWRITEBYTECODE=1 bash installer/tests/node-integration.sh "$PWD" YOUR_NODE_IMAGE
 PYTHONDONTWRITEBYTECODE=1 bash installer/tests/integration.sh "$PWD" YOUR_PANEL_IMAGE
 ```

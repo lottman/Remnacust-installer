@@ -14,3 +14,16 @@ jobs:
       - run: bash tests/database-repair.test.sh
       - run: python3 tests/package-release.test.py
       - run: python3 tests/images.test.py
+  proxy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - id: sources
+        run: python3 -c "import json; print('panel='+json.load(open('component-sources.json'))['panel']['commit'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: lottman/Remnacust-panel
+          ref: ${{ steps.sources.outputs.panel }}
+          path: component-panel
+      - run: bash installer/tests/proxy-config.sh
+      - run: bash installer/tests/panel-tls-integration.sh "$PWD/component-panel"

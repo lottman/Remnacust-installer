@@ -6,7 +6,7 @@ REPO=${REMNACUST_REPOSITORY:-lottman/Remnacust-installer}
 ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
-PORT='' PROXY=caddy YES=false WORK='' SOURCE='' HELPER='' LOG=''
+PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
@@ -25,7 +25,7 @@ usage() {
     cat <<'HELP'
 Remnacust · installer.sh
   sudo bash installer.sh
-  sudo bash installer.sh COMMAND [--version latest|1.1.5] [--yes]
+  sudo bash installer.sh COMMAND [--version latest|1.1.7] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
@@ -43,6 +43,7 @@ Remnacust · installer.sh
   backup-panel              Копия БД и конфигурации панели
   restore-panel             Восстановление выбранной копии панели
   renew-node-certificate    Копирование обновлённого TLS и перезапуск ноды
+  renew-panel-certificate   Копирование обновлённого TLS и reload Caddy
   --help, -h                Эта справка
 
   --component panel|node    Компонент для команд обслуживания
@@ -54,7 +55,11 @@ Remnacust · installer.sh
   --port PORT               Порт панели на loopback / API ноды
   --proxy caddy|existing    Новый Caddy (по умолчанию) / собственный proxy
   --node-domain DOMAIN      TLS и Nginx для XHTTP/self-steal на новой ноде
-  --email EMAIL             Email ACME для сертификата ноды
+  --email EMAIL             Email для регистрации ACME (панель и нода)
+  --tls-method METHOD       auto (Caddy), http (нода), cloudflare, gcore, existing
+  --cert-file PATH          Готовый fullchain.pem для --tls-method existing
+  --key-file PATH           Его приватный ключ privkey.pem
+  --dns-credentials PATH    Закрытый INI-файл выбранного DNS-провайдера
   --panel-ip IP[/CIDR]      IP панели; ограничение API новой ноды через UFW
   --backup PATH             Каталог копии для restore-panel
   --yes                     Пропустить подтверждение выбранного действия
@@ -87,14 +92,14 @@ show_menu() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate)
+            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--port|--proxy|--node-domain|--email|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
-                    --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2;;
-                    --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;;
+                    --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2; PROXY_SET=true;;
+                    --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;;
                     --source-url) MARZBAN_URL=$2;; --destination-url) DESTINATION_URL=$2;; --internal-squad) INTERNAL_SQUAD=$2;; --quota-mode) QUOTA_MODE=$2;;
                 esac; shift ;;
             --yes) YES=true;; --dry-run) DRY_RUN=true;; --preserve-subhash) PRESERVE_SUBHASH=true;;
@@ -106,6 +111,8 @@ parse_args() {
     [[ -z $VERSION ]] || valid_version "$VERSION" || die 'Версия: latest или SemVer'
     [[ -z $COMPONENT || $COMPONENT == panel || $COMPONENT == node ]] || die 'Компонент: panel или node'
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
+    [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
+    [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
     if [[ $ACTION != migrate-marzban-panel ]] && { $DRY_RUN || $PRESERVE_SUBHASH || [[ -n $MARZBAN_URL$DESTINATION_URL$INTERNAL_SQUAD ]]; }; then die 'Параметры Marzban предназначены только для migrate-marzban-panel'; fi
 }
@@ -120,14 +127,42 @@ try:
     print(state['directory'])
 except (OSError,ValueError,KeyError,TypeError): raise SystemExit(1)
 PY
-        ) || return 1
+        ) || directory="$ROOT/$component"
     fi
     [[ -z $DIRECTORY || $COMPONENT != "$component" ]] || directory=$DIRECTORY
-    [[ -d $directory && ! -L $directory && ! -f $directory/.remnacust-uninstalled ]] || return 1
-    for file in compose.json compose.yml compose.yaml docker-compose.yml docker-compose.yaml Dockerfile; do
-        [[ ! -f $directory/$file || -L $directory/$file ]] || return 0
-    done
-    return 1
+    component_retained "$component" && return 1
+    [[ ! -f $directory/.remnacust-uninstalled ]] || return 1
+    if [[ -d $directory && ! -L $directory ]]; then
+        for file in compose.json compose.yml compose.yaml docker-compose.yml docker-compose.yaml Dockerfile; do
+            [[ ! -f $directory/$file || -L $directory/$file ]] || return 0
+        done
+    fi
+    [[ -n $(component_containers "$component") ]]
+}
+component_containers() {
+    # Also find installations made before the registry existed, including stopped containers.
+    command -v docker >/dev/null || return 0
+    local component=$1 main=remnawave project="${PROJECT:-remnacust-$1}" rows id name image
+    [[ $component != node ]] || main=remnanode
+    rows=$(docker ps --all --filter "label=com.docker.compose.service=$main" --format '{{.ID}}|{{.Label "com.docker.compose.project"}}|{{.Image}}' 2>/dev/null) || return 0
+    while IFS='|' read -r id name image; do
+        [[ -n $id ]] || continue
+        if [[ $name == "$project" || $image == *remnacust-"$component"* ]]; then printf '%s\n' "$id"; fi
+    done <<< "$rows"
+}
+assert_fresh_target() {
+    local directory="${DIRECTORY:-$ROOT/$COMPONENT}" project="${PROJECT:-remnacust-$COMPONENT}" existing
+    component_retained "$COMPONENT" && die "$COMPONENT удалён с сохранением данных. Выполните remnacust start --component $COMPONENT, чтобы восстановить установку."
+    component_installed "$COMPONENT" && die "$COMPONENT уже установлен (в том числе остановленные контейнеры). Используйте upgrade-$COMPONENT; для старой установки укажите --directory или --container."
+    [[ ! -e $ROOT/registry/$COMPONENT.json ]] || die 'Найдена запись установки, но её файлы недоступны. Проверьте каталог; новая установка поверх неё не выполняется.'
+    [[ $directory == /* && $directory != / && ! -L $directory ]] || die 'Укажите безопасный абсолютный каталог'
+    if [[ -d $directory && -n $(find "$directory" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+        die "Каталог $directory не пуст. Используйте upgrade/migrate или другой --directory."
+    fi
+    if command -v docker >/dev/null; then
+        existing=$(docker ps --all --filter "label=com.docker.compose.project=$project" --format '{{.Names}} · {{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null) || die 'Не удалось проверить контейнеры: Docker daemon недоступен. Запустите Docker и повторите проверку.'
+        [[ -z $existing ]] || die "Проект $project уже существует: $existing. Восстановите его через существующий Compose; для перехода используйте upgrade/migrate с --directory."
+    fi
 }
 component_retained() {
     [[ -f $ROOT/registry/$1.json && ! -L $ROOT/registry/$1.json ]] || return 1
@@ -211,9 +246,9 @@ prepare_host() {
     codename=$(supported_ubuntu_codename) || return $?
     [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Для установки нужен root на Linux'
     case "$(uname -m)" in x86_64|aarch64) ;; *) die 'Нужна архитектура amd64 или arm64';; esac
-    if ! command -v python3 >/dev/null || ! command -v curl >/dev/null || ! command -v flock >/dev/null || ! command -v tar >/dev/null; then
+    if ! command -v python3 >/dev/null || ! command -v curl >/dev/null || ! command -v flock >/dev/null || ! command -v tar >/dev/null || ! command -v openssl >/dev/null; then
         step 'Подготовка системных пакетов' apt-get update
-        step 'Python, curl, util-linux' apt-get install -y ca-certificates curl python3 util-linux tar
+        step 'Python, curl, util-linux, OpenSSL' apt-get install -y ca-certificates curl python3 util-linux tar openssl
     fi
     if ! command -v docker >/dev/null; then
         step 'Индекс пакетов' apt-get update
@@ -329,7 +364,7 @@ find_existing() {
 import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
- for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices']:
+ for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls']:
   if key in old:new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
@@ -416,6 +451,9 @@ install_cli() {
     install -m 0644 "$SOURCE/installer/runtime.py" /usr/local/lib/remnacust-installer/runtime.py
     install -m 0644 "$SOURCE/installer/database.cjs" /usr/local/lib/remnacust-installer/database.cjs
     install -m 0644 "$SOURCE/installer/marzban.py" /usr/local/lib/remnacust-installer/marzban.py
+    local tls_source="${HELPER%/*}/tls.py"
+    [[ -f $tls_source ]] || tls_source="$(dirname "${BASH_SOURCE[0]}")/tls.py"
+    [[ ! -f $tls_source ]] || install -m 0644 "$tls_source" /usr/local/lib/remnacust-installer/tls.py
     ln -sfn /usr/local/bin/remnacust /usr/local/bin/remnacust-installer
     ln -sfn /usr/local/bin/remnacust /usr/local/bin/remnacust-setup
 }
@@ -442,13 +480,13 @@ main() {
         [[ -n $VERSION ]] || VERSION=latest
         TAG=$(resolve_release); fetch_source; info "Выпуск $TAG: SHA-256, пути архива и версии проверены"; return 0
     fi
-    case "$ACTION" in *panel) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
+    case "$ACTION" in *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
     case "$ACTION" in
         upgrade-*|uninstall-*)
             if ! component_installed "$COMPONENT" && [[ -z $CONTAINER ]]; then
                 die "$COMPONENT не установлен. Сначала install-$COMPONENT; для существующего Remnawave используйте migrate-remnawave-$COMPONENT с --directory или --container."
             fi;;
-        install-*) if component_installed "$COMPONENT"; then die "$COMPONENT уже установлен. Используйте upgrade-$COMPONENT или uninstall-$COMPONENT."; fi;;
+        install-*) assert_fresh_target;;
     esac
     [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Нужен root на Linux'
     mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
@@ -679,14 +717,18 @@ fresh_files() {
     local -a validation=(--domain "$DOMAIN" --node-domain "$NODE_DOMAIN" --port "$PORT" --project "$PROJECT")
     [[ -z $PANEL_IP ]] || validation+=(--key "$PANEL_IP")
     helper validate "${validation[@]}"
-    [[ -z $(docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT") ]] || die 'Проект Compose уже существует; используйте upgrade или migrate'
+    local project_containers
+    project_containers=$(docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT") || die 'Не удалось повторно проверить проект Compose: Docker недоступен'
+    [[ -z $project_containers ]] || die 'Проект Compose уже существует; используйте upgrade или migrate'
     port_free "$PORT"
     if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
     if [[ $COMPONENT == node ]]; then step 'Проверка ключа ноды' validate_node_key; fi
     mkdir -p "$DEPLOY"; chmod 700 "$DEPLOY"
     if [[ $COMPONENT == panel ]]; then
         helper panel-env --source "$SOURCE/panel/backend/.env.sample" --target "$DEPLOY/.env" --domain "$DOMAIN" --port "$PORT"
-        printf '%s {\n    reverse_proxy remnawave:3000\n}\n' "$DOMAIN" > "$DEPLOY/Caddyfile"
+        if [[ ${TLS_METHOD:-auto} == auto ]]; then
+            { [[ -z $EMAIL ]] || printf '{\n    email %s\n}\n\n' "$EMAIL"; printf '%s {\n    reverse_proxy remnawave:3000\n}\n' "$DOMAIN"; } > "$DEPLOY/Caddyfile"
+        else tls_helper caddy --domain "$DOMAIN" --email "$EMAIL" --method "$TLS_METHOD" --directory "$DEPLOY"; fi
     else
         helper node-env --target "$DEPLOY/.env" --port "$PORT"
         mkdir -p "$DEPLOY/run" "$DEPLOY/logs"
@@ -694,26 +736,137 @@ fresh_files() {
     STATE="$WORK/state.json"
     helper fresh --component "$COMPONENT" --directory "$DEPLOY" --project "$PROJECT" --image "$IMAGE" --domain "$DOMAIN" \
         --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" --target "$DEPLOY/compose.json" --state "$STATE"
+    if [[ $COMPONENT == panel && $PROXY == caddy && ${TLS_METHOD:-auto} != auto ]]; then
+        python3 - "$DEPLOY/compose.json" "$DEPLOY" <<'PY'
+import json,sys
+p=sys.argv[1];s=json.load(open(p));s['services']['caddy']['volumes'].append(sys.argv[2]+'/certs:/var/lib/remnacust/tls:ro')
+json.dump(s,open(p,'w'),indent=2)
+PY
+    fi
     load_state; START_APPS=("${APPS[@]}" "${EXTRAS[@]}")
 }
-node_tls() {
-    [[ -n $NODE_DOMAIN ]] || return 0
-    [[ -n $EMAIL ]] || EMAIL=$(ask 'Email для сертификата ACME')
-    [[ $EMAIL =~ ^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die 'Некорректный email'
-    port_free 80
-    if ! command -v certbot >/dev/null; then step 'Индекс Certbot' apt-get update; step 'Certbot' apt-get install -y certbot; fi
-    step 'TLS-сертификат ноды (HTTP-01)' certbot certonly --standalone --non-interactive --agree-tos --email "$EMAIL" --domain "$NODE_DOMAIN"
-    mkdir -p "$DEPLOY/certs" "$DEPLOY/www"
-    chmod 0755 "$DEPLOY/run" "$DEPLOY/www"
-    install -m 0600 "/etc/letsencrypt/live/$NODE_DOMAIN/fullchain.pem" "$DEPLOY/certs/fullchain.pem"
-    install -m 0600 "/etc/letsencrypt/live/$NODE_DOMAIN/privkey.pem" "$DEPLOY/certs/privkey.pem"
-    helper node-proxy --directory "$DEPLOY" --domain "$NODE_DOMAIN"
-    step 'Проверка Nginx' compose run --rm --no-deps --entrypoint nginx node-nginx -t
-    install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
-    local hook="/etc/letsencrypt/renewal-hooks/deploy/remnacust-$PROJECT"
-    printf '#!/usr/bin/env bash\nset -eu\nexport REMNACUST_ROOT=%q\nexec /usr/local/bin/remnacust renew-node-certificate --yes\n' "$ROOT" > "$hook"
-    chmod 0755 "$hook"
-    systemctl enable --now certbot.timer
+tls_helper() {
+    local script="${HELPER%/*}/tls.py"
+    # A current standalone entry can still install an older component release.
+    [[ -f $script ]] || script="$(dirname "${BASH_SOURCE[0]}")/tls.py"
+    [[ -f $script ]] || script=/usr/local/lib/remnacust-installer/tls.py
+    [[ -f $script ]] || die 'В выбранном выпуске нет настройки TLS. Используйте latest.'
+    python3 "$script" "$@"
+}
+certificate_wizard() {
+    local choice domain suggested
+    if [[ $COMPONENT == panel ]]; then
+        [[ -n $DOMAIN ]] || DOMAIN=$(ask 'Домен панели')
+        if [[ -t 0 ]] && ! $PROXY_SET; then
+            printf '\n  HTTPS панели\n  1  Caddy в Docker (новая установка)\n  2  Свой существующий Nginx/Caddy\n'
+            choice=$(ask 'Reverse proxy' 1)
+            case "$choice" in 1) PROXY=caddy;;2) PROXY=existing;;*) die 'Выберите 1 или 2';;esac
+        fi
+        if [[ $PROXY == existing ]]; then
+            [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]] || die 'При --proxy existing сертификат настраивается в вашем proxy; параметры TLS здесь не нужны'
+            info 'Ваш proxy и сертификаты сохраняются. Backend будет доступен на 127.0.0.1.'
+            return 0
+        fi
+        domain=$DOMAIN; suggested=auto
+    else
+        if [[ -t 0 && -z $NODE_DOMAIN ]]; then
+            choice=$(ask 'Настроить TLS/XHTTP на ноде? yes/no' no)
+            case "$choice" in yes) NODE_DOMAIN=$(ask 'Домен ноды');;no) ;;*) die 'Введите yes или no';;esac
+        fi
+        if [[ -z $NODE_DOMAIN ]]; then
+            [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]] || die 'Для TLS ноды укажите --node-domain'
+            return 0
+        fi
+        domain=$NODE_DOMAIN; suggested=http
+    fi
+    if [[ -z $TLS_METHOD ]]; then
+        if [[ -t 0 ]]; then
+            printf '\n  Сертификат для %s\n  1  Автоматически · %s\n  2  Cloudflare DNS · API token\n  3  Gcore DNS · API token\n  4  Уже есть сертификат и приватный ключ\n' "$domain" "$suggested"
+            case "$(ask 'Способ получения сертификата' 1)" in
+                1) TLS_METHOD=$suggested;;2) TLS_METHOD=cloudflare;;3) TLS_METHOD=gcore;;4) TLS_METHOD=existing;;*) die 'Выберите 1–4';;
+            esac
+        else TLS_METHOD=$suggested; fi
+    fi
+    [[ $COMPONENT != node || $TLS_METHOD != auto ]] || die 'auto используется только Caddy панели; для ноды выберите http, DNS или existing'
+    if [[ $COMPONENT == panel && $TLS_METHOD == http ]]; then TLS_METHOD=auto; fi
+    if [[ $TLS_METHOD == existing ]]; then
+        [[ -n $CERT_FILE ]] || CERT_FILE=$(ask 'Путь к fullchain.pem' "/etc/letsencrypt/live/$domain/fullchain.pem")
+        [[ -n $KEY_FILE ]] || KEY_FILE=$(ask 'Путь к privkey.pem' "/etc/letsencrypt/live/$domain/privkey.pem")
+        [[ -z $EMAIL$DNS_CREDENTIALS ]] || die 'Для готового сертификата email и DNS credentials не нужны'
+    else
+        [[ -z $CERT_FILE$KEY_FILE ]] || die 'Пути к сертификату доступны при --tls-method existing'
+        [[ -n $EMAIL ]] || EMAIL=$(ask "Email для Let's Encrypt")
+        [[ $EMAIL =~ ^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die 'Некорректный email'
+        if [[ $TLS_METHOD == cloudflare || $TLS_METHOD == gcore ]]; then
+            if [[ -z $DNS_CREDENTIALS ]]; then
+                [[ -t 0 ]] || die 'Укажите --dns-credentials (INI, права 600)'
+                local secret
+                read -r -s -p "API token $TLS_METHOD (ввод скрыт): " secret; printf '\n'
+                [[ $secret =~ ^[A-Za-z0-9_.=-]+$ ]] || die 'Некорректный формат API token'
+                DNS_CREDENTIALS="$WORK/dns.ini"
+                if [[ $TLS_METHOD == cloudflare ]]; then printf 'dns_cloudflare_api_token = %s\n' "$secret" > "$DNS_CREDENTIALS"
+                else printf 'dns_gcore_apitoken = %s\n' "$secret" > "$DNS_CREDENTIALS"; fi
+                unset secret
+            fi
+        else
+            [[ -z $DNS_CREDENTIALS ]] || die 'DNS credentials нужны только для Cloudflare/Gcore'
+            info "A/AAAA $domain должны указывать на сервер; для HTTP-01 нужен доступ к TCP 80."
+        fi
+    fi
+}
+certificate_preflight() {
+    local domain=${NODE_DOMAIN:-$DOMAIN}
+    [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
+    [[ -n $TLS_METHOD ]] || return 0
+    if [[ $TLS_METHOD == existing ]]; then
+        tls_helper validate --domain "$domain" --certificate "$CERT_FILE" --key "$KEY_FILE"
+    elif [[ $TLS_METHOD == cloudflare || $TLS_METHOD == gcore ]]; then
+        tls_helper credentials --method "$TLS_METHOD" --source "$DNS_CREDENTIALS" --target "$WORK/dns-validated.ini"
+    elif [[ $TLS_METHOD == http ]]; then port_free 80; fi
+}
+obtain_certificate() {
+    local domain=${NODE_DOMAIN:-$DOMAIN} lineage
+    [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
+    [[ -n $TLS_METHOD && $TLS_METHOD != auto && $TLS_METHOD != existing ]] || return 0
+        ACME_ROOT="$ROOT/acme/${PROJECT:-remnacust-$COMPONENT}"
+        install -d -m 0700 "$ACME_ROOT"
+        CERTBOT="$ROOT/tools/certbot/bin/certbot"
+        if [[ ! -x $CERTBOT ]] || ! "$CERTBOT" plugins --authenticators --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs" 2>/dev/null | grep -q dns-gcore; then
+            step 'Пакеты для ACME' apt-get update
+            step 'Python venv и OpenSSL' apt-get install -y python3-venv openssl
+            [[ -x $ROOT/tools/certbot/bin/python ]] || step 'Среда Certbot' python3 -m venv "$ROOT/tools/certbot"
+            step 'Certbot и DNS-плагины' "$ROOT/tools/certbot/bin/pip" install --disable-pip-version-check --only-binary=:all: certbot==5.8.0 certbot-dns-cloudflare==5.8.0 certbot-dns-gcore==0.1.8
+        fi
+        local -a auth=(--standalone)
+        if [[ $TLS_METHOD == cloudflare || $TLS_METHOD == gcore ]]; then
+            tls_helper credentials --method "$TLS_METHOD" --source "$DNS_CREDENTIALS" --target "$ACME_ROOT/dns.ini"
+            auth=(--authenticator "dns-$TLS_METHOD" "--dns-$TLS_METHOD-credentials" "$ACME_ROOT/dns.ini" "--dns-$TLS_METHOD-propagation-seconds" 90)
+        else port_free 80; fi
+        step 'Сертификат Let’s Encrypt' "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" --domain "$domain" "${auth[@]}"
+        lineage="$ACME_ROOT/config/live/$domain"
+        CERT_FILE="$lineage/fullchain.pem"; KEY_FILE="$lineage/privkey.pem"
+}
+configure_certificate() {
+    local domain=${NODE_DOMAIN:-$DOMAIN} hook service renew_cli
+    [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
+    [[ -n $TLS_METHOD && $TLS_METHOD != auto ]] || return 0
+    tls_helper copy --domain "$domain" --certificate "$CERT_FILE" --key "$KEY_FILE" --directory "$DEPLOY"
+    tls_helper record --state "$STATE" --method "$TLS_METHOD" --certificate "$CERT_FILE" --key "$KEY_FILE"
+    helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
+    if [[ $COMPONENT == node ]]; then
+        helper node-proxy --directory "$DEPLOY" --domain "$domain"
+        step 'Проверка Nginx' compose run --rm --no-deps --entrypoint nginx node-nginx -t
+    else step 'Проверка Caddy' compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; fi
+    if [[ $TLS_METHOD != existing ]]; then
+        hook="$ACME_ROOT/deploy-hook.sh"; renew_cli="$ACME_ROOT/renew.sh"
+        printf '#!/usr/bin/env bash\nset -eu\nexport REMNACUST_ROOT=%q\nexec /usr/local/bin/remnacust renew-%s-certificate --yes\n' "$ROOT" "$COMPONENT" > "$hook"
+        printf '#!/usr/bin/env bash\nset -eu\nexec %q renew --quiet --config-dir %q --work-dir %q --logs-dir %q --deploy-hook %q\n' "$CERTBOT" "$ACME_ROOT/config" "$ACME_ROOT/work" "$ACME_ROOT/logs" "$hook" > "$renew_cli"
+        chmod 0700 "$hook" "$renew_cli"
+        service="remnacust-acme-$PROJECT"
+        tls_helper timer --service "$service" --script "$renew_cli"
+        systemctl daemon-reload
+        systemctl enable --now "$service.timer"
+    else info "Готовый сертификат подключён. После продления выполните remnacust renew-$COMPONENT-certificate."; fi
 }
 node_acl() {
     [[ -n $PANEL_IP ]] || { info "Ограничьте TCP $PORT адресом панели в firewall провайдера"; return; }
@@ -730,21 +883,35 @@ deploy() {
     choose_version
     confirm "Выполнить $ACTION ($VERSION)"
     prepare_host; lock_operation
+    if [[ $ACTION == install-* ]]; then assert_fresh_target; certificate_wizard; fi
     trap recover ERR
     release_source
+    if [[ $ACTION == install-* ]]; then
+        if [[ $COMPONENT == panel ]]; then PORT=${PORT:-3000}; else PORT=${PORT:-2222}; fi
+        helper validate --domain "$DOMAIN" --node-domain "$NODE_DOMAIN" --port "$PORT" --project "${PROJECT:-remnacust-$COMPONENT}"
+        port_free "$PORT"
+        if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
+        certificate_preflight
+    fi
     step "Готовый Docker-образ $COMPONENT" prepare_image
     if [[ $ACTION == install-* ]]; then
+        obtain_certificate
         fresh_files
         helper record --state "$STATE" --version "${COMPONENT_VERSION:-${TAG#v}}" --image "$IMAGE" --running "${START_APPS[@]}"
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
         # Keep recovery commands available if first boot or certificate issuance fails.
         install_cli
-        if [[ $COMPONENT == node ]]; then node_tls; node_acl; fi
+        configure_certificate
+        if [[ $COMPONENT == node ]]; then node_acl; fi
         step 'Запуск установки' compose up -d --no-build
     else
         if [[ $ACTION == upgrade-* && -z $DIRECTORY$CONTAINER$COMPOSE_FILE && -f $ROOT/registry/$COMPONENT.json ]]; then
             STATE="$ROOT/registry/$COMPONENT.json"; load_state
             CONTAINER=$(compose ps --all --quiet "$(get mainService)")
+        fi
+        if [[ -z $CONTAINER$DIRECTORY$COMPOSE_FILE ]]; then
+            local -a detected=(); mapfile -t detected < <(component_containers "$COMPONENT")
+            ((${#detected[@]} != 1)) || CONTAINER=${detected[0]}
         fi
         find_existing
         if [[ $COMPONENT == panel ]]; then
@@ -834,7 +1001,7 @@ PY
             docker inspect "$(compose ps --all --quiet "$(get mainService)")" > "$WORK/container.before.json"
             IMAGE=$(get image); database_environment; backup_current;;
         restore-panel) restore_panel;;
-        renew-node-certificate) renew_certificate;;
+        renew-node-certificate|renew-panel-certificate) renew_certificate;;
         uninstall-panel|uninstall-node) uninstall_component;;
         *) die 'Неизвестное действие обслуживания';;
     esac
@@ -920,13 +1087,30 @@ JS
 }
 
 renew_certificate() {
-    local domain; domain=$(get nodeDomain)
+    local domain certificate key
+    local -a tls_paths=()
+    domain=$(get nodeDomain); [[ $COMPONENT != panel ]] || domain=$(get panelDomain)
     [[ -n $domain ]] || die 'У этой установки нет управляемого сертификата'
-    if [[ -n ${RENEWED_LINEAGE:-} && ${RENEWED_LINEAGE##*/} != "$domain" ]]; then return 0; fi
-    install -m 0600 "/etc/letsencrypt/live/$domain/fullchain.pem" "$DEPLOY/certs/fullchain.pem"
-    install -m 0600 "/etc/letsencrypt/live/$domain/privkey.pem" "$DEPLOY/certs/privkey.pem"
-    compose restart "${EXTRAS[@]}" "${APPS[@]}"
-    info 'Сертификат скопирован; Nginx и нода перезапущены'
+    if [[ -n ${RENEWED_LINEAGE:-} ]]; then
+        [[ $(python3 - "$STATE" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1])).get('uninstalled',False))
+PY
+        ) != True ]] || return 0
+    fi
+    if ! tls_helper paths --state "$STATE" > "$WORK/tls-paths"; then
+        # Compatibility with node certificates installed before TLS metadata was introduced.
+        [[ $COMPONENT == node ]] || die 'Caddy панели сам продлевает автоматический сертификат'
+        certificate="/etc/letsencrypt/live/$domain/fullchain.pem"; key="/etc/letsencrypt/live/$domain/privkey.pem"
+    else
+        mapfile -t tls_paths < "$WORK/tls-paths"; certificate=${tls_paths[0]}; key=${tls_paths[1]}
+    fi
+    if [[ -n ${RENEWED_LINEAGE:-} && $(realpath -m "$RENEWED_LINEAGE") != $(realpath -m "$(dirname "$certificate")") ]]; then return 0; fi
+    tls_helper copy --domain "$domain" --certificate "$certificate" --key "$key" --directory "$DEPLOY"
+    if [[ $COMPONENT == panel ]]; then
+        compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile --adapter caddyfile
+        info 'Сертификат обновлён; Caddy перечитал конфигурацию'
+    else compose restart "${EXTRAS[@]}" "${APPS[@]}"; info 'Сертификат обновлён; Nginx и нода перезапущены'; fi
 }
 migrate_marzban() {
     prepare_host; lock_operation; release_source

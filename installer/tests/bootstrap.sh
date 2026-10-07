@@ -141,6 +141,7 @@ set +e
     ROOT="$fixture/new-root"; WORK="$fixture/new-work"; LOG="$fixture/new-install.log"
     mkdir -p "$WORK" "$ROOT/registry"
     prepare_host() { :; }; lock_operation() { :; }; prepare_image() { :; }
+    assert_fresh_target() { :; }; certificate_wizard() { :; }; certificate_preflight() { :; }; obtain_certificate() { :; }; configure_certificate() { :; }; port_free() { :; }
     release_source() { TAG=v1.1.1; }
     docker() { printf /tmp; }
     df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\ntest 16000000 1 15999999 1%% /tmp\n'; }
