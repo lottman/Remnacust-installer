@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing installer tag (for example v1.1.1)
+        description: Existing installer tag (for example v1.1.2)
         required: true
 permissions:
   contents: write
