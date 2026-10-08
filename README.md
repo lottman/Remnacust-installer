@@ -40,7 +40,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 | `renew-node-certificate` | Проверка и копирование обновлённого сертификата; перезапуск ноды/Nginx |
 | `renew-panel-certificate` | Проверка и копирование готового сертификата; reload Caddy без перезапуска панели |
 
-При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.2.19` закрепляет выпуск. Установщик 1.2.19 содержит панель версии 1.1.7.1, ноду 1.1.3 и ядро 1.1.2: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
+При установке, обновлении и миграции запрашивается версия выпуска установщика. Enter выбирает `latest`; `--version 1.2.20` закрепляет выпуск. Установщик 1.2.20 содержит панель версии 1.1.7.2, ноду 1.1.3 и ядро 1.1.2: версии компонентов закреплены в `component-sources.json` и проверяются отдельно. `--yes` пропускает подтверждение, но обязательные параметры и ключи всё равно нужны.
 
 Вопросы подтверждения и настройки TLS/XHTTP ноды показывают только `y/n`: в цветном терминале `y` выделяется зелёным жирным, `n` — красным жирным. `y` подтверждает, `n` и Enter отменяют действие; в вопросе TLS Enter оставляет TLS выключенным. Регистр и пробелы по краям не важны. Незнакомый ответ повторяет вопрос на месте. При `NO_COLOR`, `TERM=dumb` или выводе в файл управляющие коды цвета не печатаются.
 
@@ -52,7 +52,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Re
 
 ```bash
 sudo bash installer.sh install-panel --domain panel.example.com --email admin@example.com --version latest
-sudo remnacust upgrade-panel --version 1.2.19
+sudo remnacust upgrade-panel --version 1.2.20
 sudo remnacust status --component node
 sudo remnacust backup-panel
 sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
