@@ -6,12 +6,12 @@
   },
   "node": {
     "repository": "lottman/Remnacust-node",
-    "commit": "f5a822e3cccb3d6c522cc8141daa566abfa28fc6",
-    "version": "1.1.3"
+    "commit": "76ed26f546bd3ee54a0e0be207f85371e5ea3c2f",
+    "version": "1.1.4"
   },
   "core": {
     "repository": "lottman/Remnacust-core",
-    "commit": "c56188135b5f994b9f8969471671f89ee9196c5e",
-    "version": "1.1.2"
+    "commit": "1f93079df764eb43101bb20e2569dd4ab1af9be1",
+    "version": "1.1.3"
   }
 }
