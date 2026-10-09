@@ -3,6 +3,8 @@
 set -Eeuo pipefail
 image=${1:?Pass panel image}
 version=${2:?Pass expected version}
+postgres_image=${REMNACUST_TEST_POSTGRES_IMAGE:-postgres:17-alpine}
+valkey_image=${REMNACUST_TEST_VALKEY_IMAGE:-valkey/valkey:9-alpine}
 fixture=$(mktemp -d /tmp/remnacust-panel-runtime.XXXXXXXX)
 name="remnacust-panel-runtime-${GITHUB_RUN_ID:-local}-$$"
 network="$name-net"
@@ -17,8 +19,8 @@ cleanup() {
 trap cleanup EXIT
 docker image inspect "$image" >/dev/null
 docker network create "$network" >/dev/null
-containers+=("$(docker run -d --name "$name-db" --network "$network" --network-alias audit-db -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine)")
-containers+=("$(docker run -d --name "$name-redis" --network "$network" --network-alias audit-redis valkey/valkey:9-alpine)")
+containers+=("$(docker run -d --name "$name-db" --network "$network" --network-alias audit-db -e POSTGRES_HOST_AUTH_METHOD=trust "$postgres_image")")
+containers+=("$(docker run -d --name "$name-redis" --network "$network" --network-alias audit-redis "$valkey_image")")
 for attempt in $(seq 1 30);do docker exec "$name-db" pg_isready -U postgres >/dev/null 2>&1 && break;sleep 1;done
 secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 containers+=("$(docker run -d --name "$name" --network "$network" \
