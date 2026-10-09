@@ -79,12 +79,18 @@ source "$1"
 prepare_host() { :; }
 release_source() {
     SOURCE="$REINSTALL_FIXTURE/source"; HELPER="$REINSTALL_RUNTIME"; TAG=v1.2.3
-    COMPONENT_VERSION=1.1.2; IMAGE=app-fixture
+    COMPONENT_VERSION=1.1.2; IMAGE=node:24.21-trixie-slim
 }
-prepare_image() { :; }
+prepare_image() { docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE" >/dev/null; }
 port_free() { :; }
 install_cli() { :; }
-compose() { docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" up -d remnawave-db; }
+compose() {
+    if [[ ${1:-} == up ]]; then
+        docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" up -d remnawave-db
+    else
+        docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" "$@"
+    fi
+}
 wait_ready() {
     local db count
     db=$(docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" ps --quiet remnawave-db)
