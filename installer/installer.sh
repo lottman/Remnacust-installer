@@ -7,6 +7,7 @@ ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
+SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
@@ -98,6 +99,7 @@ Remnacust · installer.sh
   --container NAME          Контейнер приложения при миграции
   --project-name NAME       Имя новой установки Compose
   --domain DOMAIN           Домен новой панели
+  --subscription-urls URLS  Один или два адреса сайта подписки через запятую; первый — основной
   --server-ip IP[,IP]        Публичные IP сервера для проверки A/AAAA (NAT)
   --port PORT               Порт панели на loopback / API ноды
   --proxy caddy|existing    Новый Caddy (по умолчанию) / собственный proxy
@@ -144,11 +146,12 @@ parse_args() {
         case "$1" in
             install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
                     --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2; PROXY_SET=true;;
+                    --subscription-urls) SUBSCRIPTION_URLS=$2; SUBSCRIPTION_SET=true;;
                     --server-ip) SERVER_IPS=$2;;
                     --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;;
                     --source-url) MARZBAN_URL=$2;; --destination-url) DESTINATION_URL=$2;; --internal-squad) INTERNAL_SQUAD=$2;; --quota-mode) QUOTA_MODE=$2;;
@@ -162,6 +165,7 @@ parse_args() {
     [[ -z $VERSION ]] || valid_version "$VERSION" || die 'Версия: latest или SemVer'
     [[ -z $COMPONENT || $COMPONENT == panel || $COMPONENT == node ]] || die 'Компонент: panel или node'
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
+    [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
     [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
@@ -477,7 +481,7 @@ find_existing() {
 import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
- for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls']:
+ for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls']:
   if key in old and (key != 'apiPort' or key not in new):new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
@@ -938,7 +942,29 @@ JS
     printf '\nXERA_BACKUP_PASSWORD_ENC=%s\n' "$encrypted" >> "$DEPLOY/.env"
 }
 
+subscription_wizard() {
+    local normalized preset=false
+    [[ -z $SUBSCRIPTION_URLS && $SUBSCRIPTION_SET == false ]] || preset=true
+    if ! python3 "$HELPER" --help | grep -q -- '--subscription-urls'; then
+        $preset && die 'Этот выпуск не поддерживает адреса сайта подписки. Выберите latest.'
+        return 0
+    fi
+    while true; do
+        if [[ -t 0 ]] && ! $preset; then
+            info 'Сайт подписки: один адрес или два через запятую; первый используется в ссылках пользователей.'
+            info 'Укажите адрес уже работающего сайта. Enter — подписка через домен панели.'
+            SUBSCRIPTION_URLS=$(ask 'Адрес сайта подписки' "https://$DOMAIN/api/sub") || return $?
+        fi
+        if normalized=$(helper subscription-urls --domain "$DOMAIN" --subscription-urls "$SUBSCRIPTION_URLS"); then
+            SUBSCRIPTION_URLS=${normalized//$'\n'/,}
+            return 0
+        fi
+        [[ -t 0 ]] && ! $preset || die 'Исправьте --subscription-urls: один или два адреса сайта подписки'
+    done
+}
 fresh_files() {
+    local -a subscription_options=()
+    [[ $COMPONENT != panel || -z $SUBSCRIPTION_URLS ]] || subscription_options=(--subscription-urls "$SUBSCRIPTION_URLS")
     DEPLOY=${DIRECTORY:-$ROOT/$COMPONENT}; PROJECT=${PROJECT:-remnacust-$COMPONENT}
     [[ $DEPLOY == /* && $DEPLOY != / && ! -L $DEPLOY ]] || die 'Укажите безопасный абсолютный каталог'
     if [[ -d $DEPLOY ]] && [[ -n $(find "$DEPLOY" -mindepth 1 -maxdepth 1 -print -quit) ]]; then die 'Каталог не пуст: выберите upgrade или migrate'; fi
@@ -971,7 +997,7 @@ fresh_files() {
     if [[ $COMPONENT == panel ]]; then
         [[ -f $WORK/backup-password.txt && ! -L $WORK/backup-password.txt ]] || backup_password_wizard
         cp -- "$WORK/backup-password.txt" "$DEPLOY/backup-password.txt"; chmod 600 "$DEPLOY/backup-password.txt"
-        helper panel-env --source "$SOURCE/panel/backend/.env.sample" --target "$DEPLOY/.env" --domain "$DOMAIN" --port "$PORT"
+        helper panel-env --source "$SOURCE/panel/backend/.env.sample" --target "$DEPLOY/.env" --domain "$DOMAIN" --port "$PORT" "${subscription_options[@]}"
         if [[ ${TLS_METHOD:-auto} == auto ]]; then
             { [[ -z $EMAIL ]] || printf '{\n    email %s\n}\n\n' "$EMAIL"; printf '%s {\n    reverse_proxy remnawave:3000\n}\n' "$DOMAIN"; } > "$DEPLOY/Caddyfile"
         else tls_helper caddy --domain "$DOMAIN" --email "$EMAIL" --method "$TLS_METHOD" --directory "$DEPLOY"; fi
@@ -981,7 +1007,7 @@ fresh_files() {
     fi
     STATE="$WORK/state.json"
     helper fresh --component "$COMPONENT" --directory "$DEPLOY" --project "$PROJECT" --image "$IMAGE" --domain "$DOMAIN" \
-        --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" --target "$DEPLOY/compose.json" --state "$STATE"
+        --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" "${subscription_options[@]}" --target "$DEPLOY/compose.json" --state "$STATE"
     if [[ $COMPONENT == panel && $PROXY == caddy && ${TLS_METHOD:-auto} != auto ]]; then
         python3 - "$DEPLOY/compose.json" "$DEPLOY" <<'PY'
 import json,sys
@@ -1259,6 +1285,7 @@ deploy() {
     trap recover ERR
     release_source
     if [[ $ACTION == install-* ]]; then
+        if [[ $COMPONENT == panel ]]; then subscription_wizard; fi
         if [[ $COMPONENT == panel ]]; then PORT=${PORT:-3000}; else PORT=${PORT:-2222}; fi
         local -a installation_validation=(--domain "$DOMAIN" --node-domain "$NODE_DOMAIN" --port "$PORT" --project "${PROJECT:-remnacust-$COMPONENT}")
         [[ -z $PANEL_IP ]] || installation_validation+=(--key "$PANEL_IP")
@@ -1344,11 +1371,16 @@ p=Path(directory)/'.env'
 if p.is_file():
  for line in p.read_text().splitlines():
   key,sep,value=line.partition('=')
-  if sep and key in {'FRONT_END_DOMAIN','PANEL_DOMAIN','NODE_PORT'}:env[key]=value.strip().strip('"\'')
+  if sep and key in {'FRONT_END_DOMAIN','PANEL_DOMAIN','NODE_PORT','SUB_PUBLIC_DOMAIN'}:env[key]=value.strip().strip('"\'')
 panel=sys.argv[2] or s.get('panelDomain') or env.get('FRONT_END_DOMAIN') or env.get('PANEL_DOMAIN','')
 if panel and not panel.startswith(('http://','https://')):panel='https://'+panel
 tls=s.get('tls',{})
-for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),s.get('apiPort') or s.get('nodePort') or s.get('port') or sys.argv[4] or env.get('NODE_PORT',''),s.get('proxy',sys.argv[5]),tls.get('method',sys.argv[6]),tls.get('certificate',sys.argv[7]),tls.get('key',sys.argv[8]),', '.join(s.get('composeFiles',[]))]:
+subscriptions=s.get('subscriptionUrls',[])
+primary=env.get('SUB_PUBLIC_DOMAIN','')
+if primary:
+ primary=primary if primary.startswith(('http://','https://')) else 'https://'+primary
+ subscriptions=[primary]+[url for url in subscriptions[1:] if url!=primary]
+for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),s.get('apiPort') or s.get('nodePort') or s.get('port') or sys.argv[4] or env.get('NODE_PORT',''),s.get('proxy',sys.argv[5]),tls.get('method',sys.argv[6]),tls.get('certificate',sys.argv[7]),tls.get('key',sys.argv[8]),', '.join(s.get('composeFiles',[])),', '.join(subscriptions)]:
  print(str(value).replace('\n',' ').replace('\r',' '))
 PY
     mapfile -t details < "$WORK/completion-details"
@@ -1358,6 +1390,12 @@ PY
     if [[ $COMPONENT == panel ]]; then
         if [[ -n $url ]]; then completion_row 'Адрес входа:' "$url"
         else completion_row 'Адрес входа:' 'Ваш прежний домен панели'; fi
+        if [[ -n ${details[9]} ]]; then
+            local -a subscriptions=()
+            IFS=',' read -r -a subscriptions <<< "${details[9]}"
+            completion_row 'Сайт подписки:' "${subscriptions[0]}"
+            if ((${#subscriptions[@]} > 1)); then completion_row 'Дополнительный адрес:' "${subscriptions[1]# }"; fi
+        fi
         if [[ $ACTION == install-panel ]]; then
             completion_row 'Администратор:' 'Создайте аккаунт при первом входе'
             completion_row 'Пароль:' 'От 24 символов: A–Z, a–z и цифры; генератор в форме — 32 символа'

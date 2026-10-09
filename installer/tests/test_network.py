@@ -133,6 +133,7 @@ select_fresh_target() { :; }
 prepare_host() { :; }
 lock_operation() { :; }
 certificate_wizard() { DOMAIN=panel.example.com; COMPONENT=panel; PROXY=caddy; TLS_METHOD=auto; PORT=3000; }
+subscription_wizard() { :; }
 release_source() { HELPER="$TEST_RUNTIME"; TAG=v1.2.4; }
 port_free() { :; }
 certificate_preflight() { :; }

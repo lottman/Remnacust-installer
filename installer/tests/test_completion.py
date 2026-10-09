@@ -8,16 +8,22 @@ import unittest
 INSTALLER = Path(__file__).resolve().parents[1] / 'installer.sh'
 
 class CompletionTests(unittest.TestCase):
-    def summary(self, component='panel', proxy='caddy', tls=None, action='install-panel', api_port=None):
+    def summary(self, component='panel', proxy='caddy', tls=None, action='install-panel', api_port=None,
+                subscriptions=None, primary=None):
         with tempfile.TemporaryDirectory(prefix='remnacust-completion-') as directory:
             root = Path(directory)
             deploy = root / 'deployment'
             deploy.mkdir()
             (deploy / '.env').write_text('APP_SECRET=DO-NOT-PRINT\nPOSTGRES_PASSWORD=DO-NOT-PRINT\n'
                                        'SECRET_KEY=DO-NOT-PRINT\nFRONT_END_DOMAIN=https://panel.example.org\nNODE_PORT=2222\n')
+            if primary:
+                with (deploy / '.env').open('a') as stream:
+                    stream.write('SUB_PUBLIC_DOMAIN=' + primary + '\n')
             state = {'component': component, 'directory': str(deploy), 'project': 'remnacust-' + component,
                      'proxy': proxy, 'nodeDomain': 'edge.example.org' if component == 'node' else ''}
             if tls: state['tls'] = tls
+            if subscriptions is not None:
+                state['subscriptionUrls'] = subscriptions
             if api_port is not None:
                 state.update(apiPort=api_port, composeFiles=[str(deploy/'compose.remnacust.json')])
             (root / 'state.json').write_text(json.dumps(state))
@@ -37,6 +43,20 @@ class CompletionTests(unittest.TestCase):
         for value in ['Адрес входа:', 'https://panel.example.org', 'Создайте аккаунт', '24 символов',
                       'Файл настроек:', '/data', 'автоматически', 'status --component panel']:
             self.assertIn(value, output)
+
+    def test_primary_and_additional_subscription_urls_are_visible(self):
+        for action in ['install-panel', 'upgrade-panel']:
+            output = self.summary(action=action, subscriptions=['https://sub.example.com/sub', 'https://other.example.com/sub'],
+                                  primary='sub.example.com/sub')
+            self.assertIn('Сайт подписки: https://sub.example.com/sub', output)
+            self.assertIn('Дополнительный адрес: https://other.example.com/sub', output)
+
+    def test_summary_uses_current_env_primary_instead_of_old_registry_primary(self):
+        output = self.summary(action='upgrade-panel', primary='new.example.com/sub',
+                              subscriptions=['https://old.example.com/sub', 'https://other.example.com/sub'])
+        self.assertIn('Сайт подписки: https://new.example.com/sub', output)
+        self.assertIn('Дополнительный адрес: https://other.example.com/sub', output)
+        self.assertNotIn('old.example.com', output)
 
     def test_provided_certificate_keeps_both_original_and_installed_paths_visible(self):
         for component, action in [('panel', 'install-panel'), ('node', 'install-node')]:

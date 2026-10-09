@@ -50,6 +50,31 @@ def domain(value):
     return value.lower()
 
 
+def subscription_urls(value, hostname):
+    if not value:
+        return ['https://' + domain(hostname) + '/api/sub']
+    if len(value) > 2050:
+        fail('Адреса сайта подписки слишком длинные')
+    entries = value.split(',')
+    if not 1 <= len(entries) <= 2:
+        fail('Укажите один или два адреса сайта подписки через запятую')
+    result = []
+    for entry in entries:
+        entry = entry.strip()
+        if entry.lower().startswith('https://'):
+            entry = entry[8:]
+        if len(entry) > 1024:
+            fail('Адрес сайта подписки слишком длинный')
+        match = re.fullmatch(r'([^/]+)((?:/[A-Za-z0-9._~-]+)*)/?', entry)
+        if not match or any(segment in {'.', '..'} for segment in match[2].split('/')):
+            fail('Адрес подписки: домен или HTTPS-адрес с путём, без порта, параметров и токена пользователя')
+        url = 'https://' + domain(match[1]) + match[2]
+        if url in result:
+            fail('Адреса сайта подписки должны различаться')
+        result.append(url)
+    return result
+
+
 def port(value):
     if not re.fullmatch(r'[0-9]{1,5}', str(value)) or not 1 <= int(value) <= 65535:
         fail('Порт должен быть от 1 до 65535')
@@ -199,14 +224,14 @@ def transform(config, container, component, image, containers=()):
     return result, applications
 
 
-def panel_env(template, hostname, host_port):
+def panel_env(template, hostname, host_port, subscriptions=''):
     hostname = domain(hostname)
     password = secrets.token_hex(32)
     values = {'APP_SECRET': secrets.token_hex(32), 'POSTGRES_PASSWORD': password,
               'POSTGRES_USER': 'postgres', 'POSTGRES_DB': 'postgres',
               'DATABASE_URL': f'postgresql://postgres:{password}@remnawave-db:5432/postgres',
               'FRONT_END_DOMAIN': 'https://' + hostname, 'PANEL_DOMAIN': hostname,
-              'SUB_PUBLIC_DOMAIN': hostname + '/api/sub', 'HWID_ENABLED_DEFAULT': 'true',
+              'SUB_PUBLIC_DOMAIN': subscription_urls(subscriptions, hostname)[0][8:], 'HWID_ENABLED_DEFAULT': 'true',
               'METRICS_USER': 'admin', 'METRICS_PASS': secrets.token_hex(24),
               'WEBHOOK_SECRET_HEADER': secrets.token_hex(32)}
     text = template
@@ -253,7 +278,7 @@ def nginx_config(hostname):
 '''
 
 
-def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain=''):
+def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions=''):
     directory = Path(directory).resolve()
     project_name(project)
     number = port(number)
@@ -303,6 +328,8 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
              'applications': [main], 'extraServices': extras, 'nodeDomain': node_domain,
              'panelDomain': hostname if component == 'panel' else '', 'proxy': proxy,
              'apiPort': number, 'ownedServices': list(services)}
+    if component == 'panel':
+        state['subscriptionUrls'] = subscription_urls(subscriptions, hostname)
     return result, state
 
 
@@ -326,12 +353,13 @@ def compare_environment(before, after):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup'])
+    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
     parser.add_argument('--roles'); parser.add_argument('--running', nargs='*')
     parser.add_argument('--domain', default=''); parser.add_argument('--port', default='3000')
+    parser.add_argument('--subscription-urls', default='')
     parser.add_argument('--proxy', choices=['caddy', 'existing'], default='caddy')
     parser.add_argument('--node-domain', default=''); parser.add_argument('--key'); parser.add_argument('--version')
     args = parser.parse_args()
@@ -347,7 +375,9 @@ def main():
         state = load(args.state); state['applications'] = apps; state['composeFiles'] = [str(Path(args.target).resolve())]
         write(args.state, state)
     elif args.operation == 'panel-env':
-        write(args.target, panel_env(Path(args.source).read_text(), args.domain, args.port))
+        write(args.target, panel_env(Path(args.source).read_text(), args.domain, args.port, args.subscription_urls))
+    elif args.operation == 'subscription-urls':
+        print('\n'.join(subscription_urls(args.subscription_urls, args.domain)))
     elif args.operation == 'node-env':
         write(args.target, node_env(os.environ.get('REMNACUST_NODE_SECRET', ''), args.port))
     elif args.operation == 'node-proxy':
@@ -357,7 +387,7 @@ def main():
         write(p/'nginx.conf', nginx_config(args.domain))
         write(p/'www/index.html', '<!doctype html><html lang="en"><meta charset="utf-8"><title>Service</title><p>Service is available.</p></html>\n', mode=0o644)
     elif args.operation == 'fresh':
-        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain)
+        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls)
         write(args.target, config); write(args.state, state)
     elif args.operation == 'compare':
         compare_environment(inspect_one(args.source), inspect_one(args.inspect))

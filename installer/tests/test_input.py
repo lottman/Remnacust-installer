@@ -82,6 +82,28 @@ class InputWorkflowTests(unittest.TestCase):
                 self.assertIn('Действие отменено', output)
                 self.assertNotIn('UNEXPECTED-ACTION', output)
 
+    def test_subscription_prompt_normalizes_two_addresses_and_retries_invalid_input(self):
+        prompt = 'Адрес сайта подписки [https://panel.example.com/api/sub]: '
+        command = ('source "$1"; DOMAIN=panel.example.com; HELPER="$(dirname "$1")/runtime.py"; '
+                   'subscription_wizard; printf "RESULT=%s" "$SUBSCRIPTION_URLS"')
+        code, output = self.terminal(command, [(prompt, 'http://sub.example.com\n'),
+                                             (prompt, ' Sub.Example.com/sub/, https://other.example.com/sub \n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('RESULT=https://sub.example.com/sub,https://other.example.com/sub', output)
+        self.assertIn('Адрес подписки:', output)
+        self.assertNotIn('Установка и обслуживание', output)
+
+    def test_subscription_prompt_enter_keeps_panel_endpoint_and_eof_cancels(self):
+        prompt = 'Адрес сайта подписки [https://panel.example.com/api/sub]: '
+        command = ('source "$1"; DOMAIN=panel.example.com; HELPER="$(dirname "$1")/runtime.py"; '
+                   'subscription_wizard; printf "RESULT=%s" "$SUBSCRIPTION_URLS"')
+        code, output = self.terminal(command, [(prompt, '\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('RESULT=https://panel.example.com/api/sub', output)
+        code, output = self.terminal(command, [(prompt, b'\x04')])
+        self.assertNotEqual(code, 0, output)
+        self.assertNotIn('RESULT=', output)
+
     def test_both_prompts_show_only_bold_green_y_and_bold_red_n(self):
         commands = [('source "$1"; confirm "Тест"; printf ACTION-CONFIRMED', 'Продолжить? ', 'ACTION-CONFIRMED'),
                     ('source "$1"; WORK="$2"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; '
