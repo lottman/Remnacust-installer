@@ -36,6 +36,8 @@ def write(path, value, mode=0o600):
         os.fchmod(fd, mode)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(name, target)
     finally:
         if os.path.exists(name):
@@ -311,7 +313,11 @@ def compare_environment(before, after):
             if old[key] != new.get(key):
                 fail('Изменился параметр приложения: ' + key)
     mounts = lambda c: sorted([(m.get('Type'), m.get('Source'), m.get('Destination'), m.get('RW')) for m in c.get('Mounts', [])])
-    if mounts(before) != mounts(after):
+    old_mounts, new_mounts = mounts(before), mounts(after)
+    control = ('bind', str(Path(os.environ.get('REMNACUST_ROOT', '/opt/remnacust')).resolve() / 'control'), '/run/remnacust-control', False)
+    if control not in old_mounts and control in new_mounts:
+        new_mounts.remove(control)
+    if old_mounts != new_mounts:
         fail('Изменились тома приложения')
     for name in ['NetworkMode', 'PortBindings', 'CapAdd', 'CapDrop', 'Privileged']:
         if before.get('HostConfig', {}).get(name) != after.get('HostConfig', {}).get(name):

@@ -8,6 +8,15 @@ import json
 from pathlib import Path
 import tarfile
 
+
+def runtime_files(source):
+    names = ['VERSION', 'component-sources.json', 'images.json', 'LICENSE', 'NOTICE.md',
+             'panel/backend/.env.sample']
+    names += ['installer/' + name for name in
+              ['installer.sh', 'runtime.py', 'database.cjs', 'marzban.py', 'images.py', 'tls.py', 'update-agent.py', 'README.md']]
+    return {name: (source/name).read_bytes() for name in names}
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--source', type=Path, required=True)
 parser.add_argument('--images', type=Path, required=True)
@@ -42,10 +51,7 @@ images.validate(args.source, args.tag, assets)
 for component, entry in manifest['components'].items():
     for arch, data in entry['architectures'].items():
         images.verify_archive(args.output/data['file'], {**data, **{'version': entry['version'], 'commit': entry['commit'], 'architecture': arch}})
-files = {name: (args.source/name).read_bytes() for name in ['VERSION', 'component-sources.json', 'images.json', 'LICENSE', 'NOTICE.md', 'panel/backend/.env.sample']}
-for path in (args.source/'installer').glob('*'):
-    if path.is_file():
-        files['installer/'+path.name] = path.read_bytes()
+files = runtime_files(args.source)
 filename = f'remnacust-runtime-{args.tag}.tar.gz'
 with (args.output/filename).open('wb') as output, gzip.GzipFile(fileobj=output, mode='wb', filename='', mtime=0) as zipped, tarfile.open(fileobj=zipped, mode='w') as archive:
     for name, content in sorted(files.items()):

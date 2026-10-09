@@ -4,6 +4,7 @@ umask 077
 
 REPO=${REMNACUST_REPOSITORY:-lottman/Remnacust-installer}
 ROOT=${REMNACUST_ROOT:-/opt/remnacust}
+export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
@@ -122,6 +123,9 @@ Remnacust · installer.sh
 Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS / 26.04 LTS, amd64 / arm64.
 SECRET_KEY вводится скрыто или через REMNACUST_NODE_SECRET. Секреты не печатаются.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
+Новая панель: REMNACUST_BACKUP_PASSWORD задаёт пароль копий (16–256 ASCII без пробелов).
+Без него установщик спрашивает пароль; Enter или запуск без терминала создаёт его.
+Пароль сохраняется в закрытом backup-password.txt и показывается после установки.
 HELP
 }
 show_menu() {
@@ -560,11 +564,26 @@ install_cli() {
     install -m 0644 "$SOURCE/installer/runtime.py" /usr/local/lib/remnacust-installer/runtime.py
     install -m 0644 "$SOURCE/installer/database.cjs" /usr/local/lib/remnacust-installer/database.cjs
     install -m 0644 "$SOURCE/installer/marzban.py" /usr/local/lib/remnacust-installer/marzban.py
+    [[ ! -f $SOURCE/installer/update-agent.py ]] || install -m 0644 "$SOURCE/installer/update-agent.py" /usr/local/lib/remnacust-installer/update-agent.py
     local tls_source="${HELPER%/*}/tls.py"
     [[ -f $tls_source ]] || tls_source="$(dirname "${BASH_SOURCE[0]}")/tls.py"
     [[ ! -f $tls_source ]] || install -m 0644 "$tls_source" /usr/local/lib/remnacust-installer/tls.py
     ln -sfn /usr/local/bin/remnacust /usr/local/bin/remnacust-installer
     ln -sfn /usr/local/bin/remnacust /usr/local/bin/remnacust-setup
+}
+configure_panel_updates() {
+    [[ $COMPONENT == panel && -f $SOURCE/installer/update-agent.py ]] || return 0
+    if [[ ! -d /run/systemd/system ]]; then
+        info 'Обновление из панели требует systemd; обновление через remnacust доступно'
+        return 0
+    fi
+    install -d -m 0755 /usr/local/lib/remnacust-installer
+    install -m 0644 "$SOURCE/installer/update-agent.py" /usr/local/lib/remnacust-installer/update-agent.py
+    install -m 0644 "$SOURCE/installer/runtime.py" /usr/local/lib/remnacust-installer/runtime.py
+    local target=$1
+    local -a options=()
+    [[ ! -f $WORK/container.before.json ]] || options+=(--inspect "$WORK/container.before.json")
+    python3 "$SOURCE/installer/update-agent.py" --root "$ROOT" setup --state "$STATE" --compose "$target" "${options[@]}" >> "$LOG" 2>&1
 }
 service_menu() {
     COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
@@ -617,7 +636,23 @@ run_action() {
     if [[ $ACTION == --check-release ]]; then
         for result in curl python3 tar; do command -v "$result" >/dev/null || die "Нужен $result"; done
         [[ -n $VERSION ]] || VERSION=latest
-        TAG=$(resolve_release); fetch_source; info "Выпуск $TAG: SHA-256, пути архива и версии проверены"; return 0
+        TAG=$(resolve_release); fetch_source
+        if [[ -n ${REMNACUST_RELEASE_INFO_FILE:-} ]]; then
+            python3 - "$WORK/source" "$TAG" "$REMNACUST_RELEASE_INFO_FILE" <<'PY'
+import json,sys,os,subprocess
+from pathlib import Path
+source=Path(sys.argv[1]);sys.path.insert(0,str(source/'installer'))
+import runtime
+lock=json.loads((source/'component-sources.json').read_text())
+entry=os.environ.get('REMNACUST_RELEASE_ENTRY_FILE')
+if entry:
+    script=(source/'installer/installer.sh').read_text()
+    subprocess.run(['bash','-n'],input=script,text=True,check=True)
+    runtime.write(Path(entry),script)
+runtime.write(Path(sys.argv[3]),{'installerVersion':sys.argv[2].removeprefix('v'),'panelVersion':lock['panel']['version']})
+PY
+        fi
+        info "Выпуск $TAG: SHA-256, пути архива и версии проверены"; return 0
     fi
     case "$ACTION" in *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
     case "$ACTION" in
@@ -838,6 +873,71 @@ try {
 }catch{console.error('Invalid or expired node certificate package');process.exit(1)}
 JS
 }
+backup_password_wizard() {
+    local password=${REMNACUST_BACKUP_PASSWORD:-} repeated
+    while true; do
+        if [[ -z $password && -t 0 ]]; then
+            printf '  Защита резервных копий · 16–256 символов без пробелов. Enter — создать пароль автоматически.\n' >&2
+            IFS= read -r -s -p 'Пароль резервных копий: ' password || return 1
+            printf '\n' >&2
+            if [[ -n $password ]]; then
+                IFS= read -r -s -p 'Повторите пароль: ' repeated || return 1
+                printf '\n' >&2
+                if [[ $password != "$repeated" ]]; then
+                    printf '  Пароли не совпадают.\n' >&2; password=''; continue
+                fi
+            fi
+        fi
+        if [[ -z $password ]]; then password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))'); fi
+        if REMNACUST_BACKUP_PASSWORD="$password" python3 - "$WORK/backup-password.txt" <<'PY'
+import os,re,sys
+password=os.environ['REMNACUST_BACKUP_PASSWORD']
+if not re.fullmatch(r'[\x21-\x7e]{16,256}',password): raise SystemExit(1)
+fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+with os.fdopen(fd,'w') as file: file.write(password)
+PY
+        then break; fi
+        [[ -t 0 && -z ${REMNACUST_BACKUP_PASSWORD:-} ]] || die 'Пароль резервных копий должен содержать 16–256 символов ASCII без пробелов'
+        printf '  Нужно 16–256 символов ASCII без пробелов.\n' >&2; password=''
+    done
+    unset REMNACUST_BACKUP_PASSWORD
+}
+initialize_panel_backups() {
+    local encrypted
+    # Fresh Compose has an image only, so run never builds it; refuse any pull here.
+    compose run --rm --no-deps --pull never -T --entrypoint node \
+        -v "$DEPLOY/backup-password.txt:/run/remnacust-backup-password:ro" "$(get mainService)" - \
+        > "$WORK/backup-envelope" <<'JS'
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const path = require('node:path');
+try {
+    const password = fs.readFileSync('/run/remnacust-backup-password');
+    if (!/^[\x21-\x7e]{16,256}$/.test(password.toString()) || !process.env.APP_SECRET) throw Error();
+    const directory = process.env.XERA_BACKUPS_DIR || '/opt/app/backups';
+    if (!fs.lstatSync(directory).isDirectory()) throw Error();
+    fs.chmodSync(directory, 0o700);
+    const salt = crypto.randomBytes(16);
+    const derived = crypto.scryptSync(password, salt, 32);
+    fs.writeFileSync(path.join(directory, '.backup-key'), Buffer.concat([salt, derived]), {flag: 'wx', mode: 0o600});
+    const key = crypto.createHmac('sha256', process.env.APP_SECRET).update('xera-keyring-v1').digest();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(password), cipher.final()]);
+    process.stdout.write('xera1:' + Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64'));
+    password.fill(0); derived.fill(0); key.fill(0);
+} catch {
+    console.error('Не удалось подготовить защиту резервных копий. Проверьте доступ к тому backups.');
+    process.exitCode = 1;
+}
+JS
+    encrypted=$(cat "$WORK/backup-envelope")
+    [[ $encrypted =~ ^xera1:[A-Za-z0-9+/=]+$ ]] || return 1
+    # Override a sample value without putting the password in arguments or the log.
+    sed -i '/^XERA_BACKUP_PASSWORD_ENC=/d' "$DEPLOY/.env"
+    printf '\nXERA_BACKUP_PASSWORD_ENC=%s\n' "$encrypted" >> "$DEPLOY/.env"
+}
+
 fresh_files() {
     DEPLOY=${DIRECTORY:-$ROOT/$COMPONENT}; PROJECT=${PROJECT:-remnacust-$COMPONENT}
     [[ $DEPLOY == /* && $DEPLOY != / && ! -L $DEPLOY ]] || die 'Укажите безопасный абсолютный каталог'
@@ -869,6 +969,8 @@ fresh_files() {
     if [[ $COMPONENT == node ]]; then step 'Проверка ключа ноды' validate_node_key; fi
     mkdir -p "$DEPLOY"; chmod 700 "$DEPLOY"
     if [[ $COMPONENT == panel ]]; then
+        [[ -f $WORK/backup-password.txt && ! -L $WORK/backup-password.txt ]] || backup_password_wizard
+        cp -- "$WORK/backup-password.txt" "$DEPLOY/backup-password.txt"; chmod 600 "$DEPLOY/backup-password.txt"
         helper panel-env --source "$SOURCE/panel/backend/.env.sample" --target "$DEPLOY/.env" --domain "$DOMAIN" --port "$PORT"
         if [[ ${TLS_METHOD:-auto} == auto ]]; then
             { [[ -z $EMAIL ]] || printf '{\n    email %s\n}\n\n' "$EMAIL"; printf '%s {\n    reverse_proxy remnawave:3000\n}\n' "$DOMAIN"; } > "$DEPLOY/Caddyfile"
@@ -1151,7 +1253,9 @@ deploy() {
     choose_version
     confirm "Выполнить $ACTION ($VERSION)"
     prepare_host; lock_operation
-    if [[ $ACTION == install-* ]]; then assert_fresh_target; select_fresh_target; certificate_wizard; fi
+    if [[ $ACTION == install-* ]]; then
+        assert_fresh_target; select_fresh_target; certificate_wizard
+    fi
     trap recover ERR
     release_source
     if [[ $ACTION == install-* ]]; then
@@ -1163,6 +1267,7 @@ deploy() {
         if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
         certificate_preflight
         dns_preflight
+        if [[ $COMPONENT == panel ]]; then backup_password_wizard; fi
     fi
     step "Готовый Docker-образ $COMPONENT" prepare_image
     if [[ $ACTION == install-* ]]; then
@@ -1173,6 +1278,8 @@ deploy() {
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
         # Keep recovery commands available if first boot or certificate issuance fails.
         install_cli
+        configure_panel_updates "$DEPLOY/compose.json"
+        if [[ $COMPONENT == panel ]]; then step 'Защита резервных копий' initialize_panel_backups; fi
         configure_certificate
         if [[ $COMPONENT == node ]]; then node_acl; fi
         step 'Запуск установки' compose up -d --no-build
@@ -1191,6 +1298,7 @@ deploy() {
             step 'Проверка истории миграций и исходных ключей' database_run preflight
         fi
         backup_current
+        configure_panel_updates "$WORK/compose.after.json"
         # Normalize before writing anything: invalid versions of Compose fail with the original installation running.
         local managed; managed="$DEPLOY/compose.remnacust-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
         cp "$WORK/compose.after.json" "$managed"; chmod 600 "$managed"
@@ -1253,6 +1361,11 @@ PY
         if [[ $ACTION == install-panel ]]; then
             completion_row 'Администратор:' 'Создайте аккаунт при первом входе'
             completion_row 'Пароль:' 'От 24 символов: A–Z, a–z и цифры; генератор в форме — 32 символа'
+            if [[ -f $directory/backup-password.txt && ! -L $directory/backup-password.txt ]]; then
+                completion_row 'Пароль резервных копий:' "$(cat "$directory/backup-password.txt")"
+                completion_row 'Сохранён в файле:' "$directory/backup-password.txt · доступ только root"
+                completion_row 'Резервные копии:' 'Используйте этот пароль для открытия раздела и расшифровки копий; сохраните отдельно от сервера'
+            fi
         else completion_row 'Авторизация:' 'Прежние имя пользователя и пароль'; fi
         if [[ $proxy == caddy ]]; then completion_row 'HTTPS:' 'Caddy в Docker'
         else

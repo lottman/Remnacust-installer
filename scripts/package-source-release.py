@@ -67,6 +67,13 @@ def component_files(kind, commit, local_sources):
 def validate(files, version, versions):
     for name, data in files.items():
         path = PurePosixPath(name)
+        if any(p in {'.private', '.playwright-cli', 'playwright-report', 'test-results', '.superdesign'}
+               or p.startswith('.audit-')
+               or (p.startswith('audit-') and ('.' not in p or p.endswith(('.json', '.log'))))
+               for p in path.parts):
+            raise ValueError('Development artifact in source: ' + name)
+        if path.name in {'.backup-key', 'backup-password.txt'} or path.suffix in {'.log', '.tmp', '.bak', '.pyc', '.orig', '.rej'} or path.name.endswith('~'):
+            raise ValueError('Private or temporary file in source: ' + name)
         if path.name.startswith('.env') and path.name not in {'.env.sample', '.env.example'}:
             raise ValueError('Working environment in source: ' + name)
         if any(p in {'.git', 'node_modules', 'dist', 'coverage', '__pycache__', '.cache'} for p in path.parts):

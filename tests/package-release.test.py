@@ -1,4 +1,5 @@
 """Offline regression checks for the split-repository source release."""
+import ast
 import hashlib
 import importlib.util
 import json
@@ -64,6 +65,25 @@ class ReleaseTests(unittest.TestCase):
         self.write(self.root,{'panel/frontend/vendor/backend-contract/build/backend/commands/backups/create-backup.command.d.ts':'export declare class CreateBackup {}\n'})
         self.retag()
         module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_private_and_development_files_are_rejected(self):
+        files=module.git_files(self.root,'HEAD')
+        versions={kind:'1.1.1' for kind in module.REPOSITORIES}
+        for kind, entry in self.lock.items():
+            for name, data in module.component_files(kind,entry['commit'],self.parent).items():
+                if name.startswith(module.PREFIXES[kind]):files[name]=data
+        for name in ['.private/review.md','.playwright-cli/page.yml','playwright-report/index.html',
+                     'test-results/result.json','panel/frontend/.audit-preview.tsx',
+                     'panel/frontend/.superdesign/resume.json','audit-review/report.md',
+                     'panel/frontend/audit-current.json','installer/debug.log','installer/failed.tmp',
+                     'installer/runtime.pyc','installer/runtime.py.bak','installer/runtime.py.orig',
+                     'installer/runtime.py.rej','installer/runtime.py~',
+                     'installer/backup-password.txt','installer/.backup-key']:
+            with self.subTest(path=name):
+                with self.assertRaisesRegex(ValueError,'artifact|Private or temporary'):
+                    module.validate({**files,name:b'fixture'},'1.1.1',versions)
+        files['panel/backend/src/modules/backups/backup.service.ts']=b'export class Backup {}'
+        files['panel/frontend/i18n-tools/audit-ui-strings.mjs']=b'export {}'
+        module.validate(files,'1.1.1',versions)
     def test_windows_checkout_preferences_do_not_change_release_bytes(self):
         self.write(self.root,{'.gitattributes':'* text=auto\n*.sh text eol=lf\n'})
         self.git(self.root,'config','core.eol','crlf');self.retag()
@@ -91,5 +111,23 @@ class ReleaseTests(unittest.TestCase):
         self.lock['node']['version']='1.1.7.1'
         self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
         with self.assertRaisesRegex(ValueError,'Invalid pinned version: node'):module.package(self.root,'v1.1.1',self.parent)
+
+class RuntimeFilesTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        tree=ast.parse((Path(__file__).resolve().parents[1]/'scripts/package-docker-release.py').read_text(encoding='utf-8'))
+        function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='runtime_files')
+        scope={};exec(compile(ast.Module(body=[function],type_ignores=[]),'runtime_files','exec'),scope)
+        self.read_files=scope['runtime_files']
+        self.names=['VERSION','component-sources.json','images.json','LICENSE','NOTICE.md','panel/backend/.env.sample']
+        self.names+=['installer/'+name for name in ['installer.sh','runtime.py','database.cjs','marzban.py','images.py','tls.py','update-agent.py','README.md']]
+        for name in self.names+['installer/debug.txt','installer/backup-password.txt','installer/.private/review.md']:
+            path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(name.encode())
+    def tearDown(self):self.temp.cleanup()
+    def test_only_runtime_dependencies_are_included(self):
+        self.assertEqual(self.read_files(self.root),{name:name.encode() for name in self.names})
+    def test_missing_runtime_dependency_is_rejected(self):
+        (self.root/'installer/tls.py').unlink()
+        with self.assertRaises(FileNotFoundError):self.read_files(self.root)
 
 if __name__=='__main__':unittest.main()

@@ -214,6 +214,17 @@ pass 'installer patch accepts independently pinned application versions'
 make_patch_release 1.1.1 1.1.7.1
 bash "$project/installer.sh" --check-release --version 1.1.2 > "$fixture/result"
 pass 'downloaded source accepts four-part panel and subscription versions'
+mkdir -p "$fixture/control"
+REMNACUST_RELEASE_INFO_FILE="$fixture/control/release.json" REMNACUST_RELEASE_ENTRY_FILE="$fixture/control/installer.sh" \
+    bash "$project/installer.sh" --check-release --version 1.1.2 > "$fixture/result"
+cmp "$fixture/archive/installer/installer.sh" "$fixture/control/installer.sh"
+python3 - "$fixture/control" <<'PY'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+assert json.loads((root/'release.json').read_text())=={'installerVersion':'1.1.2','panelVersion':'1.1.7.1'}
+assert (root/'installer.sh').stat().st_mode&0o777==0o600
+PY
+pass 'self-update exports the verified installer entry and panel version with private permissions'
 make_patch_release 1.1.1 1.1.7.1.1
 reject 'five-part panel versions remain invalid' bash "$project/installer.sh" --check-release --version 1.1.2
 grep -q 'Неверная версия компонента: panel' "$fixture/result"
