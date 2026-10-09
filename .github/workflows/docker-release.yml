@@ -27,6 +27,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Load Docker test images from public mirror
+        run: |
+          for image in alpine:3.22 postgres:18.4; do
+            docker pull "mirror.gcr.io/library/$image"
+            docker tag "mirror.gcr.io/library/$image" "$image"
+          done
       - name: Test installer and package pinned source
         run: |
           bash -n installer/installer.sh

@@ -10,6 +10,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Load Docker test images from public mirror
+        run: |
+          for image in alpine:3.22 postgres:18.4; do
+            docker pull "mirror.gcr.io/library/$image"
+            docker tag "mirror.gcr.io/library/$image" "$image"
+          done
       - run: bash -n installer/installer.sh && bash tests/installer.test.sh
       - run: bash tests/database-repair.test.sh
       - run: python3 tests/package-release.test.py
@@ -28,5 +34,11 @@ jobs:
           repository: lottman/Remnacust-panel
           ref: ${{ steps.sources.outputs.panel }}
           path: component-panel
+      - name: Load proxy test images from public mirror
+        run: |
+          for image in nginx:1.28-alpine caddy:2-alpine python:3.12-alpine; do
+            docker pull "mirror.gcr.io/library/$image"
+            docker tag "mirror.gcr.io/library/$image" "$image"
+          done
       - run: bash installer/tests/proxy-config.sh
       - run: bash installer/tests/panel-tls-integration.sh "$PWD/component-panel"
