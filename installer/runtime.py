@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import tempfile
+import uuid
 
 
 class ConfigurationError(ValueError):
@@ -73,6 +74,24 @@ def subscription_urls(value, hostname):
             fail('Адреса сайта подписки должны различаться')
         result.append(url)
     return result
+
+
+def subscription_domains(value, hostname):
+    if not value:
+        fail('Укажите один или два домена сайта подписки')
+    urls = subscription_urls(value, hostname)
+    hosts = [url[8:] for url in urls]
+    if any('/' in host or host == domain(hostname) for host in hosts):
+        fail('Сайту подписки нужен отдельный домен без пути; домен панели использовать нельзя')
+    return hosts
+
+
+def subscription_env(token):
+    if not re.fullmatch(r'[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', token):
+        fail('Не получен API-токен сайта подписки')
+    return ('APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://remnawave:3000\n'
+            'REMNAWAVE_API_TOKEN=' + token + '\nINTERNAL_JWT_SECRET=' + secrets.token_hex(32) +
+            '\nTRUST_PROXY=1\nMARZBAN_LEGACY_LINK_ENABLED=false\n')
 
 
 def port(value):
@@ -187,7 +206,7 @@ def discover(container, component, directory=None, compose_file=None):
     return state
 
 
-def transform(config, container, component, image, containers=()):
+def transform(config, container, component, image, containers=(), subscription_image=''):
     result = copy.deepcopy(config)
     labels = container.get('Config', {}).get('Labels') or {}
     main = labels.get('com.docker.compose.service')
@@ -198,6 +217,12 @@ def transform(config, container, component, image, containers=()):
     applications = []
     roles = {(c.get('Config', {}).get('Labels') or {}).get('com.docker.compose.service'): environment(c).get('INSTANCE_TYPE') for c in containers}
     for name, service in services.items():
+        if (component == 'panel' and subscription_image and
+                (service.get('labels') or {}).get('io.remnacust.service-role') == 'subscription-page'):
+            service['image'] = subscription_image
+            service.pop('build', None)
+            applications.append(name)
+            continue
         repository = (service.get('image') or '').split('@', 1)[0].rsplit('/', 1)[-1].split(':', 1)[0]
         if repository in {'caddy', 'nginx', 'nginx-proxy', 'nginx-proxy-manager', 'traefik', 'postgres', 'postgresql', 'valkey', 'redis'}:
             if name == main:
@@ -278,7 +303,7 @@ def nginx_config(hostname):
 '''
 
 
-def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions=''):
+def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010'):
     directory = Path(directory).resolve()
     project_name(project)
     number = port(number)
@@ -299,6 +324,19 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
                      command=['valkey-server', '--save', '', '--appendonly', 'no', '--maxmemory-policy', 'noeviction', '--unixsocket', '/var/run/valkey/valkey.sock', '--unixsocketperm', '777', '--port', '0'],
                      healthcheck={'test': ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping'], 'interval': '3s', 'timeout': '5s', 'retries': 20})
         services = {'remnawave': app, 'remnawave-db': database, 'remnawave-redis': redis}
+        if subscription_image:
+            subscription_domains(subscriptions, hostname)
+            subscription_port = port(subscription_port)
+            if subscription_port == number or subscription_port in {80, 443}:
+                fail('Порт сайта подписки должен отличаться от портов панели и HTTPS')
+            services['remnawave-subscription-page'] = dict(common, image=subscription_image,
+                labels={**common['labels'], 'io.remnacust.service-role': 'subscription-page'},
+                env_file=[str(directory / 'subscription.env')], profiles=['subscription'],
+                ports=[f'127.0.0.1:{subscription_port}:3010'],
+                depends_on={'remnawave': {'condition': 'service_healthy'}},
+                healthcheck={'test': ['CMD', 'node', '-e',
+                    'fetch("http://127.0.0.1:3010/internal/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'],
+                    'interval': '5s', 'timeout': '5s', 'retries': 12, 'start_period': '20s'})
         volumes = {name: {} for name in ['database', 'valkey-socket', 'backups']}
         if proxy == 'caddy':
             services['caddy'] = dict(common, image='caddy:2-alpine', ports=['80:80', '443:443', '443:443/udp'],
@@ -330,6 +368,10 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
              'apiPort': number, 'ownedServices': list(services)}
     if component == 'panel':
         state['subscriptionUrls'] = subscription_urls(subscriptions, hostname)
+        if subscription_image:
+            state.update({'subscriptionPage': True, 'subscriptionPort': subscription_port,
+                          'subscriptionTokenUuid': str(uuid.uuid4())})
+            state['applications'].append('remnawave-subscription-page')
     return result, state
 
 
@@ -353,13 +395,14 @@ def compare_environment(before, after):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls'])
+    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
     parser.add_argument('--roles'); parser.add_argument('--running', nargs='*')
     parser.add_argument('--domain', default=''); parser.add_argument('--port', default='3000')
     parser.add_argument('--subscription-urls', default='')
+    parser.add_argument('--subscription-image', default=''); parser.add_argument('--subscription-port', default='3010')
     parser.add_argument('--proxy', choices=['caddy', 'existing'], default='caddy')
     parser.add_argument('--node-domain', default=''); parser.add_argument('--key'); parser.add_argument('--version')
     args = parser.parse_args()
@@ -370,7 +413,7 @@ def main():
     elif args.operation == 'discover':
         write(args.target, discover(inspect_one(args.inspect), args.component, args.directory, args.compose_file))
     elif args.operation == 'transform':
-        config, apps = transform(load(args.source), inspect_one(args.inspect), args.component, args.image, load(args.roles) if args.roles else ())
+        config, apps = transform(load(args.source), inspect_one(args.inspect), args.component, args.image, load(args.roles) if args.roles else (), args.subscription_image)
         write(args.target, config)
         state = load(args.state); state['applications'] = apps; state['composeFiles'] = [str(Path(args.target).resolve())]
         write(args.state, state)
@@ -378,6 +421,10 @@ def main():
         write(args.target, panel_env(Path(args.source).read_text(), args.domain, args.port, args.subscription_urls))
     elif args.operation == 'subscription-urls':
         print('\n'.join(subscription_urls(args.subscription_urls, args.domain)))
+    elif args.operation == 'subscription-domains':
+        print('\n'.join(subscription_domains(args.subscription_urls, args.domain)))
+    elif args.operation == 'subscription-env':
+        write(args.target, subscription_env(Path(args.source).read_text().strip()))
     elif args.operation == 'node-env':
         write(args.target, node_env(os.environ.get('REMNACUST_NODE_SECRET', ''), args.port))
     elif args.operation == 'node-proxy':
@@ -387,7 +434,7 @@ def main():
         write(p/'nginx.conf', nginx_config(args.domain))
         write(p/'www/index.html', '<!doctype html><html lang="en"><meta charset="utf-8"><title>Service</title><p>Service is available.</p></html>\n', mode=0o644)
     elif args.operation == 'fresh':
-        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls)
+        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port)
         write(args.target, config); write(args.state, state)
     elif args.operation == 'compare':
         compare_environment(inspect_one(args.source), inspect_one(args.inspect))

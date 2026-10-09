@@ -8,6 +8,7 @@ export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
+SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE=''
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
@@ -100,6 +101,9 @@ Remnacust · installer.sh
   --project-name NAME       Имя новой установки Compose
   --domain DOMAIN           Домен новой панели
   --subscription-urls URLS  Один или два адреса сайта подписки через запятую; первый — основной
+  --subscription-page       Установить сайт подписки вместе с новой панелью
+  --no-subscription-page    Оставить подписки через панель / указанный внешний сайт
+  --subscription-port PORT Порт сайта на loopback для вашего reverse proxy (3010)
   --server-ip IP[,IP]        Публичные IP сервера для проверки A/AAAA (NAT)
   --port PORT               Порт панели на loopback / API ноды
   --proxy caddy|existing    Новый Caddy (по умолчанию) / собственный proxy
@@ -146,16 +150,20 @@ parse_args() {
         case "$1" in
             install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
                     --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2; PROXY_SET=true;;
                     --subscription-urls) SUBSCRIPTION_URLS=$2; SUBSCRIPTION_SET=true;;
+                    --subscription-port) SUBSCRIPTION_PORT=$2; SUBSCRIPTION_SET=true;;
                     --server-ip) SERVER_IPS=$2;;
                     --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;;
                     --source-url) MARZBAN_URL=$2;; --destination-url) DESTINATION_URL=$2;; --internal-squad) INTERNAL_SQUAD=$2;; --quota-mode) QUOTA_MODE=$2;;
                 esac; shift ;;
+            --subscription-page|--no-subscription-page)
+                $SUBSCRIPTION_PAGE_SET && die 'Выберите один вариант установки сайта подписки'
+                SUBSCRIPTION_PAGE_SET=true; [[ $1 != --subscription-page ]] || SUBSCRIPTION_PAGE=true;;
             --yes) YES=true;; --dry-run) DRY_RUN=true;; --preserve-subhash) PRESERVE_SUBHASH=true;;
             --help|-h) usage; return 10;; *) die "Неизвестная команда или параметр: $1";;
         esac; shift
@@ -166,6 +174,7 @@ parse_args() {
     [[ -z $COMPONENT || $COMPONENT == panel || $COMPONENT == node ]] || die 'Компонент: panel или node'
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
     [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
+    [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна только для новой панели'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
     [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
@@ -399,6 +408,7 @@ PY
 panel_processes_ready() {
     local id=$1 service=$2
     [[ $COMPONENT == panel && " ${APPS[*]} " == *" $service "* ]] || return 0
+    [[ $service != remnawave-subscription-page ]] || return 0
     docker exec "$id" node -e 'const fs=require("node:fs");if(!fs.existsSync("/opt/pm2/package.json"))process.exit(0);try{const {execFileSync}=require("node:child_process");const rows=JSON.parse(execFileSync("pm2",["jlist"],{timeout:5000,maxBuffer:16*1024*1024,encoding:"utf8"}));const names=new Set(["remnawave-api","remnawave-jobs","remnawave-scheduler"]);const apps=rows.filter(x=>names.has(x.name));process.exit(apps.length&&apps.every(x=>x.pm2_env.status==="online"&&x.pm2_env.restart_time===0)?0:1);}catch{process.exit(1)}' >/dev/null 2>&1
 }
 wait_ready() {
@@ -443,18 +453,28 @@ prepare_image() {
     fi
     info 'GHCR недоступен; скачиваем тот же проверенный образ из GitHub Release'
     download "$(image_field url)" "$WORK/image.tar.gz"
-    python3 "$SOURCE/installer/images.py" archive --image "$WORK/image.json" --file "$WORK/image.tar.gz"
+    python3 "$SOURCE/installer/images.py" archive --image "${IMAGE_METADATA:-$WORK/image.json}" --file "$WORK/image.tar.gz"
     docker load --input "$WORK/image.tar.gz"
     docker image inspect "$IMAGE" > "$WORK/image.inspect.json"
     verify_loaded_image
 }
 verify_loaded_image() {
-    if python3 "$SOURCE/installer/images.py" inspect --image "$WORK/image.json" --file "$WORK/image.inspect.json" --quiet; then return; fi
+    if python3 "$SOURCE/installer/images.py" inspect --image "${IMAGE_METADATA:-$WORK/image.json}" --file "$WORK/image.inspect.json" --quiet; then return; fi
     # Import into containerd may regenerate the manifest. Verify its exact config,
     # including layer digests, without writing another image copy to the server.
-    docker save "$IMAGE" | python3 "$SOURCE/installer/images.py" saved --image "$WORK/image.json"
+    docker save "$IMAGE" | python3 "$SOURCE/installer/images.py" saved --image "${IMAGE_METADATA:-$WORK/image.json}"
 }
-image_field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$WORK/image.json" "$1"; }
+image_field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${IMAGE_METADATA:-$WORK/image.json}" "$1"; }
+select_subscription_image() {
+    python3 "$SOURCE/installer/images.py" select --root "$SOURCE" --tag "$TAG" --assets "$WORK/release.json" \
+        --repository "$REPO" --component subscription-page --architecture "$(dpkg --print-architecture)" > "$WORK/subscription-image.json"
+    local IMAGE_METADATA="$WORK/subscription-image.json"
+    SUBSCRIPTION_IMAGE=$(image_field image)
+}
+prepare_subscription_image() {
+    local IMAGE=$SUBSCRIPTION_IMAGE IMAGE_METADATA="$WORK/subscription-image.json"
+    prepare_image
+}
 find_existing() {
     local main id
     main=remnawave; [[ $COMPONENT != node ]] || main=remnanode
@@ -481,7 +501,7 @@ find_existing() {
 import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
- for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls']:
+ for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls','subscriptionPage','subscriptionPort','subscriptionTokenUuid']:
   if key in old and (key != 'apiPort' or key not in new):new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
@@ -491,7 +511,13 @@ PY
     compose --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.before.json"
     local -a project_ids=(); mapfile -t project_ids < <(docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT")
     docker inspect "${project_ids[@]}" > "$WORK/project-containers.json"
-    helper transform --source "$WORK/compose.before.json" --inspect "$WORK/container.before.json" --roles "$WORK/project-containers.json" --component "$COMPONENT" --image "$IMAGE" --target "$WORK/compose.after.json" --state "$STATE"
+    local -a subscription_options=()
+    if [[ $COMPONENT == panel && $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("subscriptionPage",False))' "$STATE") == True && $IMAGE != discovery-only ]]; then
+        select_subscription_image
+        step 'Готовый образ сайта подписки' prepare_subscription_image
+        subscription_options=(--subscription-image "$SUBSCRIPTION_IMAGE")
+    fi
+    helper transform --source "$WORK/compose.before.json" --inspect "$WORK/container.before.json" --roles "$WORK/project-containers.json" --component "$COMPONENT" --image "$IMAGE" "${subscription_options[@]}" --target "$WORK/compose.after.json" --state "$STATE"
     mapfile -t APPS < <(get applications)
     capture_running_apps
     START_APPS=("${RUNNING_APPS[@]}")
@@ -567,6 +593,7 @@ install_cli() {
     install -m 0755 "$WORK/installer-entry.sh" /usr/local/bin/remnacust
     install -m 0644 "$SOURCE/installer/runtime.py" /usr/local/lib/remnacust-installer/runtime.py
     install -m 0644 "$SOURCE/installer/database.cjs" /usr/local/lib/remnacust-installer/database.cjs
+    [[ ! -f $SOURCE/installer/subscription.cjs ]] || install -m 0644 "$SOURCE/installer/subscription.cjs" /usr/local/lib/remnacust-installer/subscription.cjs
     install -m 0644 "$SOURCE/installer/marzban.py" /usr/local/lib/remnacust-installer/marzban.py
     [[ ! -f $SOURCE/installer/update-agent.py ]] || install -m 0644 "$SOURCE/installer/update-agent.py" /usr/local/lib/remnacust-installer/update-agent.py
     local tls_source="${HELPER%/*}/tls.py"
@@ -943,20 +970,32 @@ JS
 }
 
 subscription_wizard() {
-    local normalized preset=false
+    local normalized preset=false choice operation=subscription-urls
     [[ -z $SUBSCRIPTION_URLS && $SUBSCRIPTION_SET == false ]] || preset=true
     if ! python3 "$HELPER" --help | grep -q -- '--subscription-urls'; then
         $preset && die 'Этот выпуск не поддерживает адреса сайта подписки. Выберите latest.'
         return 0
     fi
+    if [[ -t 0 ]] && ! $SUBSCRIPTION_PAGE_SET; then
+        choice=$(ask_yes_no 'Установить сайт подписки?') || return $?
+        [[ $choice != yes ]] || SUBSCRIPTION_PAGE=true
+    fi
+    if $SUBSCRIPTION_PAGE; then
+        [[ -f ${HELPER%/*}/subscription.cjs ]] && python3 "$HELPER" --help | grep -q -- '--subscription-image' || die 'Для установки сайта подписки выберите latest.'
+        operation=subscription-domains
+    elif ! $preset; then
+        SUBSCRIPTION_URLS="https://$DOMAIN/api/sub"; return 0
+    fi
     while true; do
         if [[ -t 0 ]] && ! $preset; then
-            info 'Сайт подписки: один адрес или два через запятую; первый используется в ссылках пользователей.'
-            info 'Укажите адрес уже работающего сайта. Enter — подписка через домен панели.'
-            SUBSCRIPTION_URLS=$(ask 'Адрес сайта подписки' "https://$DOMAIN/api/sub") || return $?
+            info 'Укажите один или два отдельных домена через запятую; первый — основной.'
+            info "HTTPS сайта: тот же способ, что у панели ($PROXY / ${TLS_METHOD:-ваш proxy})."
+            SUBSCRIPTION_URLS=$(ask 'Домены сайта подписки') || return $?
         fi
-        if normalized=$(helper subscription-urls --domain "$DOMAIN" --subscription-urls "$SUBSCRIPTION_URLS"); then
-            SUBSCRIPTION_URLS=${normalized//$'\n'/,}
+        if normalized=$(helper "$operation" --domain "$DOMAIN" --subscription-urls "$SUBSCRIPTION_URLS"); then
+            if $SUBSCRIPTION_PAGE; then
+                SUBSCRIPTION_URLS="https://${normalized//$'\n'/,https://}"
+            else SUBSCRIPTION_URLS=${normalized//$'\n'/,}; fi
             return 0
         fi
         [[ -t 0 ]] && ! $preset || die 'Исправьте --subscription-urls: один или два адреса сайта подписки'
@@ -965,6 +1004,9 @@ subscription_wizard() {
 fresh_files() {
     local -a subscription_options=()
     [[ $COMPONENT != panel || -z $SUBSCRIPTION_URLS ]] || subscription_options=(--subscription-urls "$SUBSCRIPTION_URLS")
+    if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then
+        subscription_options+=(--subscription-image "$SUBSCRIPTION_IMAGE" --subscription-port "$SUBSCRIPTION_PORT")
+    fi
     DEPLOY=${DIRECTORY:-$ROOT/$COMPONENT}; PROJECT=${PROJECT:-remnacust-$COMPONENT}
     [[ $DEPLOY == /* && $DEPLOY != / && ! -L $DEPLOY ]] || die 'Укажите безопасный абсолютный каталог'
     if [[ -d $DEPLOY ]] && [[ -n $(find "$DEPLOY" -mindepth 1 -maxdepth 1 -print -quit) ]]; then die 'Каталог не пуст: выберите upgrade или migrate'; fi
@@ -998,7 +1040,10 @@ fresh_files() {
         [[ -f $WORK/backup-password.txt && ! -L $WORK/backup-password.txt ]] || backup_password_wizard
         cp -- "$WORK/backup-password.txt" "$DEPLOY/backup-password.txt"; chmod 600 "$DEPLOY/backup-password.txt"
         helper panel-env --source "$SOURCE/panel/backend/.env.sample" --target "$DEPLOY/.env" --domain "$DOMAIN" --port "$PORT" "${subscription_options[@]}"
-        if [[ ${TLS_METHOD:-auto} == auto ]]; then
+        if $SUBSCRIPTION_PAGE; then
+            : > "$DEPLOY/subscription.env"; chmod 600 "$DEPLOY/subscription.env"
+            tls_helper caddy --domain "$DOMAIN" --email "$EMAIL" --method "${TLS_METHOD:-auto}" --directory "$DEPLOY" --subscription-urls "$SUBSCRIPTION_URLS"
+        elif [[ ${TLS_METHOD:-auto} == auto ]]; then
             { [[ -z $EMAIL ]] || printf '{\n    email %s\n}\n\n' "$EMAIL"; printf '%s {\n    reverse_proxy remnawave:3000\n}\n' "$DOMAIN"; } > "$DEPLOY/Caddyfile"
         else tls_helper caddy --domain "$DOMAIN" --email "$EMAIL" --method "$TLS_METHOD" --directory "$DEPLOY"; fi
     else
@@ -1016,6 +1061,35 @@ json.dump(s,open(p,'w'),indent=2)
 PY
     fi
     load_state; START_APPS=("${APPS[@]}" "${EXTRAS[@]}")
+    if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then START_APPS=(remnawave "${EXTRAS[@]}"); fi
+}
+
+managed_subscription_options() {
+    local urls=''
+    if [[ -n $STATE && -f $STATE ]]; then
+        urls=$(python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));print(",".join(s.get("subscriptionUrls",[])) if s.get("subscriptionPage") else "")' "$STATE")
+    elif $SUBSCRIPTION_PAGE; then urls=$SUBSCRIPTION_URLS; fi
+    [[ -z $urls ]] || printf '%s' "$urls"
+}
+initialize_subscription_page() {
+    local urls script id token_uuid
+    urls=$(managed_subscription_options); [[ -n $urls ]] || return 0
+    [[ ! -L $DEPLOY/subscription.env ]] || die 'subscription.env не должен быть символической ссылкой'
+    if [[ ! -s $DEPLOY/subscription.env ]]; then
+        script="${HELPER%/*}/subscription.cjs"
+        [[ -f $script ]] || script=/usr/local/lib/remnacust-installer/subscription.cjs
+        [[ -f $script ]] || die 'Не найден помощник настройки сайта подписки'
+        id=$(compose ps --quiet "$(get mainService)"); token_uuid=$(get subscriptionTokenUuid)
+        # stdout contains the credential: keep it out of the operation log.
+        docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$token_uuid" "$id" node - < "$script" > "$WORK/subscription-token.txt"
+        chmod 600 "$WORK/subscription-token.txt"
+        helper subscription-env --source "$WORK/subscription-token.txt" --target "$DEPLOY/subscription.env"
+        rm -f -- "$WORK/subscription-token.txt"
+    fi
+    chmod 600 "$DEPLOY/subscription.env"
+    compose up -d --no-build --pull never remnawave-subscription-page
+    local -a START_APPS=(remnawave-subscription-page)
+    wait_ready
 }
 tls_helper() {
     local script="${HELPER%/*}/tls.py"
@@ -1092,12 +1166,15 @@ certificate_wizard() {
 }
 certificate_preflight() {
     local domain=${NODE_DOMAIN:-$DOMAIN}
+    local -a subscription_options=(); local subscriptions
+    subscriptions=$(managed_subscription_options)
+    [[ -z $subscriptions ]] || subscription_options=(--subscription-urls "$subscriptions")
     [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
     if [[ $COMPONENT == panel && ( $PORT == 80 || $PORT == 443 ) ]]; then die 'Порты 80/443 нужны Caddy. Выберите другой --port для backend панели (по умолчанию 3000).'; fi
     if [[ $COMPONENT == node && $TLS_METHOD == http && $PORT == 80 ]]; then die 'HTTP-01 и его продление используют порт 80. Выберите другой API-порт ноды или DNS/готовый сертификат.'; fi
     [[ -n $TLS_METHOD ]] || return 0
     if [[ $TLS_METHOD == existing ]]; then
-        tls_helper validate --domain "$domain" --certificate "$CERT_FILE" --key "$KEY_FILE"
+        tls_helper validate --domain "$domain" --certificate "$CERT_FILE" --key "$KEY_FILE" "${subscription_options[@]}"
     elif [[ $TLS_METHOD == cloudflare || $TLS_METHOD == gcore ]]; then
         tls_helper credentials --method "$TLS_METHOD" --source "$DNS_CREDENTIALS" --target "$WORK/dns-validated.ini"
     elif [[ $TLS_METHOD == http ]]; then port_free 80; fi
@@ -1188,6 +1265,13 @@ dns_preflight() {
     [[ $TLS_METHOD == auto || $TLS_METHOD == http ]] || return 0
     [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
     check_dns "${NODE_DOMAIN:-$DOMAIN}" || die 'DNS не соответствует серверу. Контейнеры установки не созданы; исправьте домен и повторите действие.'
+    if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then
+        local host; local -a hosts=()
+        local validated_hosts
+        validated_hosts=$(helper subscription-domains --domain "$DOMAIN" --subscription-urls "$SUBSCRIPTION_URLS") || return 1
+        mapfile -t hosts <<< "$validated_hosts"
+        for host in "${hosts[@]}"; do check_dns "$host" || die 'DNS сайта подписки не соответствует серверу. Исправьте записи и повторите установку.'; done
+    fi
 }
 valid_panel_response() {
     python3 - "$1" <<'PY'
@@ -1213,6 +1297,29 @@ wait_panel_https() {
     cat "$WORK/https-error.txt" >&2
     return 1
 }
+wait_subscription_https() {
+    local urls host code deadline remaining limit
+    local -a hosts=()
+    urls=$(managed_subscription_options); [[ -n $urls ]] || return 0
+    local validated_hosts
+    validated_hosts=$(helper subscription-domains --domain "$DOMAIN" --subscription-urls "$urls") || return 1
+    mapfile -t hosts <<< "$validated_hosts"
+    for host in "${hosts[@]}"; do
+        deadline=$((SECONDS+HTTPS_TIMEOUT))
+        while ((SECONDS<deadline)); do
+            remaining=$((deadline-SECONDS)); limit=8; ((remaining>=limit)) || limit=$remaining
+            code=$(curl --silent --show-error --noproxy '*' --connect-timeout 3 --max-time "$limit" --max-filesize 1048576 --proto '=https' \
+                "https://$host/" -o /dev/null -w '%{http_code}' 2> "$WORK/subscription-https-error.txt") || code=''
+            # The page needs a user's short UUID; the bare domain normally returns 404.
+            [[ $code != 200 && $code != 404 ]] || break
+            sleep 2
+        done
+        if [[ $code != 200 && $code != 404 ]]; then
+            printf '  HTTPS сайта %s не подтверждён; проверьте DNS и Caddy.\n' "$host" >&2
+            return 1
+        fi
+    done
+}
 https_diagnostics() {
     printf '  HTTPS %s не подтверждён. Проверьте A/AAAA, доступ к TCP 80/443 и firewall сервера/провайдера.\n' "$DOMAIN" >&2
     if [[ -f $WORK/https-error.txt ]]; then head -c 600 "$WORK/https-error.txt" >&2; printf '\n' >&2; fi
@@ -1221,6 +1328,14 @@ https_diagnostics() {
 }
 obtain_certificate() {
     local domain=${NODE_DOMAIN:-$DOMAIN} lineage
+    local -a domains=(--domain "$domain") hosts=(); local subscriptions host
+    subscriptions=$(managed_subscription_options)
+    if [[ -n $subscriptions ]]; then
+        local validated_hosts
+        validated_hosts=$(helper subscription-domains --domain "$domain" --subscription-urls "$subscriptions") || return 1
+        mapfile -t hosts <<< "$validated_hosts"
+        for host in "${hosts[@]}"; do domains+=(--domain "$host"); done
+    fi
     [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
     [[ -n $TLS_METHOD && $TLS_METHOD != auto && $TLS_METHOD != existing ]] || return 0
         ACME_ROOT="$ROOT/acme/${PROJECT:-remnacust-$COMPONENT}"
@@ -1237,15 +1352,18 @@ obtain_certificate() {
             tls_helper credentials --method "$TLS_METHOD" --source "$DNS_CREDENTIALS" --target "$ACME_ROOT/dns.ini"
             auth=(--authenticator "dns-$TLS_METHOD" "--dns-$TLS_METHOD-credentials" "$ACME_ROOT/dns.ini" "--dns-$TLS_METHOD-propagation-seconds" 90)
         else port_free 80; fi
-        step 'Сертификат Let’s Encrypt' "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" --domain "$domain" "${auth[@]}"
+        step 'Сертификат Let’s Encrypt' "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" "${domains[@]}" "${auth[@]}"
         lineage="$ACME_ROOT/config/live/$domain"
         CERT_FILE="$lineage/fullchain.pem"; KEY_FILE="$lineage/privkey.pem"
 }
 configure_certificate() {
     local domain=${NODE_DOMAIN:-$DOMAIN} hook service renew_cli
+    local -a subscription_options=(); local subscriptions
+    subscriptions=$(managed_subscription_options)
+    [[ -z $subscriptions ]] || subscription_options=(--subscription-urls "$subscriptions")
     [[ $COMPONENT != panel || $PROXY == caddy ]] || return 0
     [[ -n $TLS_METHOD && $TLS_METHOD != auto ]] || return 0
-    tls_helper copy --domain "$domain" --certificate "$CERT_FILE" --key "$KEY_FILE" --directory "$DEPLOY"
+    tls_helper copy --domain "$domain" --certificate "$CERT_FILE" --key "$KEY_FILE" --directory "$DEPLOY" "${subscription_options[@]}"
     tls_helper record --state "$STATE" --method "$TLS_METHOD" --certificate "$CERT_FILE" --key "$KEY_FILE"
     helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     if [[ $COMPONENT == node ]]; then
@@ -1291,12 +1409,21 @@ deploy() {
         [[ -z $PANEL_IP ]] || installation_validation+=(--key "$PANEL_IP")
         helper validate "${installation_validation[@]}"
         port_free "$PORT"
+        if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then
+            helper validate --port "$SUBSCRIPTION_PORT"
+            [[ $SUBSCRIPTION_PORT != "$PORT" && $SUBSCRIPTION_PORT != 80 && $SUBSCRIPTION_PORT != 443 ]] || die 'Порт сайта подписки должен отличаться от портов панели и HTTPS'
+            port_free "$SUBSCRIPTION_PORT"
+        fi
         if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
         certificate_preflight
         dns_preflight
         if [[ $COMPONENT == panel ]]; then backup_password_wizard; fi
     fi
     step "Готовый Docker-образ $COMPONENT" prepare_image
+    if [[ $ACTION == install-panel ]] && $SUBSCRIPTION_PAGE; then
+        select_subscription_image
+        step 'Готовый образ сайта подписки' prepare_subscription_image
+    fi
     if [[ $ACTION == install-* ]]; then
         obtain_certificate
         fresh_files
@@ -1345,8 +1472,13 @@ PY
         step 'Запуск обновлённых приложений' compose up -d --no-deps --no-build --pull never "${START_APPS[@]}"
     fi
     step 'Проверка готовности приложений' wait_ready
+    if [[ $ACTION == install-panel ]] && $SUBSCRIPTION_PAGE; then
+        step 'Подключение сайта подписки' initialize_subscription_page
+        START_APPS+=(remnawave-subscription-page)
+    fi
     if [[ $ACTION == install-panel && $PROXY == caddy ]]; then
         if ! step 'Ожидание HTTPS панели (до 3 минут)' wait_panel_https; then https_diagnostics; return 1; fi
+        if ! step 'Проверка HTTPS сайта подписки' wait_subscription_https; then https_diagnostics; return 1; fi
     fi
     if [[ $ACTION != install-* ]]; then
         docker inspect "$(compose ps --all --quiet "$(get mainService)")" > "$WORK/container.after.json"
@@ -1409,6 +1541,14 @@ PY
         else
             completion_row 'HTTPS:' 'Ваш существующий Nginx/Caddy'
             completion_row 'Сертификат:' 'Путь указан в конфигурации вашего proxy; установщик его не меняет'
+        fi
+        if [[ -n $(managed_subscription_options) ]]; then
+            completion_row 'Сайт подписки установлен:' 'Контейнер remnawave-subscription-page; токен только для чтения подписок и оформления'
+            completion_row 'Настройки сайта:' "$directory/subscription.env · доступ только root"
+            if [[ $proxy == existing ]]; then
+                completion_row 'Upstream сайта:' "http://127.0.0.1:$(get subscriptionPort) · для обоих доменов сайта"
+                completion_row 'Пример Caddy:' "$directory/Caddyfile · внутри Docker; для системного proxy используйте loopback upstream"
+            fi
         fi
     else
         local addresses address
@@ -1483,7 +1623,14 @@ print(json.load(open(sys.argv[1])).get('tls',{}).get('method','auto'))
 PY
             )
             if [[ $PROXY == caddy && $TLS_METHOD == auto ]]; then check_dns "$DOMAIN" || return 1; fi
+            if [[ $PROXY == caddy && $TLS_METHOD == auto && -n $(managed_subscription_options) ]]; then
+                local checked_hosts host; local -a subscription_hosts=()
+                checked_hosts=$(helper subscription-domains --domain "$DOMAIN" --subscription-urls "$(managed_subscription_options)") || return 1
+                mapfile -t subscription_hosts <<< "$checked_hosts"
+                for host in "${subscription_hosts[@]}"; do check_dns "$host" || return 1; done
+            fi
             if ! step 'Ожидание HTTPS панели (до 3 минут)' wait_panel_https; then https_diagnostics; return 1; fi
+            if ! step 'Проверка HTTPS сайта подписки' wait_subscription_https; then https_diagnostics; return 1; fi
             info "✓ Панель отвечает по HTTPS: https://$DOMAIN";;
         logs) compose logs --tail 100 --no-color "${APPS[@]}" "${EXTRAS[@]}";;
         start)
@@ -1491,7 +1638,17 @@ PY
             ((${#START_APPS[@]})) || START_APPS=("${APPS[@]}")
             local extra
             for extra in "${EXTRAS[@]}"; do [[ " ${START_APPS[*]} " == *" $extra "* ]] || START_APPS+=("$extra"); done
-            compose up -d --no-build --pull never "${START_APPS[@]}"
+            if [[ $COMPONENT == panel && -n $(managed_subscription_options) ]]; then
+                [[ " ${START_APPS[*]} " == *' remnawave-subscription-page '* ]] || START_APPS+=(remnawave-subscription-page)
+            fi
+            if [[ $COMPONENT == panel && -n $(managed_subscription_options) && ! -s $DEPLOY/subscription.env ]]; then
+                local -a bootstrap_apps=()
+                for extra in "${START_APPS[@]}"; do [[ $extra == remnawave-subscription-page ]] || bootstrap_apps+=("$extra"); done
+                local -a START_APPS=("${bootstrap_apps[@]}")
+                compose up -d --no-build --pull never "${START_APPS[@]}"
+                wait_ready
+                step 'Подключение сайта подписки' initialize_subscription_page
+            else compose up -d --no-build --pull never "${START_APPS[@]}"; fi
             ;;
         stop) confirm 'Остановить приложения'; compose stop "${APPS[@]}" "${EXTRAS[@]}";;
         restart) confirm 'Перезапустить приложения'; compose restart "${APPS[@]}" "${EXTRAS[@]}";;
@@ -1679,6 +1836,9 @@ JS
 
 renew_certificate() {
     local domain certificate key
+    local -a subscription_options=(); local subscriptions
+    subscriptions=$(managed_subscription_options)
+    [[ -z $subscriptions ]] || subscription_options=(--subscription-urls "$subscriptions")
     local -a tls_paths=()
     domain=$(get nodeDomain); [[ $COMPONENT != panel ]] || domain=$(get panelDomain)
     [[ -n $domain ]] || die 'У этой установки нет управляемого сертификата'
@@ -1697,7 +1857,7 @@ PY
         mapfile -t tls_paths < "$WORK/tls-paths"; certificate=${tls_paths[0]}; key=${tls_paths[1]}
     fi
     if [[ -n ${RENEWED_LINEAGE:-} && $(realpath -m "$RENEWED_LINEAGE") != $(realpath -m "$(dirname "$certificate")") ]]; then return 0; fi
-    tls_helper copy --domain "$domain" --certificate "$certificate" --key "$key" --directory "$DEPLOY"
+    tls_helper copy --domain "$domain" --certificate "$certificate" --key "$key" --directory "$DEPLOY" "${subscription_options[@]}"
     if [[ $COMPONENT == panel ]]; then
         compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile --adapter caddyfile
         info 'Сертификат обновлён; Caddy перечитал конфигурацию'

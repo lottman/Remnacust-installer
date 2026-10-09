@@ -83,18 +83,19 @@ class InputWorkflowTests(unittest.TestCase):
                 self.assertNotIn('UNEXPECTED-ACTION', output)
 
     def test_subscription_prompt_normalizes_two_addresses_and_retries_invalid_input(self):
-        prompt = 'Адрес сайта подписки [https://panel.example.com/api/sub]: '
+        prompt = 'Домены сайта подписки: '
         command = ('source "$1"; DOMAIN=panel.example.com; HELPER="$(dirname "$1")/runtime.py"; '
                    'subscription_wizard; printf "RESULT=%s" "$SUBSCRIPTION_URLS"')
-        code, output = self.terminal(command, [(prompt, 'http://sub.example.com\n'),
-                                             (prompt, ' Sub.Example.com/sub/, https://other.example.com/sub \n')])
+        code, output = self.terminal(command, [('Установить сайт подписки? y/n [n]: ', 'y\n'),
+                                             (prompt, 'http://sub.example.com\n'),
+                                             (prompt, ' Sub.Example.com/, https://other.example.com/ \n')])
         self.assertEqual(code, 0, output)
-        self.assertIn('RESULT=https://sub.example.com/sub,https://other.example.com/sub', output)
+        self.assertIn('RESULT=https://sub.example.com,https://other.example.com', output)
         self.assertIn('Адрес подписки:', output)
         self.assertNotIn('Установка и обслуживание', output)
 
     def test_subscription_prompt_enter_keeps_panel_endpoint_and_eof_cancels(self):
-        prompt = 'Адрес сайта подписки [https://panel.example.com/api/sub]: '
+        prompt = 'Установить сайт подписки? y/n [n]: '
         command = ('source "$1"; DOMAIN=panel.example.com; HELPER="$(dirname "$1")/runtime.py"; '
                    'subscription_wizard; printf "RESULT=%s" "$SUBSCRIPTION_URLS"')
         code, output = self.terminal(command, [(prompt, '\n')])

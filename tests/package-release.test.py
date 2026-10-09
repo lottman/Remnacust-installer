@@ -120,7 +120,7 @@ class RuntimeFilesTests(unittest.TestCase):
         scope={};exec(compile(ast.Module(body=[function],type_ignores=[]),'runtime_files','exec'),scope)
         self.read_files=scope['runtime_files']
         self.names=['VERSION','component-sources.json','images.json','LICENSE','NOTICE.md','panel/backend/.env.sample']
-        self.names+=['installer/'+name for name in ['installer.sh','runtime.py','database.cjs','marzban.py','images.py','tls.py','update-agent.py','README.md']]
+        self.names+=['installer/'+name for name in ['installer.sh','runtime.py','database.cjs','subscription.cjs','marzban.py','images.py','tls.py','update-agent.py','README.md']]
         for name in self.names+['installer/debug.txt','installer/backup-password.txt','installer/.private/review.md']:
             path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(name.encode())
     def tearDown(self):self.temp.cleanup()

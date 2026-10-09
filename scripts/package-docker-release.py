@@ -13,7 +13,7 @@ def runtime_files(source):
     names = ['VERSION', 'component-sources.json', 'images.json', 'LICENSE', 'NOTICE.md',
              'panel/backend/.env.sample']
     names += ['installer/' + name for name in
-              ['installer.sh', 'runtime.py', 'database.cjs', 'marzban.py', 'images.py', 'tls.py', 'update-agent.py', 'README.md']]
+              ['installer.sh', 'runtime.py', 'database.cjs', 'subscription.cjs', 'marzban.py', 'images.py', 'tls.py', 'update-agent.py', 'README.md']]
     return {name: (source/name).read_bytes() for name in names}
 
 

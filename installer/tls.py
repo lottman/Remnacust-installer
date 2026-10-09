@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from runtime import domain, write
+from runtime import domain, subscription_domains, write
 
 
 def openssl(*args, data=None):
@@ -19,7 +19,7 @@ def openssl(*args, data=None):
     return result.stdout
 
 
-def certificate_pair(hostname, certificate, key):
+def certificate_pair(hostname, certificate, key, subscriptions=''):
     domain(hostname)
     cert, private = Path(certificate), Path(key)
     for p in (cert, private):
@@ -33,6 +33,9 @@ def certificate_pair(hostname, certificate, key):
     # OpenSSL checkhost prints a mismatch but can return success: inspect its result too.
     if b'does match certificate' not in openssl('x509', '-noout', '-checkhost', hostname, data=cert_data):
         raise ValueError('Сертификат выдан для другого домена')
+    for host in subscription_domains(subscriptions, hostname) if subscriptions else []:
+        if b'does match certificate' not in openssl('x509', '-noout', '-checkhost', host, data=cert_data):
+            raise ValueError('Сертификат должен покрывать все домены сайта подписки')
     import ssl
     from datetime import datetime, timezone
     # x509 supports both RSA and ECDSA; do not compare RSA moduli only.
@@ -46,8 +49,8 @@ def certificate_pair(hostname, certificate, key):
     return cert_data, key_data
 
 
-def copy_pair(hostname, certificate, key, directory):
-    data = certificate_pair(hostname, certificate, key)
+def copy_pair(hostname, certificate, key, directory, subscriptions=''):
+    data = certificate_pair(hostname, certificate, key, subscriptions)
     destination = Path(directory)/'certs'
     if destination.is_symlink():
         raise ValueError('Каталог certs не должен быть символьной ссылкой')
@@ -104,7 +107,7 @@ def credentials(method, source, target):
     atomic_bytes(target, ''.join(f'{k} = {v}\n' for k, v in fields.items()).encode())
 
 
-def caddy(hostname, email, method, directory):
+def caddy(hostname, email, method, directory, subscriptions=''):
     domain(hostname)
     if method == 'auto':
         if email and not re.fullmatch(r'[A-Za-z0-9_.+\-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', email):
@@ -114,7 +117,11 @@ def caddy(hostname, email, method, directory):
     else:
         header = ''
         tls = '    tls /var/lib/remnacust/tls/fullchain.pem /var/lib/remnacust/tls/privkey.pem\n'
-    write(Path(directory)/'Caddyfile', header+hostname+' {\n'+tls+'    reverse_proxy remnawave:3000\n}\n')
+    config = header+hostname+' {\n'+tls+'    reverse_proxy remnawave:3000\n}\n'
+    if subscriptions:
+        hosts = subscription_domains(subscriptions, hostname)
+        config += '\n'+', '.join(hosts)+' {\n'+tls+'    reverse_proxy remnawave-subscription-page:3010\n}\n'
+    write(Path(directory)/'Caddyfile', config)
 
 
 def timer(service, script):
@@ -138,15 +145,16 @@ def main():
     for key in ['domain', 'certificate', 'key', 'directory', 'method', 'source', 'target', 'state', 'service', 'script']:
         p.add_argument('--'+key)
     p.add_argument('--email', default='')
+    p.add_argument('--subscription-urls', default='')
     a = p.parse_args()
     if a.operation == 'validate':
-        certificate_pair(a.domain, a.certificate, a.key)
+        certificate_pair(a.domain, a.certificate, a.key, a.subscription_urls)
     elif a.operation == 'copy':
-        copy_pair(a.domain, a.certificate, a.key, a.directory)
+        copy_pair(a.domain, a.certificate, a.key, a.directory, a.subscription_urls)
     elif a.operation == 'credentials':
         credentials(a.method, a.source, a.target)
     elif a.operation == 'caddy':
-        caddy(a.domain, a.email, a.method, a.directory)
+        caddy(a.domain, a.email, a.method, a.directory, a.subscription_urls)
     elif a.operation == 'timer':
         timer(a.service, a.script)
     else:
