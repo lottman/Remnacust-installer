@@ -69,7 +69,7 @@ p=Path(sys.argv[1]);s=json.loads(p.read_text());s['recoverable']=True;p.write_te
 PY
 retired_installation panel
 show_menu > "$fixture/menu"
-grep -Eq '^[[:space:]]*1[[:space:]]+install-panel' "$fixture/menu"
+grep -Eq '^[[:space:]]*1[[:space:]]+.*install-panel' "$fixture/menu"
 ! grep -q 'start --component panel' "$fixture/menu"
 for ACTION in start restart restore-panel; do
     if (service_action) > "$fixture/output" 2>&1; then exit 1; fi
@@ -96,7 +96,7 @@ Path(sys.argv[2]).write_text(json.dumps(s))
 PY
 retired_installation node
 show_menu > "$fixture/menu"
-grep -Eq '^[[:space:]]*2[[:space:]]+install-node' "$fixture/menu"
+grep -Eq '^[[:space:]]*2[[:space:]]+.*install-node' "$fixture/menu"
 ! grep -q 'start --component node' "$fixture/menu"
 for ACTION in start restart; do
     if (service_action) > "$fixture/output" 2>&1; then exit 1; fi

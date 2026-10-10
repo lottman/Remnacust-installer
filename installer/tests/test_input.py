@@ -2,6 +2,7 @@ import errno
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import subprocess
 import tempfile
@@ -98,11 +99,24 @@ class InputWorkflowTests(unittest.TestCase):
         self.assertIn('Обслуживание', output)
 
     def test_banner_uses_coral_and_fits_narrow_terminal(self):
-        code, output = self.terminal('source "$1"; COLUMNS=80; terminal_banner; COLUMNS=32; terminal_banner', [], color=True)
+        for width in [24, 32, 40, 80]:
+            with self.subTest(width=width):
+                command = f'source "$1"; COLUMNS={width}; component_installed() {{ return 1; }}; show_menu'
+                code, output = self.terminal(command, [], color=True)
+                self.assertEqual(code, 0, output)
+                self.assertIn('\x1b[38;2;231;111;122m', output)
+                self.assertEqual(output.count('REMNACUST'), 1)
+                plain = re.sub(r'\x1b\[[0-9;]*m', '', output)
+                self.assertTrue(all(len(line) <= width for line in plain.splitlines()), plain)
+                self.assertEqual([int(number) for number in re.findall(r'^\s+(\d+)  ', plain, re.M)],
+                                 [1, 2, 3, 4, 5, 6, 10, 7, 8, 9, 11, 12, 0])
+
+    def test_no_color_progress_has_no_terminal_control_codes(self):
+        command = 'source "$1"; LOG="$2/progress.log"; step "Проверка" sleep .15'
+        code, output = self.terminal(command, [])
         self.assertEqual(code, 0, output)
-        self.assertIn('\x1b[38;2;231;111;122m', output)
-        self.assertEqual(output.count('█▀▄ ██▄'), 1)
-        self.assertEqual(output.count('REMNACUST'), 2)
+        self.assertNotIn('\x1b', output)
+        self.assertIn('✓ Проверка', output)
 
     def test_server_values_cannot_emit_terminal_control_codes(self):
         code, output = self.terminal('source "$1"; terminal_value "Система" $\'safe\\033[31m\\nvalue\'', [])

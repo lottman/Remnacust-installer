@@ -17,14 +17,14 @@ SERVER_IPS='' HTTPS_TIMEOUT=180
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
 TEAL='' PURPLE='' ROSE='' DIM='' RESET=''
-BOLD='' ACCENT='' ACCENT_BG='' INK=''
+BOLD='' ACCENT=''
 Y_LABEL=y N_LABEL=n
 if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
     TEAL=$'\033[38;2;25;190;160m'; PURPLE=$'\033[38;2;167;139;250m'
     ROSE=$'\033[38;2;239;128;153m'; DIM=$'\033[2m'; RESET=$'\033[0m'
     Y_LABEL=$'\033[1;32my\033[0m'; N_LABEL=$'\033[1;31mn\033[0m'
     BOLD=$'\033[1m'
-    ACCENT=$'\033[38;2;231;111;122m'; ACCENT_BG=$'\033[48;2;231;111;122m'; INK=$'\033[30m'
+    ACCENT=$'\033[38;2;231;111;122m'
     PURPLE=$ACCENT
 fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
@@ -142,59 +142,84 @@ SECRET_KEY виден при вводе или задаётся через REMNA
 HELP
 }
 show_menu() {
-    local panel_action=install-panel node_action=install-node panel_note='Панель с нуля' node_note='Нода + Xray'
-    local panel_upgrade='Обновить панель · не установлена' node_upgrade='Обновить ноду · не установлена'
-    if component_installed panel; then panel_note='Уже установлена · обновление: 3, удаление: 11'; panel_upgrade='Обновить панель'; fi
-    if component_installed node; then node_note='Уже установлена · обновление: 4, удаление: 12'; node_upgrade='Обновить ноду целиком'; fi
+    local panel_note='' node_note='' panel_upgrade='Не установлена' node_upgrade='Не установлена'
+    if component_installed panel; then panel_note='Уже установлена: обновление 3, удаление 11'; panel_upgrade=''; fi
+    if component_installed node; then node_note='Уже установлена: обновление 4, удаление 12'; node_upgrade=''; fi
     terminal_banner
     terminal_server_card
-    terminal_section 'Установка и перенос'
-    terminal_action 1 "$panel_action" "$panel_note"
-    terminal_action 2 "$node_action" "$node_note"
-    terminal_action 5 migrate-remnawave-panel 'Перенести существующую панель'
-    terminal_action 6 migrate-remnawave-node 'Перенести существующую ноду'
-    terminal_action 10 migrate-marzban-panel 'Перенести пользователей Marzban'
-    terminal_section 'Обновление и обслуживание'
-    terminal_action 3 upgrade-panel "$panel_upgrade"
-    terminal_action 4 upgrade-node "$node_upgrade"
-    terminal_action 7 --check-release 'Проверить выпуск'
-    terminal_action 8 status 'Состояние компонентов'
-    terminal_action 9 Обслуживание 'Журналы, запуск, резервные копии'
-    terminal_action 11 uninstall-panel 'Удалить панель · данные сохраняются'
-    terminal_action 12 uninstall-node 'Удалить ноду · файлы сохраняются'
-    terminal_action 0 Выход ''
+    terminal_section 'Установка'
+    terminal_action 1 'Панель с нуля' install-panel "$panel_note"
+    terminal_action 2 'Нода с Xray' install-node "$node_note"
+    terminal_section 'Обновление'
+    terminal_action 3 'Обновить панель' upgrade-panel "$panel_upgrade"
+    terminal_action 4 'Обновить ноду и Xray' upgrade-node "$node_upgrade"
+    terminal_section 'Перенос'
+    terminal_action 5 'Панель Remnawave' migrate-remnawave-panel
+    terminal_action 6 'Нода Remnawave' migrate-remnawave-node
+    terminal_action 10 'Пользователи Marzban' migrate-marzban-panel
+    terminal_section 'Обслуживание'
+    terminal_action 7 'Проверить выпуск' --check-release
+    terminal_action 8 'Состояние компонентов' status
+    terminal_action 9 'Журналы, запуск и копии' ''
+    terminal_section 'Удаление'
+    terminal_text 'Данные, тома и конфигурация сохраняются.' '      ' '      ' "$DIM"
+    terminal_action 11 'Удалить панель' uninstall-panel
+    terminal_action 12 'Удалить ноду' uninstall-node
     terminal_rule
+    terminal_action 0 Выход ''
     printf '\n'
 }
 terminal_width() {
     local width=${COLUMNS:-}
     [[ $width =~ ^[0-9]{1,3}$ ]] || width=$(tput cols 2>/dev/null || printf 80)
     [[ $width =~ ^[0-9]{1,3}$ ]] || width=80
-    ((width < 32)) && width=32
+    ((width < 24)) && width=24
     ((width > 88)) && width=88
     printf '%s' "$width"
 }
 terminal_rule() {
     local width; width=$(terminal_width)
-    printf '  %s' "$ACCENT"
+    printf '  %s' "$DIM"
     printf '%*s' "$((width-4))" '' | tr ' ' '-'
     printf '%s\n' "$RESET"
 }
-terminal_section() { printf '\n  %s%s▌ %s%s\n' "$ACCENT" "$BOLD" "$1" "$RESET"; terminal_rule; }
-terminal_banner() {
+terminal_section() {
     printf '\n'
-    if [[ -t 1 ]] && (($(terminal_width) >= 68)); then
-        printf '%s%s' "$ACCENT" "$BOLD"
-        printf '  %s\n' '█▀█ █▀▀ █▀▄▀█ █▄ █ ▄▀█ █▀▀ █ █ █▀ ▀█▀' '█▀▄ ██▄ █ ▀ █ █ ▀█ █▀█ █▄▄ █▄█ ▄█  █ '
-        printf '%s\n' "$RESET"
-    fi
-    printf '  %s%sREMNACUST%s · Установка и обслуживание\n' "$ACCENT" "$BOLD" "$RESET"
-    printf '  %sПанель · нода · Xray · резервные копии%s\n' "$DIM" "$RESET"
+    terminal_text "$1" '  ' '  ' "$BOLD"
+    terminal_rule
+}
+terminal_banner() {
+    printf '\n  %s▂▄▆█▆▄▂%s  %sREMNACUST%s\n' "$ACCENT" "$RESET" "$BOLD" "$RESET"
+    terminal_text 'Установка и обслуживание' '  ' '  ' "$DIM"
+}
+terminal_text() {
+    local LC_ALL=C.UTF-8
+    local text prefix=${2:-'  '} continuation=${3:-${2:-'  '}} color=${4:-} width available line
+    text=$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')
+    width=$(terminal_width)
+    while [[ -n $text ]]; do
+        available=$((width-${#prefix}))
+        ((available > 0)) || available=1
+        if ((${#text} > available)); then
+            line=${text:0:available}
+            if [[ $line == *' '* ]]; then line=${line% *}; fi
+        else line=$text; fi
+        printf '%s%s%s%s\n' "$prefix" "$color" "$line" "$RESET"
+        text=${text:${#line}}
+        text=${text#"${text%%[![:space:]]*}"}
+        prefix=$continuation
+    done
 }
 terminal_value() {
-    local value
-    value=$(printf '%s' "$2" | LC_ALL=C tr -d '\000-\037\177')
-    printf '  %s│%s %-12s %s%s%s\n' "$ACCENT" "$RESET" "$1" "$BOLD" "$value" "$RESET"
+    local LC_ALL=C.UTF-8
+    local padding prefix
+    if (($(terminal_width) >= 64)); then
+        padding=$((14-${#1})); ((padding > 0)) || padding=1
+        printf -v prefix '  %s%*s' "$1" "$padding" ''
+        terminal_text "$2" "$prefix" '                ' "$BOLD"
+    else
+        terminal_text "$1: $2" '  ' '    '
+    fi
 }
 terminal_server_card() {
     local system='Linux' memory='—' available='—' panel='не установлена' node='не установлена'
@@ -202,17 +227,35 @@ terminal_server_card() {
     [[ ! -r /proc/meminfo ]] || read -r memory available < <(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {available=$2} END {printf "%.1f %.1f\n",total/1048576,available/1048576}' /proc/meminfo)
     component_installed panel && panel='установлена'
     component_installed node && node='установлена'
-    terminal_section 'Сервер'
+    printf '\n'
     terminal_value 'Система' "$system"
     terminal_value 'Архитектура' "$(uname -m) · $(uname -r)"
     terminal_value 'Память' "$memory GiB · доступно $available GiB"
     terminal_value 'Панель' "$panel"
     terminal_value 'Нода' "$node"
-    terminal_rule
 }
 terminal_action() {
-    printf '  %s%s%s %2s %s  %s%s%s\n' "$ACCENT_BG" "$INK" "$BOLD" "$1" "$RESET" "$BOLD" "$2" "$RESET"
-    [[ -z $3 ]] || printf '        %s%s%s\n' "$DIM" "$3" "$RESET"
+    local LC_ALL=C.UTF-8
+    local number=$1 title=$2 command=${3:-} note=${4:-} padding width first remaining command_prefix='      '
+    width=$(terminal_width)
+    if ((width >= 74)); then
+        padding=$((30-${#title})); ((padding > 0)) || padding=1
+        printf '  %s%2s%s  %s%s%s' "$ACCENT" "$number" "$RESET" "$BOLD" "$title" "$RESET"
+        [[ -z $command ]] || printf '%*s%s%s%s' "$padding" '' "$DIM" "$command" "$RESET"
+        printf '\n'
+    else
+        first=$title
+        if ((${#title} > width-6)); then
+            first=${title:0:width-6}
+            [[ $first != *' '* ]] || first=${first% *}
+        fi
+        printf '  %s%2s%s  %s%s%s\n' "$ACCENT" "$number" "$RESET" "$BOLD" "$first" "$RESET"
+        remaining=${title:${#first}}; remaining=${remaining#"${remaining%%[![:space:]]*}"}
+        [[ -z $remaining ]] || terminal_text "$remaining" '      ' '      ' "$BOLD"
+        ((width >= 32)) || command_prefix='  '
+        [[ -z $command ]] || terminal_text "$command" "$command_prefix" "$command_prefix" "$DIM"
+    fi
+    [[ -z $note ]] || terminal_text "$note" '      ' '      ' "$DIM"
 }
 parse_args() {
     while (($#)); do
@@ -367,13 +410,21 @@ cleanup() {
     if [[ -n $WORK && -f $WORK/.installer-owned ]]; then rm -rf -- "$WORK"; fi
 }
 step() {
-    local title=$1 pid status=0 i=0; shift
+    local title=$1 pid status=0 i=0 display width; shift
     [[ -n $LOG ]] || die 'Не настроен журнал операции'
     "$@" >> "$LOG" 2>&1 & pid=$!
-    if [[ -t 1 ]]; then
-        local frames=$'|/-\\'
-        while kill -0 "$pid" 2>/dev/null; do printf '\r%s  %s%s %s' "$ACCENT" "${frames:i%4:1}" "$RESET" "$title"; i=$((i+1)); sleep .15; done
+    local LC_ALL=C.UTF-8
+    if [[ -t 1 && -n $ACCENT ]]; then
+        local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+        while kill -0 "$pid" 2>/dev/null; do
+            width=$(terminal_width); display=$title
+            ((${#display} <= width-5)) || display="${display:0:width-6}…"
+            printf '\r  %s%s%s %s' "$ACCENT" "${frames[i%10]}" "$RESET" "$display"
+            i=$((i+1)); sleep .12
+        done
         printf '\r\033[2K'
+    else
+        terminal_text "… $title" '  ' '    '
     fi
     wait "$pid" || status=$?
     if ((status)); then printf '%s  × %s · журнал: %s%s\n' "$ROSE" "$title" "$LOG" "$RESET" >&2; return "$status"; fi
@@ -688,16 +739,16 @@ configure_panel_updates() {
 service_menu() {
     COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
     terminal_section "Обслуживание · $COMPONENT"
-    terminal_action 1 status 'Проверить состояние'
-    terminal_action 2 logs 'Открыть журнал приложения'
-    terminal_action 3 start 'Запустить'
-    terminal_action 4 stop 'Остановить'
-    terminal_action 5 restart 'Перезапустить'
-    terminal_action 6 backup-panel 'Создать резервную копию панели'
-    terminal_action 7 restore-panel 'Восстановить панель из копии'
-    terminal_action 8 renew-node-certificate 'Продлить сертификат ноды'
-    terminal_action 9 check-panel 'Проверить панель'
-    terminal_action 10 renew-panel-certificate 'Продлить сертификат панели'
+    terminal_action 1 'Проверить состояние' status
+    terminal_action 2 'Журнал приложения' logs
+    terminal_action 3 'Запустить' start
+    terminal_action 4 'Остановить' stop
+    terminal_action 5 'Перезапустить' restart
+    terminal_action 6 'Создать копию панели' backup-panel
+    terminal_action 7 'Восстановить из копии' restore-panel
+    terminal_action 8 'Сертификат ноды' renew-node-certificate
+    terminal_action 9 'Проверить панель' check-panel
+    terminal_action 10 'Сертификат панели' renew-panel-certificate
     terminal_action 0 'Назад' ''
     terminal_rule
     local choice
@@ -1571,7 +1622,14 @@ PY
     completion_summary
     if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
 }
-completion_row() { printf '  %s %s%s%s\n' "$1" "$BOLD" "$2" "$RESET"; }
+completion_row() {
+    if (($(terminal_width) >= 64)); then
+        printf '  %s %s%s%s\n' "$1" "$BOLD" "$2" "$RESET"
+    else
+        terminal_text "$1" '  ' '  ' "$DIM"
+        printf '    %s%s%s\n' "$BOLD" "$2" "$RESET"
+    fi
+}
 completion_summary() {
     local -a details=()
     python3 - "$STATE" "$DOMAIN" "$NODE_DOMAIN" "$PORT" "$PROXY" "$TLS_METHOD" "$CERT_FILE" "$KEY_FILE" > "$WORK/completion-details" <<'PY'
@@ -1596,7 +1654,9 @@ for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),s.get('apiPo
 PY
     mapfile -t details < "$WORK/completion-details"
     local directory=${details[0]} url=${details[1]} node_domain=${details[2]} port=${details[3]} proxy=${details[4]} method=${details[5]} certificate=${details[6]} key=${details[7]}
-    terminal_section '✓ REMNACUST · Установка завершена'
+    local heading='Установка завершена'
+    case "$ACTION" in upgrade-*) heading='Обновление завершено';; migrate-*) heading='Перенос завершён';; esac
+    terminal_section "$heading"
     completion_row 'Компонент:' "$COMPONENT v${COMPONENT_VERSION:-${TAG#v}} · установщик $TAG"
     if [[ $COMPONENT == panel ]]; then
         if [[ -n $url ]]; then completion_row 'Адрес входа:' "$url"

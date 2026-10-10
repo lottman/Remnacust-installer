@@ -111,8 +111,8 @@ cmp <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/menu") <(grep -E '^[[:s
 pass 'all commands always visible, upgrade-core removed'
 (component_installed() { return 0; }; show_menu) > "$fixture/installed-menu"
 for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel; do grep -q "$action" "$fixture/installed-menu"; done
-grep -Eq '^[[:space:]]*1[[:space:]]+install-panel' "$fixture/installed-menu"
-grep -Eq '^[[:space:]]*11[[:space:]]+uninstall-panel' "$fixture/installed-menu"
+grep -Eq '^[[:space:]]*1[[:space:]]+.*install-panel' "$fixture/installed-menu"
+grep -Eq '^[[:space:]]*11[[:space:]]+.*uninstall-panel' "$fixture/installed-menu"
 pass 'installed components keep installation and deletion commands visible with stable numbers'
 (ask() { printf 0; }; command() { return 1; }; ACTION=''; main) > "$fixture/no-tools-menu"
 cmp <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/menu") <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/no-tools-menu")
