@@ -36,7 +36,10 @@ Path(sys.argv[1]).write_text(json.dumps({'name':sys.argv[2],'services':{'remnawa
 PY
 cp "$REMNACUST_ROOT/panel/compose.json" "$fixture/old-compose.json"
 docker volume create --label "com.docker.compose.project=$old_project" "$old_volume" >/dev/null
-old_db=$(docker run -d --name "$old_project-db" --env-file "$fixture/old.env" \
+mkdir "$fixture/init"
+chmod 755 "$fixture" "$fixture/init"
+printf '#!/bin/sh\nsleep 3\n' > "$fixture/init/slow-init.sh"
+old_db=$(docker run -d --name "$old_project-db" --env-file "$fixture/old.env" -v "$fixture/init:/docker-entrypoint-initdb.d:ro" \
     --label "com.docker.compose.project=$old_project" --label com.docker.compose.service=remnawave-db \
     --label io.remnacust.installer-managed=panel --label "com.docker.compose.project.working_dir=$REMNACUST_ROOT/panel" \
     --label "com.docker.compose.project.config_files=$REMNACUST_ROOT/panel/compose.json" \
@@ -45,12 +48,13 @@ ids+=("$old_db")
 wait_postgres() {
     local count
     for count in {1..60}; do
-        if docker exec "$1" pg_isready -U postgres >/dev/null 2>&1; then return; fi
+        if docker exec "$1" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then return; fi
         sleep 1
     done
     return 1
 }
 wait_postgres "$old_db"
+docker exec "$old_db" pg_isready -h 127.0.0.1 -U postgres >/dev/null
 docker exec "$old_db" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE TABLE retained_sentinel (value text); INSERT INTO retained_sentinel VALUES ($$old-database-preserved$$);' >/dev/null
 bash "$installer" uninstall-panel --project-name "$old_project" --yes
 docker volume inspect "$old_volume" >/dev/null
@@ -95,7 +99,7 @@ wait_ready() {
     local db count
     db=$(docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" ps --quiet remnawave-db)
     for count in {1..60}; do
-        if docker exec "$db" pg_isready -U postgres >/dev/null 2>&1; then break; fi
+        if docker exec "$db" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
         sleep 1
     done
     docker exec "$db" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -tAc "SELECT to_regclass('\''public.retained_sentinel'\'') IS NULL"' | grep -qx t
