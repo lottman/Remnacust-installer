@@ -12,7 +12,7 @@ component_installed panel
 show_menu > "$fixture/menu"
 grep -q uninstall-panel "$fixture/menu"
 grep -q install-node "$fixture/menu"
-grep -q 'upgrade-node.*не установлена' "$fixture/menu"
+grep -A 1 'upgrade-node' "$fixture/menu" | grep -q 'не установлена'
 if (ROOT="$fixture/absent"; main upgrade-panel --yes) > "$fixture/missing.log" 2>&1; then exit 1; fi
 grep -q 'не установлен' "$fixture/missing.log"
 printf 'PASS directory and Docker file change only the matching install action; absent upgrade is blocked\n'

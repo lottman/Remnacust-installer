@@ -30,7 +30,7 @@ component_installed panel
 ! component_installed node
 show_menu > "$fixture/menu"
 grep -q uninstall-panel "$fixture/menu"
-grep -q 'upgrade-panel.*Обновить панель$' "$fixture/menu"
+grep -A 1 'upgrade-panel' "$fixture/menu" | grep -q 'Обновить панель$'
 if bash "$installer/installer.sh" install-panel > "$fixture/output" 2>&1; then exit 1; fi
 grep -q 'уже установлен' "$fixture/output"
 [[ ! -f $fixture/unexpected-download && ! -d $ROOT/panel ]]

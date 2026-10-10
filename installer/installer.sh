@@ -17,17 +17,24 @@ SERVER_IPS='' HTTPS_TIMEOUT=180
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
 TEAL='' PURPLE='' ROSE='' DIM='' RESET=''
-BOLD=''
+BOLD='' ACCENT='' ACCENT_BG='' INK=''
 Y_LABEL=y N_LABEL=n
 if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
     TEAL=$'\033[38;2;25;190;160m'; PURPLE=$'\033[38;2;167;139;250m'
     ROSE=$'\033[38;2;239;128;153m'; DIM=$'\033[2m'; RESET=$'\033[0m'
     Y_LABEL=$'\033[1;32my\033[0m'; N_LABEL=$'\033[1;31mn\033[0m'
     BOLD=$'\033[1m'
+    ACCENT=$'\033[38;2;231;111;122m'; ACCENT_BG=$'\033[48;2;231;111;122m'; INK=$'\033[30m'
+    PURPLE=$ACCENT
 fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
 die() { printf '%s  Ошибка: %s%s\n' "$ROSE" "$*" "$RESET" >&2; exit 1; }
 ask() { local value display_default=${3:-${2:-}}; [[ -t 0 ]] || die "Задайте параметр: $1"; read -r -p "$1${2:+ [$display_default]}: " value || return 1; printf '%s' "${value:-${2:-}}"; }
+ask_node_secret() {
+    [[ -t 0 ]] || die 'Задайте REMNACUST_NODE_SECRET или введите ключ интерактивно'
+    IFS= read -r -p 'SECRET_KEY из панели: ' REMNACUST_NODE_SECRET || return 1
+    export REMNACUST_NODE_SECRET
+}
 trim_answer() {
     local value=$1
     value=${value#"${value%%[![:space:]]*}"}; value=${value%"${value##*[![:space:]]}"}
@@ -127,7 +134,7 @@ Remnacust · installer.sh
 Подтверждение: y/n; Enter = n. Регистр и пробелы не важны.
 После удаления доступна только новая установка через install-panel/install-node.
 Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS / 26.04 LTS, amd64 / arm64.
-SECRET_KEY вводится скрыто или через REMNACUST_NODE_SECRET. Секреты не печатаются.
+SECRET_KEY виден при вводе или задаётся через REMNACUST_NODE_SECRET. В журналы он не записывается.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
 Новая панель: REMNACUST_BACKUP_PASSWORD задаёт пароль копий (16–256 ASCII без пробелов).
 Без него установщик спрашивает пароль; Enter или запуск без терминала создаёт его.
@@ -139,11 +146,73 @@ show_menu() {
     local panel_upgrade='Обновить панель · не установлена' node_upgrade='Обновить ноду · не установлена'
     if component_installed panel; then panel_note='Уже установлена · обновление: 3, удаление: 11'; panel_upgrade='Обновить панель'; fi
     if component_installed node; then node_note='Уже установлена · обновление: 4, удаление: 12'; node_upgrade='Обновить ноду целиком'; fi
-    printf '\n%s  ▌ REMNACUST%s  %sУстановка и обслуживание%s\n\n' "$PURPLE" "$RESET" "$DIM" "$RESET"
-    printf '  1  %-26s %s\n  2  %-26s %s\n' "$panel_action" "$panel_note" "$node_action" "$node_note"
-    printf '  3  upgrade-panel              %s\n  4  upgrade-node               %s\n' "$panel_upgrade" "$node_upgrade"
-    printf '  5  migrate-remnawave-panel    Перенести существующую панель\n  6  migrate-remnawave-node     Перенести существующую ноду\n'
-    printf '  7  --check-release            Проверить выпуск\n  8  status                     Состояние\n  9  Обслуживание                Журналы, запуск, копии\n 10  migrate-marzban-panel       Перенести пользователей Marzban\n 11  uninstall-panel            Удалить панель · данные сохраняются\n 12  uninstall-node             Удалить ноду · файлы сохраняются\n  0  Выход\n\n'
+    terminal_banner
+    terminal_server_card
+    terminal_section 'Установка и перенос'
+    terminal_action 1 "$panel_action" "$panel_note"
+    terminal_action 2 "$node_action" "$node_note"
+    terminal_action 5 migrate-remnawave-panel 'Перенести существующую панель'
+    terminal_action 6 migrate-remnawave-node 'Перенести существующую ноду'
+    terminal_action 10 migrate-marzban-panel 'Перенести пользователей Marzban'
+    terminal_section 'Обновление и обслуживание'
+    terminal_action 3 upgrade-panel "$panel_upgrade"
+    terminal_action 4 upgrade-node "$node_upgrade"
+    terminal_action 7 --check-release 'Проверить выпуск'
+    terminal_action 8 status 'Состояние компонентов'
+    terminal_action 9 Обслуживание 'Журналы, запуск, резервные копии'
+    terminal_action 11 uninstall-panel 'Удалить панель · данные сохраняются'
+    terminal_action 12 uninstall-node 'Удалить ноду · файлы сохраняются'
+    terminal_action 0 Выход ''
+    terminal_rule
+    printf '\n'
+}
+terminal_width() {
+    local width=${COLUMNS:-}
+    [[ $width =~ ^[0-9]{1,3}$ ]] || width=$(tput cols 2>/dev/null || printf 80)
+    [[ $width =~ ^[0-9]{1,3}$ ]] || width=80
+    ((width < 32)) && width=32
+    ((width > 88)) && width=88
+    printf '%s' "$width"
+}
+terminal_rule() {
+    local width; width=$(terminal_width)
+    printf '  %s' "$ACCENT"
+    printf '%*s' "$((width-4))" '' | tr ' ' '-'
+    printf '%s\n' "$RESET"
+}
+terminal_section() { printf '\n  %s%s▌ %s%s\n' "$ACCENT" "$BOLD" "$1" "$RESET"; terminal_rule; }
+terminal_banner() {
+    printf '\n'
+    if [[ -t 1 ]] && (($(terminal_width) >= 68)); then
+        printf '%s%s' "$ACCENT" "$BOLD"
+        printf '  %s\n' '█▀█ █▀▀ █▀▄▀█ █▄ █ ▄▀█ █▀▀ █ █ █▀ ▀█▀' '█▀▄ ██▄ █ ▀ █ █ ▀█ █▀█ █▄▄ █▄█ ▄█  █ '
+        printf '%s\n' "$RESET"
+    fi
+    printf '  %s%sREMNACUST%s · Установка и обслуживание\n' "$ACCENT" "$BOLD" "$RESET"
+    printf '  %sПанель · нода · Xray · резервные копии%s\n' "$DIM" "$RESET"
+}
+terminal_value() {
+    local value
+    value=$(printf '%s' "$2" | LC_ALL=C tr -d '\000-\037\177')
+    printf '  %s│%s %-12s %s%s%s\n' "$ACCENT" "$RESET" "$1" "$BOLD" "$value" "$RESET"
+}
+terminal_server_card() {
+    local system='Linux' memory='—' available='—' panel='не установлена' node='не установлена'
+    [[ ! -r /etc/os-release ]] || system=$(sed -n 's/^PRETTY_NAME="\(.*\)"$/\1/p' /etc/os-release)
+    [[ ! -r /proc/meminfo ]] || read -r memory available < <(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {available=$2} END {printf "%.1f %.1f\n",total/1048576,available/1048576}' /proc/meminfo)
+    component_installed panel && panel='установлена'
+    component_installed node && node='установлена'
+    terminal_section 'Сервер'
+    terminal_value 'Система' "$system"
+    terminal_value 'Архитектура' "$(uname -m) · $(uname -r)"
+    terminal_value 'Память' "$memory GiB · доступно $available GiB"
+    terminal_value 'Панель' "$panel"
+    terminal_value 'Нода' "$node"
+    terminal_rule
+}
+terminal_action() {
+    printf '  %s%s%s %2s %s  %s%s%s\n' "$ACCENT_BG" "$INK" "$BOLD" "$1" "$RESET" "$BOLD" "$2" "$RESET"
+    [[ -z $3 ]] || printf '        %s%s%s\n' "$DIM" "$3" "$RESET"
 }
 parse_args() {
     while (($#)); do
@@ -303,7 +372,7 @@ step() {
     "$@" >> "$LOG" 2>&1 & pid=$!
     if [[ -t 1 ]]; then
         local frames=$'|/-\\'
-        while kill -0 "$pid" 2>/dev/null; do printf '\r%s  %s%s %s' "$TEAL" "${frames:i%4:1}" "$RESET" "$title"; i=$((i+1)); sleep .15; done
+        while kill -0 "$pid" 2>/dev/null; do printf '\r%s  %s%s %s' "$ACCENT" "${frames:i%4:1}" "$RESET" "$title"; i=$((i+1)); sleep .15; done
         printf '\r\033[2K'
     fi
     wait "$pid" || status=$?
@@ -618,7 +687,19 @@ configure_panel_updates() {
 }
 service_menu() {
     COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
-    printf '  1 status\n  2 logs\n  3 start\n  4 stop\n  5 restart\n  6 backup-panel\n  7 restore-panel\n  8 renew-node-certificate\n  9 check-panel\n 10 renew-panel-certificate\n  0 Назад\n'
+    terminal_section "Обслуживание · $COMPONENT"
+    terminal_action 1 status 'Проверить состояние'
+    terminal_action 2 logs 'Открыть журнал приложения'
+    terminal_action 3 start 'Запустить'
+    terminal_action 4 stop 'Остановить'
+    terminal_action 5 restart 'Перезапустить'
+    terminal_action 6 backup-panel 'Создать резервную копию панели'
+    terminal_action 7 restore-panel 'Восстановить панель из копии'
+    terminal_action 8 renew-node-certificate 'Продлить сертификат ноды'
+    terminal_action 9 check-panel 'Проверить панель'
+    terminal_action 10 renew-panel-certificate 'Продлить сертификат панели'
+    terminal_action 0 'Назад' ''
+    terminal_rule
     local choice
     choice=$(ask_menu_choice 10) || return $?
     case "$choice" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate; COMPONENT=node;;9) ACTION=check-panel; COMPONENT=panel;;10) ACTION=renew-panel-certificate; COMPONENT=panel;;0) ACTION='';;esac
@@ -819,8 +900,7 @@ release_source() {
     choose_version
     if [[ $ACTION == install-panel && -z $DOMAIN ]]; then DOMAIN=$(ask 'Домен панели'); fi
     if [[ $ACTION == install-node && -z ${REMNACUST_NODE_SECRET:-} ]]; then
-        [[ -t 0 ]] || die 'Задайте REMNACUST_NODE_SECRET или введите ключ интерактивно'
-        read -r -s -p 'SECRET_KEY из панели: ' REMNACUST_NODE_SECRET; printf '\n'; export REMNACUST_NODE_SECRET
+        ask_node_secret || return 1
     fi
     TAG=$(resolve_release)
     step "Проверка выпуска $TAG" fetch_source
@@ -1020,8 +1100,7 @@ fresh_files() {
     else
         PORT=${PORT:-2222}
         if [[ -z ${REMNACUST_NODE_SECRET:-} ]]; then
-            [[ -t 0 ]] || die 'Задайте REMNACUST_NODE_SECRET или введите ключ в интерактивном режиме'
-            read -r -s -p 'SECRET_KEY из панели: ' REMNACUST_NODE_SECRET; printf '\n'
+            ask_node_secret || return 1
         fi
         export REMNACUST_NODE_SECRET
     fi
@@ -1517,7 +1596,7 @@ for value in [directory,panel,sys.argv[3] or s.get('nodeDomain',''),s.get('apiPo
 PY
     mapfile -t details < "$WORK/completion-details"
     local directory=${details[0]} url=${details[1]} node_domain=${details[2]} port=${details[3]} proxy=${details[4]} method=${details[5]} certificate=${details[6]} key=${details[7]}
-    printf '\n%s%s  ✓ REMNACUST · Установка завершена%s\n\n' "$BOLD" "$TEAL" "$RESET"
+    terminal_section '✓ REMNACUST · Установка завершена'
     completion_row 'Компонент:' "$COMPONENT v${COMPONENT_VERSION:-${TAG#v}} · установщик $TAG"
     if [[ $COMPONENT == panel ]]; then
         if [[ -n $url ]]; then completion_row 'Адрес входа:' "$url"

@@ -139,7 +139,7 @@ assert (p/'original-directory/compose.yml').read_text()=='services: {}\n'
 assert (p/'original-directory/.remnacust-uninstalled').is_file()
 PY
 bash -c 'source "$1"; retired_installation panel; show_menu' _ "$installer/installer.sh" > "$fixture/menu"
-grep -q '1  install-panel' "$fixture/menu"
+grep -Eq '^[[:space:]]*1[[:space:]]+install-panel' "$fixture/menu"
 ! grep -q 'start --component panel' "$fixture/menu"
 ! grep -q 'Для возврата' "$fixture/output"
 grep -q 'Повторная установка: remnacust install-panel' "$fixture/output"

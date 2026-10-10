@@ -73,6 +73,43 @@ class InputWorkflowTests(unittest.TestCase):
                     self.assertEqual(code, 0, output)
                     self.assertIn('ACTION-CONFIRMED', output)
 
+    def test_node_secret_is_visible_and_preserved_without_printing_it_again(self):
+        secret = 'Local-fixture-key+/=='
+        command = 'source "$1"; ask_node_secret; [[ $REMNACUST_NODE_SECRET == "Local-fixture-key+/==" ]] && printf KEY-ACCEPTED'
+        code, output = self.terminal(command, [('SECRET_KEY из панели: ', secret + '\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('KEY-ACCEPTED', output)
+        self.assertEqual(output.count(secret), 1)
+
+    def test_node_secret_eof_stops_the_operation(self):
+        code, output = self.terminal('source "$1"; ask_node_secret || exit 1; printf UNEXPECTED-ACTION',
+                                     [('SECRET_KEY из панели: ', b'\x04')])
+        self.assertNotEqual(code, 0, output)
+        self.assertNotIn('UNEXPECTED-ACTION', output)
+
+    def test_menu_design_preserves_every_action_and_no_color(self):
+        code, output = self.terminal('source "$1"; show_menu', [])
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('\x1b', output)
+        for action in ['install-panel', 'install-node', 'upgrade-panel', 'upgrade-node',
+                       'migrate-remnawave-panel', 'migrate-remnawave-node', '--check-release',
+                       'status', 'migrate-marzban-panel', 'uninstall-panel', 'uninstall-node']:
+            self.assertIn(action, output)
+        self.assertIn('Обслуживание', output)
+
+    def test_banner_uses_coral_and_fits_narrow_terminal(self):
+        code, output = self.terminal('source "$1"; COLUMNS=80; terminal_banner; COLUMNS=32; terminal_banner', [], color=True)
+        self.assertEqual(code, 0, output)
+        self.assertIn('\x1b[38;2;231;111;122m', output)
+        self.assertEqual(output.count('█▀▄ ██▄'), 1)
+        self.assertEqual(output.count('REMNACUST'), 2)
+
+    def test_server_values_cannot_emit_terminal_control_codes(self):
+        code, output = self.terminal('source "$1"; terminal_value "Система" $\'safe\\033[31m\\nvalue\'', [])
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('\x1b', output)
+        self.assertIn('safe[31mvalue', output)
+
     def test_negative_answers_and_enter_cancel_without_running_action(self):
         for answer in ['', '   ', 'n', 'N', 'no', 'No', 'н', 'Н', 'нет', 'НЕТ', 'нЕт', 'неТ']:
             with self.subTest(answer=answer):
