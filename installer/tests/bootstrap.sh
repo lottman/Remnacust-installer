@@ -142,10 +142,19 @@ pass 'failed migration stops every writer and preserves infrastructure'
 (
  COMPONENT=node; CHANGED=true; DB_CHANGED=false; BACKUP="$fixture/backup"; LOG="$fixture/failure.log"; START_APPS=(node)
  load_state() { :; }; compose() { printf '%s\n' "$*" >> "$fixture/node-requests"; }
+ helper() { printf '%s\n' "$*" >> "$fixture/node-requests"; }
  recover
 ) >/dev/null 2>&1 || true
 grep -qx 'up -d --no-deps --no-build --pull never node' "$fixture/node-requests"
+[[ $(head -n 1 "$fixture/node-requests") == "restore-compose --directory $fixture/backup" ]]
 pass 'node rollback restarts original image without pulling or rebuilding'
+(
+ COMPONENT=node; CHANGED=true; DB_CHANGED=false; BACKUP="$fixture/backup"; LOG="$fixture/failure.log"; START_APPS=(node)
+ helper() { return 1; }; compose() { touch "$fixture/unsafe-restart"; }
+ recover
+) >/dev/null 2>&1 || true
+[[ ! -f $fixture/unsafe-restart ]]
+pass 'failed Compose restoration does not start applications against an unknown configuration'
 set +e
 (
     set -e

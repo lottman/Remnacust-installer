@@ -621,8 +621,8 @@ find_existing() {
 import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
- for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls','subscriptionPage','subscriptionPort','subscriptionTokenUuid']:
-  if key in old and (key != 'apiPort' or key not in new):new[key]=old[key]
+ for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls','subscriptionPage','subscriptionPort','subscriptionTokenUuid','composeEntryPoint']:
+  if key in old and (key != 'apiPort' or key not in new) and (key != 'composeEntryPoint' or old[key] in new.get('composeFiles',[])):new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
     fi
@@ -694,6 +694,7 @@ recover() {
     local result=$?; trap - ERR; set +e
     if $CHANGED && [[ -n $BACKUP ]]; then
         if [[ $COMPONENT == node ]] || ! $DB_CHANGED; then
+            helper restore-compose --directory "$BACKUP" >> "$LOG" 2>&1 || { info 'Не удалось восстановить Compose; приложения не запускаются'; exit "${result:-1}"; }
             STATE="$BACKUP/state.before.json"; load_state
             compose up -d --no-deps --no-build --pull never "${START_APPS[@]}" >> "$LOG" 2>&1
             info 'Возвращена предыдущая конфигурация приложения; проверьте status'
@@ -1523,7 +1524,7 @@ deploy() {
     [[ $ACTION == install-* || -z $PORT ]] || die '--port задаёт порт новой установки. Обновление и миграция сохраняют фактический порт существующего контейнера.'
     if [[ $ACTION == install-* ]]; then
         info "$ACTION · новая установка $COMPONENT"
-    else info "$ACTION · сохраняем проект Compose, .env, сети и тома"; fi
+    else info "$ACTION · обновим основной Compose; активные слои объединяются, оригиналы сохраняются в копии"; fi
     choose_version
     confirm "Выполнить $ACTION ($VERSION)"
     prepare_host; lock_operation
@@ -1583,10 +1584,21 @@ deploy() {
         fi
         backup_current
         configure_panel_updates "$WORK/compose.after.json"
-        # Normalize before writing anything: invalid versions of Compose fail with the original installation running.
-        local managed; managed="$DEPLOY/compose.remnacust-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
-        cp "$WORK/compose.after.json" "$managed"; chmod 600 "$managed"
-        CHANGED=true; compose stop "${APPS[@]}"
+        # Validate the merged candidate while the original applications run.
+        docker compose --project-name "$PROJECT" --project-directory "$DEPLOY" -f "$WORK/compose.after.json" \
+            --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.validated.json"
+        CHANGED=true
+        helper commit-compose --source "$WORK/compose.after.json" --state "$STATE" --directory "$BACKUP" \
+            --version "${COMPONENT_VERSION:-${TAG#v}}" --key "$TAG"
+        load_state
+        compose --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.committed.json"
+        python3 - "$WORK/compose.validated.json" "$WORK/compose.committed.json" <<'PY'
+import json,sys
+before,after=[json.load(open(path)) for path in sys.argv[1:]]
+before.pop('x-remnacust-release',None);after.pop('x-remnacust-release',None)
+if before!=after:raise SystemExit('Основной Compose отличается от проверенной конфигурации; обновление остановлено')
+PY
+        compose stop "${APPS[@]}"
         if [[ $COMPONENT == panel ]]; then
             # Refresh the dump after all known writers have stopped. Infrastructure stays running.
             step 'Финальная копия PostgreSQL' backup_panel_data
@@ -1594,11 +1606,6 @@ deploy() {
             DB_CHANGED=true
             step 'Совместимость старой базы' docker run --rm --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" --entrypoint node "$IMAGE" dist/database-compatibility.js --apply
         fi
-        python3 - "$STATE" "$managed" <<'PY'
-import json,sys
-p=sys.argv[1];s=json.load(open(p));s['composeFiles']=[sys.argv[2]];json.dump(s,open(p,'w'),indent=2)
-PY
-        load_state
         step 'Запуск обновлённых приложений' compose up -d --no-deps --no-build --pull never "${START_APPS[@]}"
     fi
     step 'Проверка готовности приложений' wait_ready
@@ -1932,6 +1939,7 @@ restore_panel() {
     RESTORE_DUMP="$requested/database.dump"
     step 'Восстановление схемы и данных одной транзакцией' restore_dump
     step 'Совместимость восстановленной базы' docker run --rm --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" --entrypoint node "$IMAGE" dist/database-compatibility.js --apply
+    helper restore-compose --directory "$requested"
     python3 - "$requested" <<'PY'
 import json,pathlib,shutil,sys
 p=pathlib.Path(sys.argv[1]);s=json.load(open(p/'state.before.json'))

@@ -174,8 +174,124 @@ def verify_backup(directory):
     required.update('original-'+str(i) for i in range(len(state['composeFiles'])))
     required.update(load(root/'env-files.json').values())
     required.update(name for name in ['environment.before', 'fingerprints.json'] if (root/name).exists())
+    if (root/'compose-files.before.json').exists():
+        required.add('compose-files.before.json')
+        required.update(item['backup'] for item in load(root/'compose-files.before.json')['files'] if item['existed'])
     if not required <= names:
         fail('Файл конфигурации не подтверждён контрольной суммой')
+
+
+def compose_path(directory, value):
+    path = Path(value)
+    if not path.is_absolute():
+        path = directory/path
+    if path.is_symlink() or not path.resolve().is_relative_to(directory) or path.resolve() == directory:
+        fail('Compose-файл должен быть обычным файлом внутри каталога установки')
+    if path.exists() and not path.is_file():
+        fail('Compose-файл не является обычным файлом')
+    return path.resolve()
+
+
+def restore_compose(directory):
+    backup = Path(directory)
+    manifest = backup/'compose-files.before.json'
+    if not manifest.exists():
+        return  # Backups made before in-place Compose updates have the old restore path.
+    if manifest.is_symlink():
+        fail('Некорректный манифест Compose-копии')
+    record = load(manifest)
+    deployment = Path(load(backup/'state.before.json')['directory']).resolve()
+    if record['directory'] != str(deployment) or not 1 <= len(record['files']) <= 33:
+        fail('Некорректный каталог Compose-копии')
+    files = []
+    for item in record['files']:
+        target = compose_path(deployment, item['path'])
+        content = None
+        if item['existed']:
+            if not re.fullmatch(r'compose-original-[0-9]+', item['backup']):
+                fail('Некорректное имя Compose-копии')
+            original = backup/item['backup']
+            if original.is_symlink() or not original.is_file() or file_sha256(original) != item['sha256']:
+                fail('Контрольная сумма Compose-копии не совпадает')
+            content = original.read_bytes().decode('utf-8')
+        files.append((target, content, item['mode']))
+    if len({path for path, _, _ in files}) != len(files):
+        fail('Дублированный Compose-файл в копии')
+    for target, content, mode in files:
+        if content is None:
+            target.unlink(missing_ok=True)
+        else:
+            if not target.exists() or file_sha256(target) != hashlib.sha256(content.encode('utf-8')).hexdigest():
+                write(target, content, mode=mode & 0o777)
+
+
+def commit_compose(state_path, candidate_path, directory, version, release):
+    backup = Path(directory)
+    before = load(backup/'state.before.json')
+    deployment = Path(before['directory']).resolve()
+    if not deployment.is_dir() or deployment == Path(deployment.anchor):
+        fail('Некорректный каталог установки')
+    active = before['composeFiles']
+    if not 1 <= len(active) <= 32:
+        fail('Нужен определённый набор Compose-файлов')
+    paths = [compose_path(deployment, value) for value in active]
+    if len(set(paths)) != len(paths) or not all(path.is_file() for path in paths):
+        fail('Compose-файлы отсутствуют или дублируются')
+    primary = before.get('composeEntryPoint')
+    if primary:
+        primary = compose_path(deployment, primary)
+    elif re.fullmatch(r'compose\.remnacust-[0-9]{8}T[0-9]{6}Z-[0-9]+\.json', paths[0].name):
+        # Recover the original entry point used by earlier installers, instead
+        # of perpetuating their timestamped shadow configuration.
+        originals = [deployment/name for name in ['compose.json', 'compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'] if (deployment/name).exists()]
+        if len(originals) > 1:
+            fail('Несколько основных Compose-файлов: выберите нужный через --compose-file')
+        primary = compose_path(deployment, originals[0] if originals else deployment/'compose.json')
+    else:
+        primary = paths[0]
+    for name in ['compose.override.yaml', 'compose.override.yml', 'docker-compose.override.yaml', 'docker-compose.override.yml']:
+        override = deployment/name
+        if override.exists() and override.resolve() not in paths:
+            fail('Найден неактивный Compose override: включите его в конфигурацию перед обновлением')
+    config = load(candidate_path)
+    state = load(state_path)
+    if config.get('name', before['project']) != before['project'] or state['directory'] != before['directory'] or state['project'] != before['project']:
+        fail('Compose-конфигурация принадлежит другому проекту')
+    if not all(name in config.get('services', {}) for name in state['applications']):
+        fail('В новой Compose-конфигурации отсутствует приложение')
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version) or not re.fullmatch(r'v[0-9]+(?:\.[0-9]+){1,3}', release):
+        fail('Некорректная версия Compose-конфигурации')
+    targets = list(dict.fromkeys([primary, *paths]))
+    manifest = backup/'compose-files.before.json'
+    if manifest.exists():
+        fail('План Compose уже существует; используйте новую резервную копию')
+    records = []
+    for index, path in enumerate(targets):
+        if path.exists() and path.stat().st_size > 8*1024*1024:
+            fail('Compose-файл слишком большой')
+        item = {'path': str(path), 'existed': path.exists(), 'backup': 'compose-original-'+str(index), 'mode': 0o600}
+        if path.exists():
+            item.update(mode=path.stat().st_mode & 0o777, sha256=file_sha256(path))
+            write(backup/item['backup'], path.read_bytes().decode('utf-8'))
+        records.append(item)
+    write(manifest, {'directory': str(deployment), 'files': records})
+    backup_hashes(backup)
+    original_state = Path(state_path).read_text(encoding='utf-8')
+    config['x-remnacust-release'] = {'installer': release, 'component': before['component'], 'version': version}
+    try:
+        write(primary, config)
+        # Effective settings from every active layer are now in the primary
+        # file. Empty overlays prevent old image pins from overriding it.
+        for path in paths:
+            if path != primary:
+                write(path, {'services': {}})
+        state.update(composeFiles=[str(primary)], composeEntryPoint=str(primary))
+        write(state_path, state)
+    except Exception:
+        restore_compose(backup)
+        write(state_path, original_state)
+        raise
+    print('Основной Compose обновлён: ' + str(primary))
 
 
 def discover(container, component, directory=None, compose_file=None):
@@ -395,7 +511,7 @@ def compare_environment(before, after):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env'])
+    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
@@ -408,6 +524,10 @@ def main():
     args = parser.parse_args()
     if args.operation == 'hash-backup':
         backup_hashes(args.directory)
+    elif args.operation == 'commit-compose':
+        commit_compose(args.state, args.source, args.directory, args.version, args.key)
+    elif args.operation == 'restore-compose':
+        restore_compose(args.directory)
     elif args.operation == 'verify-backup':
         verify_backup(args.directory)
     elif args.operation == 'discover':

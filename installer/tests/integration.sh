@@ -53,6 +53,14 @@ prepare_image() { docker image inspect "$IMAGE" >/dev/null; }
 install_cli() { :; }
 YES=true; VERSION=latest; ACTION=migrate-remnawave-panel; CONTAINER=$old_id; DIRECTORY=''
 deploy
+python3 - "$DEPLOY/compose.json" "$STATE" "$IMAGE" <<'PY'
+import json,sys
+path,state,image=sys.argv[1:]
+config=json.load(open(path))
+assert config['services']['remnawave']['image']==image
+assert config['services']['standby-worker']['image']==image
+assert json.load(open(state))['composeFiles']==[path]
+PY
 new_id=$(compose ps --quiet remnawave)
 [[ $old_id != "$new_id" && $(compose ps --quiet remnawave-db) == "$old_db" ]]
 [[ $(docker inspect --format '{{.Config.Image}}' "$old_db") == postgres:17.6 ]]

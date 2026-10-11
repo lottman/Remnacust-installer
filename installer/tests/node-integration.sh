@@ -38,4 +38,11 @@ old_id=$(compose ps --quiet remnanode)
 ACTION=upgrade-node; CONTAINER=$old_id; DIRECTORY=''; PORT=''; CHANGED=false
 deploy
 [[ $(docker inspect --format '{{.Config.Image}}' "$(compose ps --quiet remnanode)") == "$test_image" ]]
+python3 - "$DEPLOY/compose.json" "$STATE" "$IMAGE" <<'PY'
+import json,sys
+path,state,image=sys.argv[1:]
+assert json.load(open(path))['services']['remnanode']['image']==image
+assert json.load(open(state))['composeFiles']==[path]
+assert not 'compose.remnacust-' in path
+PY
 printf 'PASS fresh node certificate validation, API readiness and complete upgrade with preserved key/mounts/port\n'
