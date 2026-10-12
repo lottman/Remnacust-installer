@@ -16,7 +16,7 @@ REINSTALL_RECORD=''
 SERVER_IPS='' HTTPS_TIMEOUT=180
 QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
-TEAL='' PURPLE='' ROSE='' DIM='' RESET=''
+TEAL='' PURPLE='' ROSE='' DIM='' GRAY='' RESET=''
 BOLD='' ACCENT=''
 Y_LABEL=y N_LABEL=n
 if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
@@ -25,6 +25,7 @@ if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
     Y_LABEL=$'\033[1;32my\033[0m'; N_LABEL=$'\033[1;31mn\033[0m'
     BOLD=$'\033[1m'
     ACCENT=$'\033[38;2;231;111;122m'
+    GRAY=$'\033[38;2;128;132;142m'
     PURPLE=$ACCENT
 fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
@@ -143,16 +144,18 @@ HELP
 }
 show_menu() {
     local panel_note='' node_note='' panel_upgrade='Не установлена' node_upgrade='Не установлена'
-    if component_installed panel; then panel_note='Уже установлена: обновление 3, удаление 11'; panel_upgrade=''; fi
-    if component_installed node; then node_note='Уже установлена: обновление 4, удаление 12'; node_upgrade=''; fi
+    local panel_available=false node_available=false panel_install=true node_install=true service_available=false service_note='Компоненты не установлены'
+    if component_installed panel; then panel_available=true; panel_install=false; panel_note='Уже установлена: обновление 3, удаление 11'; panel_upgrade=''; fi
+    if component_installed node; then node_available=true; node_install=false; node_note='Уже установлена: обновление 4, удаление 12'; node_upgrade=''; fi
+    if $panel_available || $node_available; then service_available=true; service_note=''; fi
     terminal_banner
     terminal_server_card
     terminal_section 'Установка'
-    terminal_action 1 'Панель с нуля' install-panel "$panel_note"
-    terminal_action 2 'Нода с Xray' install-node "$node_note"
+    terminal_action 1 'Панель с нуля' install-panel "$panel_note" "$panel_install"
+    terminal_action 2 'Нода с Xray' install-node "$node_note" "$node_install"
     terminal_section 'Обновление'
-    terminal_action 3 'Обновить панель' upgrade-panel "$panel_upgrade"
-    terminal_action 4 'Обновить ноду и Xray' upgrade-node "$node_upgrade"
+    terminal_action 3 'Обновить панель' upgrade-panel "$panel_upgrade" "$panel_available"
+    terminal_action 4 'Обновить ноду и Xray' upgrade-node "$node_upgrade" "$node_available"
     terminal_section 'Перенос'
     terminal_action 5 'Панель Remnawave' migrate-remnawave-panel
     terminal_action 6 'Нода Remnawave' migrate-remnawave-node
@@ -160,11 +163,11 @@ show_menu() {
     terminal_section 'Обслуживание'
     terminal_action 7 'Проверить выпуск' --check-release
     terminal_action 8 'Состояние компонентов' status
-    terminal_action 9 'Журналы, запуск и копии' ''
+    terminal_action 9 'Журналы, запуск и копии' '' "$service_note" "$service_available"
     terminal_section 'Удаление'
     terminal_text 'Данные, тома и конфигурация сохраняются.' '      ' '      ' "$DIM"
-    terminal_action 11 'Удалить панель' uninstall-panel
-    terminal_action 12 'Удалить ноду' uninstall-node
+    terminal_action 11 'Удалить панель' uninstall-panel "$panel_upgrade" "$panel_available"
+    terminal_action 12 'Удалить ноду' uninstall-node "$node_upgrade" "$node_available"
     terminal_rule
     terminal_action 0 Выход ''
     printf '\n'
@@ -236,11 +239,12 @@ terminal_server_card() {
 }
 terminal_action() {
     local LC_ALL=C.UTF-8
-    local number=$1 title=$2 command=${3:-} note=${4:-} padding width first remaining command_prefix='      '
+    local number=$1 title=$2 command=${3:-} note=${4:-} available=${5:-true} number_color=$ACCENT padding width first remaining command_prefix='      '
+    [[ $available != false ]] || number_color=$GRAY
     width=$(terminal_width)
     if ((width >= 74)); then
         padding=$((30-${#title})); ((padding > 0)) || padding=1
-        printf '  %s%2s%s  %s%s%s' "$ACCENT" "$number" "$RESET" "$BOLD" "$title" "$RESET"
+        printf '  %s%2s%s  %s%s%s' "$number_color" "$number" "$RESET" "$BOLD" "$title" "$RESET"
         [[ -z $command ]] || printf '%*s%s%s%s' "$padding" '' "$DIM" "$command" "$RESET"
         printf '\n'
     else
@@ -249,7 +253,7 @@ terminal_action() {
             first=${title:0:width-6}
             [[ $first != *' '* ]] || first=${first% *}
         fi
-        printf '  %s%2s%s  %s%s%s\n' "$ACCENT" "$number" "$RESET" "$BOLD" "$first" "$RESET"
+        printf '  %s%2s%s  %s%s%s\n' "$number_color" "$number" "$RESET" "$BOLD" "$first" "$RESET"
         remaining=${title:${#first}}; remaining=${remaining#"${remaining%%[![:space:]]*}"}
         [[ -z $remaining ]] || terminal_text "$remaining" '      ' '      ' "$BOLD"
         ((width >= 32)) || command_prefix='  '
@@ -739,17 +743,25 @@ configure_panel_updates() {
 }
 service_menu() {
     COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
+    local panel_available=false node_available=false current_available=false
+    local panel_note='Панель не установлена' node_note='Нода не установлена' current_note='Компонент не найден'
+    if component_installed panel; then panel_available=true; panel_note=''; fi
+    if component_installed node; then node_available=true; node_note=''; fi
+    case "$COMPONENT" in
+        panel) current_available=$panel_available; current_note=$panel_note;;
+        node) current_available=$node_available; current_note=$node_note;;
+    esac
     terminal_section "Обслуживание · $COMPONENT"
-    terminal_action 1 'Проверить состояние' status
-    terminal_action 2 'Журнал приложения' logs
-    terminal_action 3 'Запустить' start
-    terminal_action 4 'Остановить' stop
-    terminal_action 5 'Перезапустить' restart
-    terminal_action 6 'Создать копию панели' backup-panel
-    terminal_action 7 'Восстановить из копии' restore-panel
-    terminal_action 8 'Сертификат ноды' renew-node-certificate
-    terminal_action 9 'Проверить панель' check-panel
-    terminal_action 10 'Сертификат панели' renew-panel-certificate
+    terminal_action 1 'Проверить состояние' status "$current_note" "$current_available"
+    terminal_action 2 'Журнал приложения' logs "$current_note" "$current_available"
+    terminal_action 3 'Запустить' start "$current_note" "$current_available"
+    terminal_action 4 'Остановить' stop "$current_note" "$current_available"
+    terminal_action 5 'Перезапустить' restart "$current_note" "$current_available"
+    terminal_action 6 'Создать копию панели' backup-panel "$panel_note" "$panel_available"
+    terminal_action 7 'Восстановить из копии' restore-panel "$panel_note" "$panel_available"
+    terminal_action 8 'Сертификат ноды' renew-node-certificate "$node_note" "$node_available"
+    terminal_action 9 'Проверить панель' check-panel "$panel_note" "$panel_available"
+    terminal_action 10 'Сертификат панели' renew-panel-certificate "$panel_note" "$panel_available"
     terminal_action 0 'Назад' ''
     terminal_rule
     local choice
