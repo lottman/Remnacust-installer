@@ -13,6 +13,7 @@ import urllib.request
 REPOSITORIES = {kind: f'lottman/Remnacust-{kind}' for kind in ('panel', 'node', 'core')}
 PREFIXES = {'panel': ('panel/', 'subscription-page/', 'images/'),
             'node': ('node/',), 'core': ('xray/', 'editor/', 'vendor/olcrtc/')}
+COMPONENT_FILES = {'panel': {'docs/COMPATIBILITY.md'}}
 
 
 def read_archive(data, strip_root=False):
@@ -94,9 +95,14 @@ def validate(files, version, versions):
     if not all(numbers) or '.'.join(m.group(1) for m in numbers) != versions['core'].split('-')[0]:
         raise ValueError('Core version mismatch')
     for name in ['installer/installer.sh', 'installer/runtime.py', 'installer/database.cjs', 'installer/marzban.py',
-                 'panel/Dockerfile', 'panel/backend/.env.sample', 'node/docker/Dockerfile', 'xray/LICENSE', 'LICENSE', 'NOTICE.md']:
+                 'panel/Dockerfile', 'panel/backend/.env.sample', 'node/docker/Dockerfile', 'xray/LICENSE', 'LICENSE', 'NOTICE.md', 'docs/COMPATIBILITY.md']:
         if name not in files:
             raise ValueError('Missing release source: ' + name)
+    compatibility = files['docs/COMPATIBILITY.md'].decode('utf-8')
+    for kind, label in [('panel', 'Backend и frontend'), ('node', 'Агент ноды'), ('core', 'Ядро')]:
+        rows = re.findall(r'^\|\s*' + re.escape(label) + r'\s*\|\s*(\d+\.\d+\.\d+(?:\.\d+)?)(?:-remnacust)?\s*\|', compatibility, re.M)
+        if len(rows) != 1 or rows[0] != versions[kind].split('-')[0]:
+            raise ValueError('Compatibility table version mismatch: ' + kind)
     name = 'node/docker/remnacust-core.tar.gz'
     digest = files[name+'.sha256'].decode().split()[0]
     if hashlib.sha256(files[name]).hexdigest() != digest:
@@ -125,7 +131,7 @@ def package(root, tag, local_sources=None, check=False):
         if source['VERSION'].decode().strip() != component_version:
             raise ValueError('Component VERSION mismatch: ' + kind)
         for name, data in source.items():
-            if name.startswith(PREFIXES[kind]):
+            if name.startswith(PREFIXES[kind]) or name in COMPONENT_FILES.get(kind, ()):
                 if name in files:
                     raise ValueError('Overlapping source: ' + name)
                 files[name] = data

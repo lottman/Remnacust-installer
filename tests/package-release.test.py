@@ -21,7 +21,8 @@ class ReleaseTests(unittest.TestCase):
             files={'VERSION':'1.1.1\n'}
             if kind=='panel':
                 files.update({p+'/package.json':'{"version":"1.1.1"}' for p in ['panel/frontend','panel/backend','subscription-page/frontend','subscription-page/backend']})
-                files.update({'panel/Dockerfile':'FROM scratch\n','panel/backend/.env.sample':'SAMPLE=example\n'})
+                files.update({'panel/Dockerfile':'FROM scratch\n','panel/backend/.env.sample':'SAMPLE=example\n',
+                              'docs/COMPATIBILITY.md':'| Backend и frontend | 1.1.1 | fixture |\n| Агент ноды | 1.1.1-remnacust | fixture |\n| Ядро | 1.1.1 | fixture |\n'})
             elif kind=='node':
                 files.update({'node/package.json':'{"version":"1.1.1"}','node/docker/Dockerfile':'FROM scratch\n','node/docker/remnacust-core.tar.gz':'fixture','node/docker/remnacust-core.tar.gz.sha256':hashlib.sha256(b'fixture').hexdigest()+'  remnacust-core.tar.gz\n'})
             else:
@@ -49,6 +50,28 @@ class ReleaseTests(unittest.TestCase):
         self.write(self.root,{'.env':'private','installer/installer.sh':'local change'})
         destination=module.package(self.root,'v1.1.1',self.parent)
         self.assertEqual((destination/'installer.sh').read_text(),'fixture\n')
+    def test_panel_compatibility_is_copied_from_exact_pin(self):
+        expected=module.component_files('panel',self.lock['panel']['commit'],self.parent)['docs/COMPATIBILITY.md']
+        self.write(self.parent/'Remnacust-panel',{'docs/COMPATIBILITY.md':'uncommitted change\n'})
+        destination=module.package(self.root,'v1.1.1',self.parent)
+        contents=module.read_archive((destination/'remnacust-source-v1.1.1.tar.gz').read_bytes())
+        self.assertEqual(contents['docs/COMPATIBILITY.md'],expected)
+    def test_missing_compatibility_is_rejected_before_build(self):
+        directory=self.parent/'Remnacust-panel'
+        self.git(directory,'rm','docs/COMPATIBILITY.md');self.git(directory,'commit','-m','Missing compatibility fixture')
+        self.lock['panel']['commit']=self.git(directory,'rev-parse','HEAD').strip()
+        self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
+        with self.assertRaisesRegex(ValueError,'Missing release source: docs/COMPATIBILITY.md'):
+            module.package(self.root,'v1.1.1',self.parent)
+    def test_stale_compatibility_is_rejected(self):
+        directory=self.parent/'Remnacust-panel'
+        current=(directory/'docs/COMPATIBILITY.md').read_text()
+        self.write(directory,{'docs/COMPATIBILITY.md':current.replace('1.1.1-remnacust','1.1.0-remnacust')})
+        self.git(directory,'add','.');self.git(directory,'commit','-m','Stale compatibility fixture')
+        self.lock['panel']['commit']=self.git(directory,'rev-parse','HEAD').strip()
+        self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
+        with self.assertRaisesRegex(ValueError,'Compatibility table version mismatch: node'):
+            module.package(self.root,'v1.1.1',self.parent)
     def test_committed_environment_is_rejected(self):
         self.write(self.root,{'.env':'private'});self.retag()
         with self.assertRaisesRegex(ValueError,'Working environment'):module.package(self.root,'v1.1.1',self.parent)
@@ -70,7 +93,7 @@ class ReleaseTests(unittest.TestCase):
         versions={kind:'1.1.1' for kind in module.REPOSITORIES}
         for kind, entry in self.lock.items():
             for name, data in module.component_files(kind,entry['commit'],self.parent).items():
-                if name.startswith(module.PREFIXES[kind]):files[name]=data
+                if name.startswith(module.PREFIXES[kind]) or name in module.COMPONENT_FILES.get(kind,()):files[name]=data
         for name in ['.private/review.md','.playwright-cli/page.yml','playwright-report/index.html',
                      'test-results/result.json','panel/frontend/.audit-preview.tsx',
                      'panel/frontend/.superdesign/resume.json','audit-review/report.md',
@@ -101,7 +124,8 @@ class ReleaseTests(unittest.TestCase):
 
     def test_panel_four_part_version_is_preserved(self):
         directory=self.parent/'Remnacust-panel'
-        files={'VERSION':'1.1.7.1\n', **{p+'/package.json':'{"version":"1.1.7.1"}' for p in ['panel/frontend','panel/backend','subscription-page/frontend','subscription-page/backend']}}
+        files={'VERSION':'1.1.7.1\n', **{p+'/package.json':'{"version":"1.1.7.1"}' for p in ['panel/frontend','panel/backend','subscription-page/frontend','subscription-page/backend']},
+               'docs/COMPATIBILITY.md':'| Backend и frontend | 1.1.7.1 | fixture |\n| Агент ноды | 1.1.1-remnacust | fixture |\n| Ядро | 1.1.1 | fixture |\n'}
         self.write(directory,files);self.git(directory,'add','.');self.git(directory,'commit','-m','Panel patch')
         self.lock['panel'].update(version='1.1.7.1',commit=self.git(directory,'rev-parse','HEAD').strip())
         self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
