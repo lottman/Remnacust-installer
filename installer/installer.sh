@@ -137,6 +137,7 @@ Remnacust · installer.sh
 Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS / 26.04 LTS, amd64 / arm64.
 SECRET_KEY виден при вводе или задаётся через REMNACUST_NODE_SECRET. В журналы он не записывается.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
+Если панель подключена к нескольким сетям Docker, сеть БД выбирается по DATABASE_URL и работающему контейнеру базы. Для внешней БД без Docker-алиаса укажите REMNACUST_DATABASE_NETWORK; сеть должна быть подключена к панели.
 Новая панель: REMNACUST_BACKUP_PASSWORD задаёт пароль копий (16–256 ASCII без пробелов).
 Без него установщик спрашивает пароль; Enter или запуск без терминала создаёт его.
 Пароль сохраняется в закрытом backup-password.txt и показывается после установки.
@@ -993,19 +994,38 @@ lock_operation() {
     flock -n 9 || die 'Другой установщик уже работает'
 }
 database_environment() {
-    python3 - "$WORK/container.before.json" "$WORK/database.env" "$WORK/database.network" <<'PY'
+    python3 - "$WORK/container.before.json" "$WORK/database.env" <<'PY'
 import json,pathlib,sys
 c=json.load(open(sys.argv[1]))[0];e=dict(x.split('=',1) for x in c['Config']['Env'] if '=' in x)
 values={k:e[k] for k in ['DATABASE_URL','APP_SECRET'] if k in e}
 if any('\n' in v or '\r' in v for v in values.values()):raise SystemExit('Unsupported database environment')
 pathlib.Path(sys.argv[2]).write_text(''.join(k+'='+v+'\n' for k,v in values.items()))
-net=c.get('HostConfig',{}).get('NetworkMode')
-if net!='host':
- networks=list(c.get('NetworkSettings',{}).get('Networks',{}))
- if len(networks)!=1:raise SystemExit('Multiple database networks: prepare one unambiguous application network first')
- net=networks[0]
-pathlib.Path(sys.argv[3]).write_text(net)
 PY
+    python3 - "$WORK/container.before.json" "$WORK/database-networks.txt" <<'PY'
+import json,pathlib,sys
+c=json.load(open(sys.argv[1]))[0]
+networks=c.get('NetworkSettings',{}).get('Networks') or {}
+pathlib.Path(sys.argv[2]).write_text(''.join(name+'\n' for name in networks))
+PY
+    local network
+    local -a ids=()
+    : > "$WORK/database-peer-ids.txt"
+    while IFS= read -r network; do
+        docker ps --quiet --filter "network=$network" >> "$WORK/database-peer-ids.txt"
+    done < "$WORK/database-networks.txt"
+    mapfile -t ids < <(sort -u "$WORK/database-peer-ids.txt")
+    if ((${#ids[@]})); then
+        docker inspect "${ids[@]}" | python3 -c '
+import json,sys
+peers=json.load(sys.stdin)
+json.dump([{"Id":c.get("Id"),"Name":c.get("Name"),
+           "State":{"Running":c.get("State",{}).get("Running")},
+           "NetworkSettings":{"Networks":c.get("NetworkSettings",{}).get("Networks") or {}}}
+          for c in peers],sys.stdout)
+' > "$WORK/network-containers.json"
+    else printf '[]\n' > "$WORK/network-containers.json"; fi
+    helper database-network --inspect "$WORK/container.before.json" --roles "$WORK/network-containers.json" \
+        --network "${REMNACUST_DATABASE_NETWORK:-}" --target "$WORK/database.network"
 }
 database_run() {
     docker run --rm -i --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" \

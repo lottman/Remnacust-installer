@@ -7,6 +7,10 @@ import subprocess
 import tempfile
 import time
 import unittest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import runtime
 
 
 INSTALLER = Path(__file__).resolve().parents[1] / 'installer.sh'
@@ -26,6 +30,45 @@ class NetworkWorkflowTests(unittest.TestCase):
         else:
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
+
+    def test_database_network_follows_the_database_alias_across_multiple_networks(self):
+        panel = {'Id': 'panel', 'Config': {'Env': ['DATABASE_URL=postgresql://user:password@remnawave-db:5432/postgres']},
+                 'HostConfig': {'NetworkMode': 'proxy'},
+                 'NetworkSettings': {'Networks': {'proxy': {}, 'private': {}}}}
+        database = {'Id': 'database', 'Name': '/project-remnawave-db-1', 'State': {'Running': True},
+                    'NetworkSettings': {'Networks': {'private': {'Aliases': ['remnawave-db'], 'IPAddress': '172.20.0.3'}}}}
+        self.assertEqual(runtime.database_network(panel, [panel, database]), 'private')
+        self.assertEqual(runtime.database_network(panel, [database], 'private'), 'private')
+        with self.assertRaises(runtime.ConfigurationError):
+            runtime.database_network(panel, [database], 'proxy')
+
+    def test_database_network_rejects_ambiguous_targets_and_requires_explicit_external_network(self):
+        panel = {'Id': 'panel', 'Config': {'Env': ['DATABASE_URL=postgresql://u:private@db:5432/app']},
+                 'HostConfig': {'NetworkMode': 'proxy'},
+                 'NetworkSettings': {'Networks': {'proxy': {}, 'private': {}}}}
+        database = {'Id': 'db-1', 'State': {'Running': True},
+                    'NetworkSettings': {'Networks': {'private': {'Aliases': ['db']}}}}
+        impostor = {'Id': 'db-2', 'State': {'Running': True},
+                   'NetworkSettings': {'Networks': {'proxy': {'Aliases': ['db']}}}}
+        with self.assertRaises(runtime.ConfigurationError):
+            runtime.database_network(panel, [database, impostor])
+        with self.assertRaises(runtime.ConfigurationError) as error:
+            runtime.database_network(panel, [])
+        self.assertIn('REMNACUST_DATABASE_NETWORK', str(error.exception))
+        self.assertNotIn('private@', str(error.exception))
+        self.assertEqual(runtime.database_network(panel, [], 'private'), 'private')
+        with self.assertRaises(runtime.ConfigurationError):
+            runtime.database_network(panel, [], 'unattached')
+
+    def test_database_network_keeps_single_and_host_network_compatibility(self):
+        panel = {'Id': 'panel', 'Config': {'Env': ['DATABASE_URL=postgresql://u:p@db:5432/app']},
+                 'HostConfig': {'NetworkMode': 'private'},
+                 'NetworkSettings': {'Networks': {'private': {}}}}
+        self.assertEqual(runtime.database_network(panel, []), 'private')
+        panel['HostConfig']['NetworkMode'] = 'host'
+        self.assertEqual(runtime.database_network(panel, []), 'host')
+        with self.assertRaises(runtime.ConfigurationError):
+            runtime.database_network(panel, [], 'private')
 
     def test_matching_addresses_and_ipv6_normalization(self):
         self.shell("SERVER_IPS='93.184.216.34,2606:4700:4700:0000::1111'; "

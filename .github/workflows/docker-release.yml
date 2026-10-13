@@ -37,6 +37,7 @@ jobs:
         run: |
           bash -n installer/installer.sh
           bash tests/installer.test.sh
+          bash installer/tests/database-network-docker.sh
           bash tests/database-repair.test.sh
           python3 tests/package-release.test.py
           python3 tests/images.test.py

@@ -12,6 +12,7 @@ import re
 import secrets
 import tempfile
 import uuid
+from urllib.parse import urlsplit
 
 
 class ConfigurationError(ValueError):
@@ -113,6 +114,55 @@ def environment(container):
             key, content = value.split('=', 1)
             result[key] = content
     return result
+
+
+def database_network(container, peers, override=''):
+    """Select the network on which the live database hostname belongs."""
+    mode = container.get('HostConfig', {}).get('NetworkMode')
+    if mode == 'host':
+        if override and override != 'host':
+            fail('Указанная сеть БД не совпадает с host-сетью панели')
+        return 'host'
+    networks = container.get('NetworkSettings', {}).get('Networks') or {}
+    if not networks:
+        fail('У контейнера панели нет сети Docker для доступа к базе')
+    if override and override not in networks:
+        fail('Указанная сеть БД не подключена к контейнеру панели')
+    if len(networks) == 1:
+        return next(iter(networks))
+
+    try:
+        hostname = urlsplit(environment(container)['DATABASE_URL']).hostname
+    except (KeyError, ValueError):
+        hostname = None
+    if not hostname:
+        fail('Не удалось определить адрес базы из DATABASE_URL')
+    hostname = hostname.lower()
+    matches = {}
+    for peer in peers:
+        if peer.get('Id') == container.get('Id') or peer.get('State', {}).get('Running') is not True:
+            continue
+        identity = peer.get('Id') or peer.get('Name')
+        for name, endpoint in (peer.get('NetworkSettings', {}).get('Networks') or {}).items():
+            if name not in networks:
+                continue
+            aliases = {alias.lower() for alias in (endpoint.get('Aliases') or []) if isinstance(alias, str)}
+            aliases.add(str(peer.get('Name') or '').lstrip('/').lower())
+            addresses = {str(endpoint.get(key) or '').lower() for key in ('IPAddress', 'GlobalIPv6Address')}
+            if hostname in aliases or hostname in addresses:
+                matches.setdefault(name, set()).add(identity)
+    targets = set().union(*matches.values()) if matches else set()
+    if len(targets) > 1:
+        fail('Адрес базы совпадает с несколькими контейнерами Docker; проверьте DATABASE_URL и сети')
+    if override:
+        if targets and override not in matches:
+            fail('Указанная сеть БД не ведёт к контейнеру из DATABASE_URL')
+        return override
+    if not targets:
+        fail('Не удалось определить сеть БД среди сетей панели. Для внешней БД задайте REMNACUST_DATABASE_NETWORK')
+    if mode in matches:
+        return mode
+    return sorted(matches)[0]
 
 
 def compose_environment(value):
@@ -511,11 +561,12 @@ def compare_environment(before, after):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose'])
+    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
     parser.add_argument('--roles'); parser.add_argument('--running', nargs='*')
+    parser.add_argument('--network', default='')
     parser.add_argument('--domain', default=''); parser.add_argument('--port', default='3000')
     parser.add_argument('--subscription-urls', default='')
     parser.add_argument('--subscription-image', default=''); parser.add_argument('--subscription-port', default='3010')
@@ -532,6 +583,8 @@ def main():
         verify_backup(args.directory)
     elif args.operation == 'discover':
         write(args.target, discover(inspect_one(args.inspect), args.component, args.directory, args.compose_file))
+    elif args.operation == 'database-network':
+        write(args.target, database_network(inspect_one(args.inspect), load(args.roles), args.network))
     elif args.operation == 'transform':
         config, apps = transform(load(args.source), inspect_one(args.inspect), args.component, args.image, load(args.roles) if args.roles else (), args.subscription_image)
         write(args.target, config)

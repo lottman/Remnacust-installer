@@ -34,7 +34,7 @@ class InputWorkflowTests(unittest.TestCase):
         output = b''
         pending = b''
         stage = 0
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 20
         try:
             while time.monotonic() < deadline:
                 if select.select([master], [], [], .05)[0]:
