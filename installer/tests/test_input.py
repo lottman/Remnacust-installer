@@ -88,8 +88,42 @@ class InputWorkflowTests(unittest.TestCase):
         self.assertNotEqual(code, 0, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
+    def test_panel_net_admin_prompt_accepts_enable_decline_and_default(self):
+        command = 'source "$1"; COMPONENT=panel; HELPER="${1%/*}/runtime.py"; panel_net_admin_wizard; printf "NET-ADMIN=%s" "$PANEL_NET_ADMIN"'
+        for reply, enabled in [('y\n', 'true'), ('n\n', 'false'), ('\n', 'false')]:
+            with self.subTest(reply=reply):
+                code, output = self.terminal(command, [('Добавить NET_ADMIN контейнеру панели? y/n [n]: ', reply)])
+                self.assertEqual(code, 0, output)
+                self.assertIn('NET-ADMIN=' + enabled, output)
+
+    def test_panel_net_admin_explicit_flags_skip_prompt_and_reject_other_actions(self):
+        for flag, enabled in [('--net-admin', 'true'), ('--no-net-admin', 'false')]:
+            command = f'source "$1"; parse_args install-panel {flag}; COMPONENT=panel; HELPER="${{1%/*}}/runtime.py"; panel_net_admin_wizard; printf "NET-ADMIN=%s" "$PANEL_NET_ADMIN"'
+            code, output = self.terminal(command, [])
+            self.assertEqual(code, 0, output)
+            self.assertIn('NET-ADMIN=' + enabled, output)
+            self.assertNotIn('Добавить NET_ADMIN', output)
+        for args in ['install-node --net-admin', 'upgrade-panel --net-admin',
+                     'migrate-remnawave-panel --no-net-admin', 'install-panel --net-admin --no-net-admin']:
+            code, output = self.terminal(f'source "$1"; parse_args {args}; printf UNEXPECTED-ACTION', [])
+            self.assertNotEqual(code, 0, output)
+            self.assertNotIn('UNEXPECTED-ACTION', output)
+
+    def test_panel_net_admin_without_terminal_defaults_off_and_old_release_rejects_enable(self):
+        command = 'source "$1"; COMPONENT=panel; panel_net_admin_wizard; printf "NET-ADMIN=%s" "$PANEL_NET_ADMIN"'
+        result = subprocess.run(['bash', '-c', command, 'test', str(INSTALLER)],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('NET-ADMIN=false', result.stdout)
+        command = 'source "$1"; COMPONENT=panel; PANEL_NET_ADMIN=true; PANEL_NET_ADMIN_SET=true; HELPER=/dev/null; panel_net_admin_wizard; printf UNEXPECTED-ACTION'
+        result = subprocess.run(['bash', '-c', command, 'test', str(INSTALLER)],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Выберите latest', result.stderr)
+        self.assertNotIn('UNEXPECTED-ACTION', result.stdout)
+
     def test_menu_design_preserves_every_action_and_no_color(self):
-        code, output = self.terminal('source "$1"; show_menu', [])
+        code, output = self.terminal('source "$1"; component_installed() { return 1; }; show_menu', [])
         self.assertEqual(code, 0, output)
         self.assertNotIn('\x1b', output)
         for action in ['install-panel', 'install-node', 'upgrade-panel', 'upgrade-node',

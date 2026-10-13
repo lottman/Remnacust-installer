@@ -9,6 +9,7 @@ ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE=''
+PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
@@ -108,6 +109,8 @@ Remnacust · installer.sh
   --container NAME          Контейнер приложения при миграции
   --project-name NAME       Имя новой установки Compose
   --domain DOMAIN           Домен новой панели
+  --net-admin               Добавить NET_ADMIN только контейнеру новой панели
+  --no-net-admin            Установить новую панель без NET_ADMIN (по умолчанию)
   --subscription-urls URLS  Один или два адреса сайта подписки через запятую; первый — основной
   --subscription-page       Установить сайт подписки вместе с новой панелью
   --no-subscription-page    Оставить подписки через панель / указанный внешний сайт
@@ -281,6 +284,9 @@ parse_args() {
             --subscription-page|--no-subscription-page)
                 $SUBSCRIPTION_PAGE_SET && die 'Выберите один вариант установки сайта подписки'
                 SUBSCRIPTION_PAGE_SET=true; [[ $1 != --subscription-page ]] || SUBSCRIPTION_PAGE=true;;
+            --net-admin|--no-net-admin)
+                $PANEL_NET_ADMIN_SET && die 'Выберите один вариант NET_ADMIN для панели'
+                PANEL_NET_ADMIN_SET=true; [[ $1 != --net-admin ]] || PANEL_NET_ADMIN=true;;
             --yes) YES=true;; --dry-run) DRY_RUN=true;; --preserve-subhash) PRESERVE_SUBHASH=true;;
             --help|-h) usage; return 10;; *) die "Неизвестная команда или параметр: $1";;
         esac; shift
@@ -292,6 +298,7 @@ parse_args() {
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
     [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
     [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна только для новой панели'
+    [[ -z $ACTION || $ACTION == install-panel || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны только для новой панели'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
     [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
@@ -1133,6 +1140,21 @@ JS
     printf '\nXERA_BACKUP_PASSWORD_ENC=%s\n' "$encrypted" >> "$DEPLOY/.env"
 }
 
+panel_net_admin_wizard() {
+    [[ $COMPONENT == panel ]] || return 0
+    if [[ -t 0 ]] && ! $PANEL_NET_ADMIN_SET; then
+        info 'NET_ADMIN разрешает управление сетью внутри контейнера панели.'
+        info 'Для закрытия соединений и nftables это право требуется на нодах; у новых нод оно уже включено.'
+        local choice
+        choice=$(ask_yes_no 'Добавить NET_ADMIN контейнеру панели?') || return $?
+        PANEL_NET_ADMIN=false; [[ $choice != yes ]] || PANEL_NET_ADMIN=true
+        PANEL_NET_ADMIN_SET=true
+    fi
+    if $PANEL_NET_ADMIN && ! python3 "$HELPER" --help | grep -q -- '--panel-net-admin'; then
+        die 'Этот выпуск не поддерживает выбор NET_ADMIN панели. Выберите latest.'
+    fi
+}
+
 subscription_wizard() {
     local normalized preset=false choice operation=subscription-urls
     [[ -z $SUBSCRIPTION_URLS && $SUBSCRIPTION_SET == false ]] || preset=true
@@ -1167,6 +1189,8 @@ subscription_wizard() {
 }
 fresh_files() {
     local -a subscription_options=()
+    local -a capability_options=()
+    if [[ $COMPONENT == panel ]] && $PANEL_NET_ADMIN; then capability_options=(--panel-net-admin); fi
     [[ $COMPONENT != panel || -z $SUBSCRIPTION_URLS ]] || subscription_options=(--subscription-urls "$SUBSCRIPTION_URLS")
     if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then
         subscription_options+=(--subscription-image "$SUBSCRIPTION_IMAGE" --subscription-port "$SUBSCRIPTION_PORT")
@@ -1215,7 +1239,7 @@ fresh_files() {
     fi
     STATE="$WORK/state.json"
     helper fresh --component "$COMPONENT" --directory "$DEPLOY" --project "$PROJECT" --image "$IMAGE" --domain "$DOMAIN" \
-        --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" "${subscription_options[@]}" --target "$DEPLOY/compose.json" --state "$STATE"
+        --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" "${subscription_options[@]}" "${capability_options[@]}" --target "$DEPLOY/compose.json" --state "$STATE"
     if [[ $COMPONENT == panel && $PROXY == caddy && ${TLS_METHOD:-auto} != auto ]]; then
         python3 - "$DEPLOY/compose.json" "$DEPLOY" <<'PY'
 import json,sys
@@ -1553,6 +1577,7 @@ node_acl() {
     else info "UFW не активен. Разрешите TCP $PORT только от $PANEL_IP в firewall провайдера"; fi
 }
 deploy() {
+    [[ $ACTION == install-panel || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны только для новой панели'
     [[ $ACTION == install-* || -z $PORT ]] || die '--port задаёт порт новой установки. Обновление и миграция сохраняют фактический порт существующего контейнера.'
     if [[ $ACTION == install-* ]]; then
         info "$ACTION · новая установка $COMPONENT"
@@ -1566,6 +1591,7 @@ deploy() {
     trap recover ERR
     release_source
     if [[ $ACTION == install-* ]]; then
+        if [[ $COMPONENT == panel ]]; then panel_net_admin_wizard; fi
         if [[ $COMPONENT == panel ]]; then subscription_wizard; fi
         if [[ $COMPONENT == panel ]]; then PORT=${PORT:-3000}; else PORT=${PORT:-2222}; fi
         local -a installation_validation=(--domain "$DOMAIN" --node-domain "$NODE_DOMAIN" --port "$PORT" --project "${PROJECT:-remnacust-$COMPONENT}")

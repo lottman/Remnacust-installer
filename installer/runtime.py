@@ -469,7 +469,9 @@ def nginx_config(hostname):
 '''
 
 
-def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010'):
+def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010', panel_net_admin=False):
+    if panel_net_admin and component != 'panel':
+        fail('Выбор NET_ADMIN панели доступен только для новой панели')
     directory = Path(directory).resolve()
     project_name(project)
     number = port(number)
@@ -483,6 +485,8 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
                    volumes=['valkey-socket:/var/run/valkey', 'backups:/opt/app/backups'],
                    depends_on={'remnawave-db': {'condition': 'service_healthy'}, 'remnawave-redis': {'condition': 'service_healthy'}},
                    healthcheck={'test': ['CMD-SHELL', 'curl -fsS http://localhost:3001/health'], 'interval': '10s', 'timeout': '5s', 'retries': 6, 'start_period': '30s'})
+        if panel_net_admin:
+            app['cap_add'] = ['NET_ADMIN']
         database = dict(common, image='postgres:18.4', env_file=[str(directory / '.env')],
                         shm_size='512mb', environment={'TZ': 'UTC'}, volumes=['database:/var/lib/postgresql'],
                         healthcheck={'test': ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}'], 'interval': '3s', 'timeout': '5s', 'retries': 20})
@@ -567,6 +571,7 @@ def main():
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
     parser.add_argument('--roles'); parser.add_argument('--running', nargs='*')
     parser.add_argument('--network', default='')
+    parser.add_argument('--panel-net-admin', action='store_true')
     parser.add_argument('--domain', default=''); parser.add_argument('--port', default='3000')
     parser.add_argument('--subscription-urls', default='')
     parser.add_argument('--subscription-image', default=''); parser.add_argument('--subscription-port', default='3010')
@@ -607,7 +612,7 @@ def main():
         write(p/'nginx.conf', nginx_config(args.domain))
         write(p/'www/index.html', '<!doctype html><html lang="en"><meta charset="utf-8"><title>Service</title><p>Service is available.</p></html>\n', mode=0o644)
     elif args.operation == 'fresh':
-        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port)
+        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port, args.panel_net_admin)
         write(args.target, config); write(args.state, state)
     elif args.operation == 'compare':
         compare_environment(inspect_one(args.source), inspect_one(args.inspect))

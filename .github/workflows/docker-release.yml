@@ -38,6 +38,7 @@ jobs:
           bash -n installer/installer.sh
           bash tests/installer.test.sh
           bash installer/tests/database-network-docker.sh
+          bash installer/tests/net-admin-docker.sh
           bash tests/database-repair.test.sh
           python3 tests/package-release.test.py
           python3 tests/images.test.py
@@ -142,6 +143,12 @@ jobs:
             printf '%s\n' "$version"
             grep -F "Xray $EXPECTED_CORE_VERSION " <<< "$version"
             grep -F "Remnacust-$EXPECTED_CORE_VERSION" <<< "$version"
+            for enabled in false true; do
+              capabilities=()
+              if [ "$enabled" = true ]; then capabilities=(--cap-add NET_ADMIN); fi
+              docker run --rm -i --network bridge "${capabilities[@]}" --env EXPECTED_NET_ADMIN="$enabled" \
+                --entrypoint node "$IMAGE" - < installer/tests/net-admin-node.cjs
+            done
           elif [ "$COMPONENT" = panel ]; then
             docker run --rm --env EXPECTED_VERSION="$EXPECTED_VERSION" --entrypoint node "$IMAGE" -e 'if(require("/opt/app/package.json").version!==process.env.EXPECTED_VERSION)process.exit(1)'
             python3 scripts/check-panel-build-metadata.py --image "$IMAGE" --version "$EXPECTED_VERSION" --commit "$EXPECTED_COMMIT" --branch main --build-time "$BUILD_TIME" --build-number "$GITHUB_RUN_NUMBER"

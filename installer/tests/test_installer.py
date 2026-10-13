@@ -239,12 +239,33 @@ class RuntimeTests(unittest.TestCase):
     def test_changed_secrets_ports_mounts_are_rejected(self):
         original = {'Config': {'Env': ['APP_SECRET=old', 'NODE_PORT=72']}, 'Mounts': [{'Source': '/data', 'Destination': '/app', 'RW': True}], 'HostConfig': {'NetworkMode': 'host'}}
         runtime.compare_environment(original, copy.deepcopy(original))
-        for field in ['secret', 'mount', 'network']:
+        for field in ['secret', 'mount', 'network', 'capability']:
             new = copy.deepcopy(original)
             if field == 'secret': new['Config']['Env'][0] = 'APP_SECRET=new'
             if field == 'mount': new['Mounts'][0]['Source'] = '/new'
             if field == 'network': new['HostConfig']['NetworkMode'] = 'new'
+            if field == 'capability': new['HostConfig']['CapAdd'] = ['NET_ADMIN']
             with self.assertRaises(ValueError): runtime.compare_environment(original, new)
+
+    def test_panel_net_admin_is_optional_scoped_and_preserved_during_upgrade(self):
+        for enabled in [False, True]:
+            with self.subTest(enabled=enabled):
+                config, _ = runtime.fresh('panel', '/opt/test', 'test-panel', 'app:old',
+                    'panel.example.com', subscriptions='https://sub.example.com',
+                    subscription_image='page:old', panel_net_admin=enabled)
+                app = config['services']['remnawave']
+                self.assertEqual(app.get('cap_add', []), ['NET_ADMIN'] if enabled else [])
+                self.assertNotIn('privileged', app)
+                for name, service in config['services'].items():
+                    if name != 'remnawave':
+                        self.assertNotIn('cap_add', service)
+                container = {'Config': {'Labels': {'com.docker.compose.service': 'remnawave'}}}
+                updated, _ = runtime.transform(config, container, 'panel', 'app:new')
+                self.assertEqual(updated['services']['remnawave'].get('cap_add', []), app.get('cap_add', []))
+        config, _ = runtime.fresh('node', '/opt/test', 'test-node', 'app')
+        self.assertEqual(config['services']['remnanode']['cap_add'], ['NET_ADMIN'])
+        with self.assertRaises(runtime.ConfigurationError):
+            runtime.fresh('node', '/opt/test', 'test-node', 'app', panel_net_admin=True)
 
     def test_validation_rejects_injection(self):
         for value in ['https://example.com', 'a.com;rm', '../x', 'a.com/']:

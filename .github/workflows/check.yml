@@ -20,6 +20,7 @@ jobs:
         env:
           REMNACUST_TEST_REAL_COMPOSE: '1'
       - run: bash installer/tests/database-network-docker.sh
+      - run: bash installer/tests/net-admin-docker.sh
       - run: bash tests/database-repair.test.sh
       - run: python3 tests/package-release.test.py
       - run: python3 tests/images.test.py

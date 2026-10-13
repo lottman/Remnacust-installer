@@ -202,6 +202,9 @@ main "$@"
         self.addCleanup(lambda: process.kill() if process.poll() is None else None)
         output = b''
         stage = 0
+        prompts = ['Действие: ', 'Версия установки [latest]: ', 'Продолжить? y/n [n]: ',
+                   'Добавить NET_ADMIN контейнеру панели? y/n [n]: ', 'Действие: ']
+        replies = [b'1\n', b'\n', b'yes\n', b'n\n', b'0\n']
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if select.select([master], [], [], .1)[0]:
@@ -214,15 +217,15 @@ main "$@"
                 if not chunk:
                     break
                 output += chunk
-                expected = ['Действие: ', 'Версия установки [latest]: ', 'Продолжить? y/n [n]: ', 'Действие: '][min(stage, 3)].encode()
-                if stage < 4 and expected in output:
-                    os.write(master, [b'1\n', b'\n', b'yes\n', b'0\n'][stage])
+                expected = prompts[min(stage, len(prompts) - 1)].encode()
+                if stage < len(prompts) and expected in output:
+                    os.write(master, replies[stage])
                     stage += 1
                     output = output.replace(expected, b'', 1)
             if process.poll() is not None:
                 break
         os.close(master)
-        self.assertEqual(stage, 4, output.decode(errors='replace'))
+        self.assertEqual(stage, len(prompts), output.decode(errors='replace'))
         self.assertEqual(process.wait(timeout=3), 0, output.decode(errors='replace'))
         self.assertIn('Исправьте указанную причину'.encode(), output)
         self.assertFalse((self.root / 'forbidden-image').exists())
