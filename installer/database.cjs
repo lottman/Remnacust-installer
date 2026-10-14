@@ -5,6 +5,18 @@ const crypto = require('node:crypto');
 const { PrismaClient } = require('/opt/app/node_modules/@prisma/client');
 const db = new PrismaClient();
 class CheckError extends Error {}
+// The original applied SQL included two explanatory comments removed in the
+// public source export. Only these exact historical hashes are equivalent;
+// an edited release migration must not inherit the exception.
+const historicalMigrations = {
+    '20260911203000_era_always_available_hosts': {
+        releaseChecksum: '1903dab82af3f21623204385707350286f77118c86cb8b3d81e0c295a9dae07b',
+        previousChecksums: [
+            '4cd72fdfe7de50e07a5d9e6cca1282c8268fca6ba79748c0bf21530e973cd5d7',
+            'cfa557c6bb9fe4dfc992da3d78111f17a19d61df307352f8335721188f2a2aa5',
+        ],
+    },
+};
 const stable = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? v.toString() : v);
 const hash = value => crypto.createHash('sha256').update(stable(value)).digest('hex');
 function protectedLeaves(value, path = [], result = {}) {
@@ -77,19 +89,27 @@ async function snapshot(previous) {
 async function main() {
     if (process.argv[2] === 'preflight') {
         const migrations = await db.$queryRawUnsafe('SELECT migration_name, checksum, finished_at, rolled_back_at FROM "_prisma_migrations"');
+        const historical = [];
         for (const item of migrations) {
             if (item.rolled_back_at) continue;
             const name = item.migration_name;
             if (!/^[a-zA-Z0-9_]+$/.test(name) || !item.finished_at) throw new CheckError('incomplete migration');
+            if (!/^[a-f0-9]{64}$/.test(item.checksum)) throw new CheckError('invalid migration checksum: ' + name);
             const path = '/opt/app/prisma/migrations/' + name + '/migration.sql';
             const bytes = fs.existsSync(path) ? fs.readFileSync(path) : null;
             const lf = bytes?.toString('utf8').replace(/\r\n/g, '\n');
             const checksums = bytes ? [bytes, lf, lf.replace(/\n/g, '\r\n')].map(content => crypto.createHash('sha256').update(content).digest('hex')) : [];
             if (!checksums.includes(item.checksum)) {
-                throw new CheckError('unknown or modified migration: ' + name);
+                const known = Object.hasOwn(historicalMigrations, name) ? historicalMigrations[name] : null;
+                if (!known || !checksums.includes(known.releaseChecksum) || !known.previousChecksums.includes(item.checksum)) {
+                    throw new CheckError('unknown or modified migration: ' + name +
+                        '; stored checksum: ' + item.checksum + '; release checksum: ' + (checksums[1] || 'file missing'));
+                }
+                historical.push(name);
             }
         }
         await snapshot();
+        if (historical.length) process.stdout.write('Validated historical migration checksums: ' + historical.join(', ') + '\n');
         process.stdout.write('Database preflight passed\n');
     } else if (process.argv[2] === 'snapshot') {
         process.stdout.write(stable(await snapshot()) + '\n');

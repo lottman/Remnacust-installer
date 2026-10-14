@@ -15,6 +15,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_page.
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_input.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_backup_setup.py"
 node --test "$root/tests/backup-crypto.test.cjs"
+node --test "$root/tests/database-preflight.test.cjs"
 node --test "$root/tests/subscription-token.test.cjs"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_completion.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_tls.py"
