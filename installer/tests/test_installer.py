@@ -226,6 +226,21 @@ class RuntimeTests(unittest.TestCase):
         for invalid in ['', "a'", 'not a key', base64.b64encode(b'{}').decode()]:
             with self.assertRaises(ValueError): runtime.node_env(invalid, '2222')
 
+    def test_hwid_defaults_are_for_fresh_installations_only(self):
+        for template in ['', 'HWID_ENABLED_DEFAULT=false\n', 'HWID_ENABLED_DEFAULT=true\n']:
+            with self.subTest(template=template):
+                values = dict(line.split('=', 1) for line in runtime.panel_env(
+                    template, 'panel.example.com', '3000').splitlines() if '=' in line)
+                self.assertEqual(values['HWID_ENABLED_DEFAULT'], 'true')
+        for saved in ['false', 'true']:
+            original = {'Config': {'Env': ['HWID_ENABLED_DEFAULT=' + saved]},
+                        'Mounts': [], 'HostConfig': {'NetworkMode': 'host'}}
+            runtime.compare_environment(original, copy.deepcopy(original))
+            changed = copy.deepcopy(original)
+            changed['Config']['Env'] = ['HWID_ENABLED_DEFAULT=' + ('true' if saved == 'false' else 'false')]
+            with self.assertRaises(ValueError):
+                runtime.compare_environment(original, changed)
+
     def test_fresh_is_scoped_and_panel_is_loopback(self):
         config, state = runtime.fresh('panel', '/opt/test', 'test-panel', 'app', 'panel.example.com')
         self.assertEqual(config['services']['remnawave']['ports'], ['127.0.0.1:3000:3000'])

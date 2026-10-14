@@ -83,6 +83,13 @@ docker exec -i "$(compose ps --quiet remnawave)" node <<'JS'
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 (async () => {
+    const {PrismaClient} = require('@prisma/client');
+    const prisma = new PrismaClient();
+    try {
+        const settings = await prisma.subscriptionSettings.findFirstOrThrow();
+        assert.equal(settings.hwidSettings.enabled, true, 'HWID environment must seed the real database');
+        assert.equal(settings.hwidSettings.fallbackDeviceLimit, 999);
+    } finally { await prisma.$disconnect(); }
     const headers = {'Content-Type':'application/json', 'X-Forwarded-Proto':'https',
         'X-Forwarded-For':'127.0.0.1', 'X-Remnawave-Client-Type':'browser'};
     const register = await fetch('http://127.0.0.1:3000/api/auth/register', {method:'POST',headers,

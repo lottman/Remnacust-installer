@@ -26,6 +26,7 @@ for attempt in $(seq 1 30);do docker exec "$name-db" pg_isready -U postgres >/de
 secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 containers+=("$(docker run -d --name "$name" --network "$network" \
     -e APP_SECRET="$secret" -e DATABASE_URL=postgresql://postgres@audit-db:5432/postgres \
+    -e HWID_ENABLED_DEFAULT=true -e XERA_PERSONAL_SUBSCRIPTIONS=true \
     -e REDIS_HOST=audit-redis -e REDIS_PORT=6379 -e API_INSTANCES=1 -e WORKER_INSTANCES=1 \
     -e APP_PORT=3000 -e METRICS_PORT=3001 -e FRONT_END_DOMAIN=panel.example.com -e SUB_PUBLIC_DOMAIN=sub.example.com \
     -e METRICS_USER=audit -e METRICS_PASS=test-only "$image")")
@@ -54,6 +55,7 @@ done
 }
 check_roles
 printf 'PASS fresh panel database and all three application roles without restarts\n'
+docker exec -i "$name" node < "$project_root/scripts/check-panel-hwid.cjs"
 
 # Reproduce the historical comment-only checksum conflict in this disposable DB.
 # The installer preflight must accept the known source variants without changing
