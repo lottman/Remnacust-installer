@@ -52,7 +52,7 @@ jobs:
           python3 installer/tests/image-cleanup-docker.py
           sudo python3 installer/tests/node_state_docker.integration.py
           sudo env REMNACUST_NODE_SOURCE="$REMNACUST_NODE_SOURCE" python3 installer/tests/node_policy_image_docker.integration.py
-          python3 installer/tests/panel_restore_docker.integration.py
+          sudo python3 installer/tests/panel_restore_docker.integration.py
           bash tests/database-repair.test.sh
           python3 tests/package-release.test.py
           python3 tests/images.test.py
