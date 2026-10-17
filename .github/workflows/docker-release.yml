@@ -18,10 +18,19 @@ jobs:
       build_time: ${{ steps.metadata.outputs.build_time }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      REMNACUST_NODE_SOURCE: ${{ github.workspace }}/node-repository
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Read pinned node revision
+        id: node-source
+        run: python3 -c 'import json,os,subprocess; lock=json.loads(subprocess.check_output(["git","show","refs/tags/"+os.environ["RELEASE_TAG"]+":component-sources.json"])); print("commit="+lock["node"]["commit"])' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: lottman/Remnacust-node
+          ref: ${{ steps.node-source.outputs.commit }}
+          path: node-repository
       - name: Record release build time
         id: metadata
         run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -42,7 +51,7 @@ jobs:
           bash installer/tests/net-admin-docker.sh
           python3 installer/tests/image-cleanup-docker.py
           sudo python3 installer/tests/node_state_docker.integration.py
-          sudo python3 installer/tests/node_policy_image_docker.integration.py
+          sudo env REMNACUST_NODE_SOURCE="$REMNACUST_NODE_SOURCE" python3 installer/tests/node_policy_image_docker.integration.py
           python3 installer/tests/panel_restore_docker.integration.py
           bash tests/database-repair.test.sh
           python3 tests/package-release.test.py
