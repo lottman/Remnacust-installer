@@ -1,4 +1,5 @@
 name: Publish legacy source release
+run-name: ${{ inputs.tag }}
 on:
   workflow_dispatch:
     inputs:
@@ -30,6 +31,6 @@ jobs:
             echo 'Release already exists. Use a new tag; existing assets are preserved.' >&2
             exit 1
           fi
-          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes 'Public source release; see README for installation and upgrades.'
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "${RELEASE_TAG#v}" --notes 'Public source release; see README for installation and upgrades.'
           gh release upload "$RELEASE_TAG" release/installer.sh release/SHA256SUMS "release/remnacust-source-$RELEASE_TAG.tar.gz"
           gh release edit "$RELEASE_TAG" --draft=false --latest

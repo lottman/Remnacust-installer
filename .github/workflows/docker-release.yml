@@ -1,4 +1,5 @@
 name: Publish Docker release
+run-name: ${{ inputs.tag }}
 on:
   workflow_dispatch:
     inputs:
@@ -29,7 +30,7 @@ jobs:
           node-version: 24
       - name: Load Docker test images from public mirror
         run: |
-          for image in alpine:3.22 postgres:18.4; do
+          for image in alpine:3.22 postgres:18.4 node:24.21-trixie-slim; do
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
@@ -39,6 +40,10 @@ jobs:
           bash tests/installer.test.sh
           bash installer/tests/database-network-docker.sh
           bash installer/tests/net-admin-docker.sh
+          python3 installer/tests/image-cleanup-docker.py
+          sudo python3 installer/tests/node_state_docker.integration.py
+          sudo python3 installer/tests/node_policy_image_docker.integration.py
+          python3 installer/tests/panel_restore_docker.integration.py
           bash tests/database-repair.test.sh
           python3 tests/package-release.test.py
           python3 tests/images.test.py
@@ -210,6 +215,11 @@ jobs:
             echo 'Release already exists. Use a new tag; existing assets are preserved.' >&2
             exit 1
           fi
-          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Remnacust Installer $RELEASE_TAG" --notes 'Готовые Docker-образы: установка без сборки на сервере. Caddy в Docker обеспечивает HTTPS панели. README описывает проверку установки, обновление и удаление с сохранением данных.'
+          notes="docs/releases/${RELEASE_TAG#v}.md"
+          if [ ! -f "$notes" ]; then
+            echo 'Release notes for this version are required.' >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "${RELEASE_TAG#v}" --notes-file "$notes"
           gh release upload "$RELEASE_TAG" release/*
           echo 'Draft is complete. Verify anonymous GHCR access and publish it as latest.' >> "$GITHUB_STEP_SUMMARY"

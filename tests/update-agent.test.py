@@ -50,6 +50,7 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(command[-2:], ['--job', self.request])
             self.assertIn('--property=RuntimeMaxSec=7200', command)
             self.assertNotIn('1.1.7.5', command)
+            self.assertIn(['/usr/bin/python3', '-B', agent.SCRIPT], [command[index:index+3] for index in range(len(command)-2)])
         with self.assertRaisesRegex(agent.UpdateError, 'UPDATE_BUSY'):
             self.agent.start('1.1.7.6', str(uuid.uuid4()))
 
@@ -139,6 +140,9 @@ class UpdateTests(unittest.TestCase):
         runtime.write(self.root / 'compose.json', config)
         with patch.object(agent, 'UNIT_ROOT', self.root / 'units'), patch.object(agent.subprocess, 'run'):
             agent.setup(self.root, self.root / 'state.json', self.root / 'compose.json')
+        unit = (self.root / 'units' / agent.SERVICE).read_text()
+        self.assertIn('ExecStart=/usr/bin/python3 -B ' + json.dumps(agent.SCRIPT).replace('%', '%%'), unit)
+        self.assertEqual(agent.SCRIPT, str((Path(__file__).resolve().parents[1] / 'installer/update-agent.py').resolve()))
         result = runtime.load(self.root / 'compose.json')
         self.assertEqual(result['services']['db'], original['services']['db'])
         self.assertEqual(result['services']['caddy'], original['services']['caddy'])
@@ -150,6 +154,36 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(token, hmac.new(secret.encode(), agent.PURPOSE, hashlib.sha256).hexdigest())
         self.assertNotIn(secret, (self.root / 'update-agent.json').read_text())
         self.assertEqual((self.root / 'update-agent.json').stat().st_mode & 0o777, 0o600)
+
+    def test_restore_refreshes_only_existing_agent_identity_from_actual_container(self):
+        inspection = self.root / 'inspection.json'
+        secret = 'restored-identity-' + 'b' * 48
+        runtime.write(inspection, [{'Config': {'Env': ['APP_SECRET=' + secret]}}])
+        with patch.object(agent.subprocess, 'run') as commands:
+            agent.restore_identity(self.root, inspection)
+            self.assertFalse((self.root / 'update-agent.json').exists())
+            runtime.write(self.root / 'update-agent.json', {'token': 'a' * 64})
+            before = (self.root / 'control/status.json').read_bytes()
+            agent.restore_identity(self.root, inspection)
+            expected = hmac.new(secret.encode(), agent.PURPOSE, hashlib.sha256).hexdigest()
+            self.assertEqual(agent.read_json(self.root / 'update-agent.json'), {'token': expected})
+            self.assertEqual((self.root / 'control/status.json').read_bytes(), before)
+            self.assertEqual((self.root / 'update-agent.json').stat().st_mode & 0o777, 0o600)
+            commands.assert_not_called()
+
+    def test_restore_identity_refuses_invalid_secret_and_symlink_without_overwriting(self):
+        inspection = self.root / 'inspection.json'
+        token = self.root / 'update-agent.json'
+        runtime.write(token, {'token': 'a' * 64})
+        for secret in ['short', 'b' * 32 + '\n']:
+            runtime.write(inspection, [{'Config': {'Env': ['APP_SECRET=' + secret]}}])
+            with self.assertRaisesRegex(agent.UpdateError, 'MISSING_SECRET'): agent.restore_identity(self.root, inspection)
+            self.assertEqual(agent.read_json(token)['token'], 'a' * 64)
+        token.unlink()
+        other = self.root / 'operator-file.json'; runtime.write(other, {'token': 'operator-value'})
+        token.symlink_to(other)
+        with self.assertRaisesRegex(agent.UpdateError, 'UNSAFE_PATH'): agent.restore_identity(self.root, inspection)
+        self.assertEqual(agent.read_json(other)['token'], 'operator-value')
 
     def test_only_expected_read_only_control_mount_may_be_added(self):
         before = {'Mounts': [{'Type': 'volume', 'Source': 'db', 'Destination': '/data', 'RW': True}]}
@@ -212,6 +246,14 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(request('POST', '/update', json.dumps({'targetVersion': '1.1.7.4', 'requestId': self.request}))[0], 400)
             self.assertFalse(self.agent.state()['active'])
             self.assertEqual(request('GET', '/other')[0], 404)
+            inspection = self.root / 'restored-container.json'
+            secret = 'restored-agent-identity-' + 'c' * 48
+            runtime.write(inspection, [{'Config': {'Env': ['APP_SECRET=' + secret]}}])
+            agent.restore_identity(self.root, inspection)
+            new_token = hmac.new(secret.encode(), agent.PURPOSE, hashlib.sha256).hexdigest()
+            self.assertEqual(request('GET', '/status')[0], 403)
+            self.assertEqual(request('GET', '/status', token_value=new_token)[0], 200)
+            self.assertIsNone(process.poll())
         finally:
             process.terminate()
             process.wait(timeout=5)

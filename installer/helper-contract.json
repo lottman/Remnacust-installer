@@ -1,0 +1,51 @@
+{
+  "entry_sha256": "59a1b37d4d07e94b2026816aa01e574149a64851bad83822c67b49a38a0d7370",
+  "files": {
+    "LICENSE": {
+      "bytes": 33878,
+      "sha256": "47917fd174abda0cdf63dbe097a6f213879c55395df0747b3e70e16eba36fad5"
+    },
+    "NOTICE.md": {
+      "bytes": 793,
+      "sha256": "6ee1a3aaecbd8b7b8ad87edb6229c165b1dd4a1161110004ad243a4fc0c68d8d"
+    },
+    "database.cjs": {
+      "bytes": 7970,
+      "sha256": "69e4b56c33bc83411ddb43be2b5e5174548a16528e6346e97ebf15b41fce8f6c"
+    },
+    "helper_bundle.py": {
+      "bytes": 11309,
+      "sha256": "0ad8b6305fb4dc84446b75233ffc85bd1de4fc557fd8077e1c1d1fa08b47c218"
+    },
+    "image_cleanup.py": {
+      "bytes": 4761,
+      "sha256": "68b912d5028c5eb2d94edb8d69573b5d0027a7bc0692216855c92a94ee35c7dc"
+    },
+    "images.py": {
+      "bytes": 9675,
+      "sha256": "dce0cb295fcfac38a5c08698078b0076b11ebfc562d00a80804ac077bb7795c5"
+    },
+    "marzban.py": {
+      "bytes": 14142,
+      "sha256": "2d5f3bbba656c009fe9f2472fc10f44f85ce7a70799fffb9a929784836e40262"
+    },
+    "runtime.py": {
+      "bytes": 66579,
+      "sha256": "d5a9a1ad8a2335eceea8472e8a3ab10453a6d47ff4e85817ceb25c9f042c964e"
+    },
+    "subscription.cjs": {
+      "bytes": 2017,
+      "sha256": "a2aa81068d33d6f551c9fe1b616527165814d9fd485dbfe34306ad21a05d6c6c"
+    },
+    "tls.py": {
+      "bytes": 9139,
+      "sha256": "5710f5d84736b0b2be369c551ca9acf49d26b58f0381fb99318488b2c409e427"
+    },
+    "update-agent.py": {
+      "bytes": 14455,
+      "sha256": "bc09c628a0e74fe832aa0308eb5b9967c60806f3f5558ad7b7a3dc3ae6f97ac7"
+    }
+  },
+  "schema": 1,
+  "version": "1.2.58"
+}

@@ -12,9 +12,15 @@ import tarfile
 def runtime_files(source):
     names = ['VERSION', 'component-sources.json', 'images.json', 'LICENSE', 'NOTICE.md',
              'panel/backend/.env.sample']
+    spec = importlib.util.spec_from_file_location('helper_bundle', source/'installer/helper_bundle.py')
+    helpers = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helpers)
+    entry, contract, cohort = helpers.source_bundle(source)
     names += ['installer/' + name for name in
-              ['installer.sh', 'runtime.py', 'database.cjs', 'subscription.cjs', 'marzban.py', 'images.py', 'tls.py', 'update-agent.py', 'README.md']]
-    return {name: (source/name).read_bytes() for name in names}
+              ['installer.sh', 'helper-contract.json', 'README.md'] + [n for n in cohort if n not in {'LICENSE', 'NOTICE.md'}]]
+    files = {name: (source/name).read_bytes() for name in names}
+    files['installer/installer.sh'] = helpers.render(entry, contract, cohort)
+    return files
 
 
 parser = argparse.ArgumentParser(description=__doc__)

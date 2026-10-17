@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+export PYTHONDONTWRITEBYTECODE=1
+HELPER_BUNDLE_SHA256='dfe00cc4c12f78a3b87fc6f955f0ae3ec45cf7422d9257605d004f06248f2a1e'
+ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
+HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
 REPO=${REMNACUST_REPOSITORY:-lottman/Remnacust-installer}
 ROOT=${REMNACUST_ROOT:-/opt/remnacust}
@@ -98,7 +102,7 @@ Remnacust · installer.sh
   logs                      Журнал приложения, последние 100 строк
   start | stop | restart    Управление процессами приложения
   backup-panel              Копия БД и конфигурации панели
-  restore-panel             Восстановление выбранной копии панели
+  restore-panel             Данные и ключи из копии; текущая версия сохраняется
   renew-node-certificate    Копирование обновлённого TLS и перезапуск ноды
   renew-panel-certificate   Копирование обновлённого TLS и reload Caddy
   --help, -h                Эта справка
@@ -503,6 +507,7 @@ prepare_host() {
         step 'Подготовка системных пакетов' apt-get update
         step 'Python, curl, util-linux, OpenSSL' apt-get install -y ca-certificates curl python3 util-linux tar openssl
     fi
+    installed_helper || return $?
     if ! command -v docker >/dev/null; then
         step 'Индекс пакетов' apt-get update
         step 'Ключи репозитория Docker' apt-get install -y ca-certificates curl
@@ -585,20 +590,20 @@ prepare_image() {
     fi
     info 'GHCR недоступен; скачиваем тот же проверенный образ из GitHub Release'
     download "$(image_field url)" "$WORK/image.tar.gz"
-    python3 "$SOURCE/installer/images.py" archive --image "${IMAGE_METADATA:-$WORK/image.json}" --file "$WORK/image.tar.gz"
+    python3 "$HELPER_ROOT/images.py" archive --image "${IMAGE_METADATA:-$WORK/image.json}" --file "$WORK/image.tar.gz"
     docker load --input "$WORK/image.tar.gz"
     docker image inspect "$IMAGE" > "$WORK/image.inspect.json"
     verify_loaded_image
 }
 verify_loaded_image() {
-    if python3 "$SOURCE/installer/images.py" inspect --image "${IMAGE_METADATA:-$WORK/image.json}" --file "$WORK/image.inspect.json" --quiet; then return; fi
+    if python3 "$HELPER_ROOT/images.py" inspect --image "${IMAGE_METADATA:-$WORK/image.json}" --file "$WORK/image.inspect.json" --quiet; then return; fi
     # Import into containerd may regenerate the manifest. Verify its exact config,
     # including layer digests, without writing another image copy to the server.
-    docker save "$IMAGE" | python3 "$SOURCE/installer/images.py" saved --image "${IMAGE_METADATA:-$WORK/image.json}"
+    docker save "$IMAGE" | python3 "$HELPER_ROOT/images.py" saved --image "${IMAGE_METADATA:-$WORK/image.json}"
 }
 image_field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${IMAGE_METADATA:-$WORK/image.json}" "$1"; }
 select_subscription_image() {
-    python3 "$SOURCE/installer/images.py" select --root "$SOURCE" --tag "$TAG" --assets "$WORK/release.json" \
+    python3 "$HELPER_ROOT/images.py" select --root "$SOURCE" --tag "$TAG" --assets "$WORK/release.json" \
         --repository "$REPO" --component subscription-page --architecture "$(dpkg --print-architecture)" > "$WORK/subscription-image.json"
     local IMAGE_METADATA="$WORK/subscription-image.json"
     SUBSCRIPTION_IMAGE=$(image_field image)
@@ -706,9 +711,28 @@ recover() {
     local result=$?; trap - ERR; set +e
     if $CHANGED && [[ -n $BACKUP ]]; then
         if [[ $COMPONENT == node ]] || ! $DB_CHANGED; then
+            if [[ $COMPONENT == node ]] && ! compose stop "${APPS[@]}" >> "$LOG" 2>&1; then
+                info 'Не удалось остановить новую ноду; автоматический откат не запускает второй экземпляр'
+                exit "${result:-1}"
+            fi
             helper restore-compose --directory "$BACKUP" >> "$LOG" 2>&1 || { info 'Не удалось восстановить Compose; приложения не запускаются'; exit "${result:-1}"; }
             STATE="$BACKUP/state.before.json"; load_state
-            compose up -d --no-deps --no-build --pull never "${START_APPS[@]}" >> "$LOG" 2>&1
+            if [[ $COMPONENT == node ]] && ! verify_node_image_policy >> "$LOG" 2>&1; then
+                info 'Предыдущий образ не поддерживает сохранённые квоты или состояние портов; нода оставлена остановленной. Установите совместимый выпуск, не обнуляя состояние.'
+                exit "${result:-1}"
+            fi
+            if ! compose up -d --no-deps --no-build --pull never "${START_APPS[@]}" >> "$LOG" 2>&1; then
+                info 'Предыдущую версию не удалось запустить; сохранённое состояние не обнулялось'
+                exit "${result:-1}"
+            fi
+            if ! wait_ready >> "$LOG" 2>&1; then
+                info 'Готовность предыдущей версии не подтверждена; проверьте status и журнал'
+                exit "${result:-1}"
+            fi
+            if ! helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json" >> "$LOG" 2>&1; then
+                info 'Предыдущая версия запущена, но реестр управления не обновился; сохраните журнал и проверьте status'
+                exit "${result:-1}"
+            fi
             info 'Возвращена предыдущая конфигурация приложения; проверьте status'
         else
             compose stop "${APPS[@]}" >> "$LOG" 2>&1
@@ -718,36 +742,146 @@ recover() {
     printf '%s  Операция не завершена; журнал: %s%s\n' "$ROSE" "$LOG" "$RESET" >&2
     exit "${result:-1}"
 }
+verify_node_image_policy() {
+    # The probe has no public ports and starts no daemon. An old image must not
+    # silently ignore reserves already issued to this persistent node state.
+    compose run --rm --no-deps --pull never -T --entrypoint node "$(get mainService)" -e '
+const fs=require("node:fs");let policy={};
+try{policy=JSON.parse(fs.readFileSync("/var/lib/remnanode/host-policy.json","utf8"));}
+catch(error){if(error.code!=="ENOENT")process.exit(2);}
+const required=[];
+const userQuota="remnacust-user-quota-reserves-v1";let userRequired=false;
+function privateState(file,limit){
+ let info;try{info=fs.lstatSync(file);}catch(error){if(error.code==="ENOENT")return null;throw error;}
+ if(!info.isFile()||info.isSymbolicLink()||info.size>limit)throw Error("Invalid private quota state");
+ const parent=fs.lstatSync(require("node:path").dirname(file)),uid=process.getuid?.();if(!parent.isDirectory()||parent.isSymbolicLink()||((info.mode|parent.mode)&0o077)||(uid!==undefined&&(info.uid!==uid||parent.uid!==uid)))throw Error("Quota state must remain private");
+ const fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
+ try{const opened=fs.fstatSync(fd);if(!opened.isFile()||opened.dev!==info.dev||opened.ino!==info.ino||opened.size>limit)throw Error("Private state changed");const data=Buffer.alloc(limit+1);let count=0;while(count<data.length){const n=fs.readSync(fd,data,count,data.length-count,count);if(n===0)break;count+=n;}if(count>limit)throw Error("Private state too large");return data.subarray(0,count);}finally{fs.closeSync(fd);}
+}
+try{
+ const portPlan=privateState("/var/lib/remnanode/core/port-plan-state.json",1024);
+ if(portPlan){
+  const state=JSON.parse(portPlan.toString());
+  const counter=value=>typeof value==="string"&&/^[1-9][0-9]{0,18}$/.test(value)&&BigInt(value)<=9223372036854775807n;
+  if(!state||![1,2].includes(state.version)||!counter(state.revision)||typeof state.enabled!=="boolean"||typeof state.required!=="boolean"||
+   (state.appliedRevision!==null&&(!counter(state.appliedRevision)||BigInt(state.appliedRevision)>BigInt(state.revision)))||
+   (state.enabled&&!state.required)||(state.appliedRevision===state.revision&&state.required!==state.enabled))process.exit(4);
+  if(state.version===2){
+   const capability="remnacust-port-plan-delivery-v2",boot=require("/etc/s6-overlay/scripts/core-boot.cjs");
+   if(boot.PORT_PLAN_DELIVERY_CAPABILITY!==capability||typeof boot.validateSavedPortPlan!=="function")process.exit(4);
+   boot.validateSavedPortPlan(state);
+   const file="/opt/app/dist/main.js",info=fs.lstatSync(file);
+   if(!info.isFile()||info.isSymbolicLink()||info.size>64*1024*1024)process.exit(4);
+   const fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
+   try{
+    const opened=fs.fstatSync(fd);if(!opened.isFile()||opened.dev!==info.dev||opened.ino!==info.ino||opened.size>64*1024*1024)process.exit(4);
+    const data=Buffer.alloc(opened.size+1);let count=0;while(count<data.length){const n=fs.readSync(fd,data,count,data.length-count,count);if(n===0)break;count+=n;}
+    if(count!==opened.size||!data.subarray(0,count).includes(Buffer.from(capability)))process.exit(4);
+   }finally{fs.closeSync(fd);}
+  }else if(state.delivery!==undefined||state.pluginDirty!==undefined||state.appliedInputsHash!==undefined||state.desiredPluginHash!==undefined)process.exit(4);
+  if(state.required)required.push("remnacust-live-ports-v1");
+ }
+ const recoveryRequired=privateState("/var/lib/remnanode/quota/recovery-required.json",8192);
+ let recovery;try{recovery=privateState("/var/lib/remnanode/quota/recovery.json",8192);}catch(error){if(!recoveryRequired)throw error;recovery=Buffer.from("{}");}
+ if(recovery||recoveryRequired){
+  const capability="remnacust-quota-recovery-fence-v1",boot=require("/etc/s6-overlay/scripts/core-boot.cjs");
+  if(boot.QUOTA_RECOVERY_FENCE!==capability||typeof boot.verifyRecoveryState!=="function")process.exit(4);
+  boot.verifyRecoveryState(recoveryRequired,recovery);required.push(capability);
+  const file="/opt/app/dist/main.js",info=fs.lstatSync(file);
+  if(!info.isFile()||info.isSymbolicLink()||info.size>64*1024*1024)process.exit(4);
+  const fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
+  try{
+   const opened=fs.fstatSync(fd);if(!opened.isFile()||opened.dev!==info.dev||opened.ino!==info.ino||opened.size>64*1024*1024)process.exit(4);
+   const data=Buffer.alloc(opened.size+1);let count=0;while(count<data.length){const n=fs.readSync(fd,data,count,data.length-count,count);if(n===0)break;count+=n;}
+   if(count!==opened.size||!data.subarray(0,count).includes(Buffer.from(capability)))process.exit(4);
+  }finally{fs.closeSync(fd);}
+ }
+ const marker=privateState("/var/lib/remnanode/quota/user-quota-required",128);
+ const ledger=privateState("/var/lib/remnanode/quota/ledger.json",16*1024*1024);
+ let registered=false,watermarked=false;
+ if(ledger){
+  const frames=ledger.toString().split("\n");if(frames.length>1&&frames.at(-1)!=="")process.exit(2);
+  for(let i=0;i<frames.length;i++){
+   const frame=frames[i];if(!frame&&i===frames.length-1&&i>0)break;
+   const record=JSON.parse(frame),start=frame.indexOf("\"payload\":"),end=frame.lastIndexOf(",\"sha256\":");
+   if(start<0||end<start||require("node:crypto").createHash("sha256").update(frame.slice(start+10,end)).digest("hex")!==record.sha256||
+    !["remnacust-quota-reserves-v1","remnacust-quota-registrations-v1","remnacust-quota-watermarks-v1"].includes(record.payload?.version)||
+    (registered&&record.payload.version==="remnacust-quota-reserves-v1")||
+    (watermarked&&record.payload.version!=="remnacust-quota-watermarks-v1"))process.exit(2);
+   registered=record.payload.version!=="remnacust-quota-reserves-v1";
+   watermarked=record.payload.version==="remnacust-quota-watermarks-v1";
+  }
+ }
+ if(registered||policy.quotaRegistrations){
+  const capability="remnacust-quota-registrations-v1";
+  if(policy.quotaRegistrations!==capability||policy.offlineReserves!=="remnacust-quota-reserves-v1")process.exit(2);
+  const boot=require("/etc/s6-overlay/scripts/core-boot.cjs");
+  if(boot.QUOTA_REGISTRATION_CAPABILITY!==capability||typeof boot.registeredQuotaJournal!=="function")process.exit(4);
+  const bundlePath="/opt/app/dist/main.js",bundleInfo=fs.lstatSync(bundlePath);
+  if(!bundleInfo.isFile()||bundleInfo.isSymbolicLink()||bundleInfo.size>64*1024*1024)process.exit(4);
+  const bundle=fs.readFileSync(bundlePath);
+  if(bundle.length>64*1024*1024||!bundle.includes(Buffer.from(capability)))process.exit(4);
+  required.push(capability);
+ }
+ if(watermarked||policy.quotaCheckpoint){
+  const capability="remnacust-quota-watermarks-v1",boot=require("/etc/s6-overlay/scripts/core-boot.cjs");
+  if(boot.QUOTA_WATERMARK_CAPABILITY!==capability||typeof boot.quotaJournalCheckpoint!=="function"||typeof boot.verifyQuotaCheckpoint!=="function")process.exit(4);
+  boot.verifyQuotaCheckpoint(policy,boot.quotaJournalCheckpoint(ledger));
+  const file="/opt/app/dist/main.js",info=fs.lstatSync(file);
+  if(!info.isFile()||info.isSymbolicLink()||info.size>64*1024*1024)process.exit(4);
+  const bytes=fs.readFileSync(file);if(bytes.length>64*1024*1024||!bytes.includes(Buffer.from(capability)))process.exit(4);
+  required.push(capability);
+ }
+ if(marker){if(marker.toString()!==userQuota+"\n")process.exit(2);userRequired=true;}
+ const cached=privateState("/var/lib/remnacust/run/core-state/checkpoint.pb",16*1024*1024+128);
+ if(cached){
+  const global="REMNACUST-CORE-STATE-2-USER-QUOTA\n",legacy="REMNACUST-CORE-STATE-1\n";
+  const header=cached.subarray(0,global.length).toString()===global?global:legacy;
+  const checksum=cached.subarray(header.length,header.length+64).toString(),payload=cached.subarray(header.length+65);
+  if(cached.subarray(0,header.length).toString()!==header||!/^[a-f0-9]{64}$/.test(checksum)||cached[header.length+64]!==10||payload.length>16*1024*1024||require("node:crypto").createHash("sha256").update(payload).digest("hex")!==checksum)process.exit(2);
+  userRequired ||= header===global;
+ }
+}catch{process.exit(2);}
+if(userRequired||policy.userQuota){if(policy.userQuota!==userQuota)process.exit(2);required.push(userQuota);}
+try{fs.lstatSync("/var/lib/remnanode/usage");required.push("remnacust-usage-receipts-v1");}
+catch(error){if(error.code!=="ENOENT")process.exit(2);}
+if(policy.offlineReserves){
+ if(policy.offlineReserves!=="remnacust-quota-reserves-v1")process.exit(3);
+ required.push("remnacust-quota-reserves-v1");
+}
+if(Object.values(policy.groups??{}).some(group=>group?.fenceAll===true||Object.values(group?.fencedOwners??{}).includes(true)))required.push("remnacust-quota-fences-v1");
+if(required.some(marker=>marker===userQuota||marker==="remnacust-usage-receipts-v1"||marker==="remnacust-quota-reserves-v1"))required.push("remnacust-unreserved-usage-v1");
+if(required.length){
+ try{
+  const details=fs.statSync("/usr/local/bin/xray");if(!details.isFile()||details.size>192*1024*1024)process.exit(3);
+  const binary=fs.readFileSync("/usr/local/bin/xray");
+  if(required.some(marker=>!binary.includes(Buffer.from(marker))))process.exit(3);
+ }catch{process.exit(3);}
+}
+'
+}
 install_cli() {
-    # Keep the current OS policy even when an older application release is selected.
-    install -m 0600 "${BASH_SOURCE[0]}" "$WORK/installer-entry.sh"
+    local bin_directory=${1:-/usr/local/bin} cache_directory=${2:-/usr/local/lib/remnacust-installer/helpers} temporary
+    prepare_helpers_install "$cache_directory"
     bash -n "$WORK/installer-entry.sh"
-    install -d -m 0755 /usr/local/lib/remnacust-installer
-    install -m 0755 "$WORK/installer-entry.sh" /usr/local/bin/remnacust
-    install -m 0644 "$SOURCE/installer/runtime.py" /usr/local/lib/remnacust-installer/runtime.py
-    install -m 0644 "$SOURCE/installer/database.cjs" /usr/local/lib/remnacust-installer/database.cjs
-    [[ ! -f $SOURCE/installer/subscription.cjs ]] || install -m 0644 "$SOURCE/installer/subscription.cjs" /usr/local/lib/remnacust-installer/subscription.cjs
-    install -m 0644 "$SOURCE/installer/marzban.py" /usr/local/lib/remnacust-installer/marzban.py
-    [[ ! -f $SOURCE/installer/update-agent.py ]] || install -m 0644 "$SOURCE/installer/update-agent.py" /usr/local/lib/remnacust-installer/update-agent.py
-    local tls_source="${HELPER%/*}/tls.py"
-    [[ -f $tls_source ]] || tls_source="$(dirname "${BASH_SOURCE[0]}")/tls.py"
-    [[ ! -f $tls_source ]] || install -m 0644 "$tls_source" /usr/local/lib/remnacust-installer/tls.py
-    ln -sfn /usr/local/bin/remnacust /usr/local/bin/remnacust-installer
-    ln -sfn /usr/local/bin/remnacust /usr/local/bin/remnacust-setup
+    install -d -m 0755 "$bin_directory"
+    temporary=$(mktemp "$bin_directory/.remnacust.XXXXXXXX")
+    if ! install -m 0755 "$WORK/installer-entry.sh" "$temporary"; then rm -f -- "$temporary"; return 1; fi
+    mv -f -- "$temporary" "$bin_directory/remnacust"
+    ln -sfn "$bin_directory/remnacust" "$bin_directory/remnacust-installer"
+    ln -sfn "$bin_directory/remnacust" "$bin_directory/remnacust-setup"
 }
 configure_panel_updates() {
-    [[ $COMPONENT == panel && -f $SOURCE/installer/update-agent.py ]] || return 0
+    [[ $COMPONENT == panel && -f $HELPER_ROOT/update-agent.py ]] || return 0
     if [[ ! -d /run/systemd/system ]]; then
         info 'Обновление из панели требует systemd; обновление через remnacust доступно'
         return 0
     fi
-    install -d -m 0755 /usr/local/lib/remnacust-installer
-    install -m 0644 "$SOURCE/installer/update-agent.py" /usr/local/lib/remnacust-installer/update-agent.py
-    install -m 0644 "$SOURCE/installer/runtime.py" /usr/local/lib/remnacust-installer/runtime.py
+    prepare_helpers_install
     local target=$1
     local -a options=()
     [[ ! -f $WORK/container.before.json ]] || options+=(--inspect "$WORK/container.before.json")
-    python3 "$SOURCE/installer/update-agent.py" --root "$ROOT" setup --state "$STATE" --compose "$target" "${options[@]}" >> "$LOG" 2>&1
+    python3 -B "$INSTALLED_HELPER_ROOT/update-agent.py" --root "$ROOT" setup --state "$STATE" --compose "$target" "${options[@]}" >> "$LOG" 2>&1
 }
 service_menu() {
     COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
@@ -820,20 +954,25 @@ run_action() {
     if [[ $ACTION == --check-release ]]; then
         for result in curl python3 tar; do command -v "$result" >/dev/null || die "Нужен $result"; done
         [[ -n $VERSION ]] || VERSION=latest
+        installed_helper
         TAG=$(resolve_release); fetch_source
         if [[ -n ${REMNACUST_RELEASE_INFO_FILE:-} ]]; then
-            python3 - "$WORK/source" "$TAG" "$REMNACUST_RELEASE_INFO_FILE" <<'PY'
+            python3 - "$WORK/source" "$TAG" "$REMNACUST_RELEASE_INFO_FILE" "$HELPER_ROOT" "$HELPER_ENTRY" <<'PY'
 import json,sys,os,subprocess
 from pathlib import Path
-source=Path(sys.argv[1]);sys.path.insert(0,str(source/'installer'))
-import runtime
+source=Path(sys.argv[1]);sys.path.insert(0,sys.argv[4])
+import helper_bundle
 lock=json.loads((source/'component-sources.json').read_text())
 entry=os.environ.get('REMNACUST_RELEASE_ENTRY_FILE')
 if entry:
-    script=(source/'installer/installer.sh').read_text()
-    subprocess.run(['bash','-n'],input=script,text=True,check=True)
-    runtime.write(Path(entry),script)
-runtime.write(Path(sys.argv[3]),{'installerVersion':sys.argv[2].removeprefix('v'),'panelVersion':lock['panel']['version']})
+    own=Path(sys.argv[5]).read_bytes();raw=helper_bundle.read(Path(sys.argv[4])/helper_bundle.CONTRACT,32768)
+    files=helper_bundle.read_files(Path(sys.argv[4]),raw)
+    if helper_bundle.version_key(sys.argv[2].removeprefix('v'))>helper_bundle.version_key(helper_bundle.manifest(raw)['version']):
+        own,raw,files=helper_bundle.source_bundle(source)
+    script=helper_bundle.render(own,raw,files)
+    subprocess.run(['bash','-n'],input=script,check=True)
+    Path(entry).write_bytes(script);Path(entry).chmod(0o600)
+Path(sys.argv[3]).write_text(json.dumps({'installerVersion':sys.argv[2].removeprefix('v'),'panelVersion':lock['panel']['version']}))
 PY
         fi
         info "Выпуск $TAG: SHA-256, пути архива и версии проверены"; return 0
@@ -896,7 +1035,7 @@ fetch_source() {
     archive=$(json_value archive)
     download "$(json_value checksums)" "$WORK/SHA256SUMS"
     download "$(json_value source)" "$WORK/$archive"
-    python3 - "$WORK" "$archive" "$REPO" <<'PY'
+    python3 - "$WORK" "$archive" "$REPO" "$HELPER_ROOT/images.py" <<'PY'
 import hashlib,json,pathlib,re,sys,tarfile
 root=pathlib.Path(sys.argv[1]);name=sys.argv[2]
 lines=(root/'SHA256SUMS').read_text().splitlines()
@@ -945,7 +1084,7 @@ for kind in ['panel','node','core']:
     versions[kind]=expected
 if json.load(open(root/'resolved.json'))['kind']=='runtime':
     import subprocess
-    subprocess.run([sys.executable,str(destination/'installer/images.py'),'validate','--root',str(destination),
+    subprocess.run([sys.executable,sys.argv[4],'validate','--root',str(destination),
         '--tag','v'+version,'--assets',str(root/'release.json'),'--repository',sys.argv[3]],check=True)
     (root/'source.sha256').write_text(actual+'\n')
     raise SystemExit(0)
@@ -974,25 +1113,73 @@ release_source() {
     if [[ $ACTION == install-node && -z ${REMNACUST_NODE_SECRET:-} ]]; then
         ask_node_secret || return 1
     fi
+    installed_helper
+    prepare_helpers_install
     TAG=$(resolve_release)
     step "Проверка выпуска $TAG" fetch_source
-    SOURCE="$WORK/source"; HELPER="$SOURCE/installer/runtime.py"
+    SOURCE="$WORK/source"
     bash -n "$SOURCE/installer/installer.sh"
     [[ -f $SOURCE/images.json ]] || die 'В этом старом выпуске нет готовых Docker-образов. Выберите latest; сборка на сервере отключена.'
-    python3 "$SOURCE/installer/images.py" select --root "$SOURCE" --tag "$TAG" --assets "$WORK/release.json" \
+    python3 "$HELPER_ROOT/images.py" select --root "$SOURCE" --tag "$TAG" --assets "$WORK/release.json" \
         --repository "$REPO" --component "$COMPONENT" --architecture "$(dpkg --print-architecture)" > "$WORK/image.json"
     IMAGE=$(image_field image)
     COMPONENT_VERSION=$(image_field version)
 }
 installed_helper() {
-    local location
-    location=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-    if [[ -f $location/runtime.py ]]; then HELPER="$location/runtime.py"
-    else HELPER=/usr/local/lib/remnacust-installer/runtime.py; fi
-    if [[ ! -f $HELPER ]]; then
-        VERSION=${VERSION:-latest}; TAG=$(resolve_release); fetch_source
-        SOURCE="$WORK/source"; HELPER="$SOURCE/installer/runtime.py"
-    fi
+    [[ -z $HELPER_ROOT ]] || return 0
+    HELPER_ROOT=$(python3 -I - "$ENTRY_SCRIPT_PATH" "$WORK" "$HELPER_BUNDLE_SHA256" <<'PY'
+import base64,gzip,hashlib,io,json,pathlib,re,sys,tarfile
+entry=pathlib.Path(sys.argv[1]).resolve();body=entry.read_bytes().replace(b'\r\n',b'\n');work=pathlib.Path(sys.argv[2]);expected=sys.argv[3]
+destination=work/('helpers-'+expected);contract='helper-contract.json';footer=b'\n# REMNACUST_HELPERS_V1\n';cache=pathlib.Path('/usr/local/lib/remnacust-installer/helpers')
+def read(path,limit):
+    if path.is_symlink() or not path.is_file():raise ValueError('not a regular helper')
+    with path.open('rb') as stream:data=stream.read(limit+1)
+    if len(data)>limit:raise ValueError('helper too large')
+    return data.replace(b'\r\n',b'\n')
+def module(raw,code):
+    if hashlib.sha256(raw).hexdigest()!=expected:raise ValueError('helper manifest mismatch')
+    item=json.loads(raw)['files']['helper_bundle.py']
+    if len(code)!=item['bytes'] or hashlib.sha256(code).hexdigest()!=item['sha256']:raise ValueError('helper verifier mismatch')
+    namespace={'__name__':'verified_helper_bundle','__file__':'<verified helper_bundle.py>'}
+    exec(compile(code,namespace['__file__'],'exec'),namespace)
+    return namespace
+def finish(raw,files,verified):
+    verified['snapshot'](body,raw,files,destination)
+    saved=work/('helper-entry-'+expected+'.sh');saved.write_bytes(body);saved.chmod(0o600)
+    print(destination);raise SystemExit(0)
+hints=re.findall(rb'(?m)^# CACHE ([a-f0-9]{64}(?:-[a-f0-9]{32})?)$',body)
+locations=[entry.parent]+([cache/hints[0].decode()] if len(hints)==1 else [])+[cache/expected]
+for location in locations:
+    try:
+        raw=read(location/contract,32768);verified=module(raw,read(location/'helper_bundle.py',2*1024*1024))
+        finish(raw,verified['read_files'](location,raw,source=location==entry.parent and location.name=='installer'),verified)
+    except (OSError,ValueError,KeyError,TypeError):pass
+try:
+    tail=body.split(footer)[1]
+    encoded=b''.join(line[7:] for line in tail.splitlines() if line.startswith(b'# DATA '))
+    if not encoded or len(encoded)>6*1024*1024:raise ValueError('invalid helper payload')
+    with gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode(encoded,validate=True))) as stream:data=stream.read(16*1024*1024+1)
+    if len(data)>16*1024*1024:raise ValueError('helper payload too large')
+    files={}
+    with tarfile.open(fileobj=io.BytesIO(data),mode='r:') as archive:
+        members=archive.getmembers()
+        if len(members)>33:raise ValueError('too many helpers')
+        for member in members:
+            if not member.isfile() or member.size>2*1024*1024 or '/' in member.name or '\\' in member.name or member.name in files:raise ValueError('unsafe helper payload')
+            files[member.name]=archive.extractfile(member).read()
+    raw=files.pop(contract);verified=module(raw,files['helper_bundle.py']);finish(raw,files,verified)
+except Exception:pass
+raise SystemExit('Не найден проверенный комплект помощников этого скрипта. Используйте installer.sh из выпуска или полный каталог исходников; данные не изменены.')
+PY
+    ) || return $?
+    HELPER="$HELPER_ROOT/runtime.py"
+    HELPER_ENTRY="$WORK/helper-entry-$HELPER_BUNDLE_SHA256.sh"
+}
+prepare_helpers_install() {
+    installed_helper
+    [[ -z $INSTALLED_HELPER_ROOT ]] || return 0
+    INSTALLED_HELPER_ROOT=$(python3 -I "$HELPER_ROOT/helper_bundle.py" install --entry "$HELPER_ENTRY" --cohort "$HELPER_ROOT" \
+        --cache-root "${1:-/usr/local/lib/remnacust-installer/helpers}" --output "$WORK/installer-entry.sh")
 }
 lock_operation() {
     command -v flock >/dev/null || die 'Нужен util-linux (flock)'
@@ -1236,6 +1423,7 @@ fresh_files() {
     else
         helper node-env --target "$DEPLOY/.env" --port "$PORT"
         mkdir -p "$DEPLOY/run" "$DEPLOY/logs"
+        install -d -m 0700 "$DEPLOY/state/host-policy" "$DEPLOY/state/core-manager"
     fi
     STATE="$WORK/state.json"
     helper fresh --component "$COMPONENT" --directory "$DEPLOY" --project "$PROJECT" --image "$IMAGE" --domain "$DOMAIN" \
@@ -1264,7 +1452,6 @@ initialize_subscription_page() {
     [[ ! -L $DEPLOY/subscription.env ]] || die 'subscription.env не должен быть символической ссылкой'
     if [[ ! -s $DEPLOY/subscription.env ]]; then
         script="${HELPER%/*}/subscription.cjs"
-        [[ -f $script ]] || script=/usr/local/lib/remnacust-installer/subscription.cjs
         [[ -f $script ]] || die 'Не найден помощник настройки сайта подписки'
         id=$(compose ps --quiet "$(get mainService)"); token_uuid=$(get subscriptionTokenUuid)
         # stdout contains the credential: keep it out of the operation log.
@@ -1280,9 +1467,6 @@ initialize_subscription_page() {
 }
 tls_helper() {
     local script="${HELPER%/*}/tls.py"
-    # A current standalone entry can still install an older component release.
-    [[ -f $script ]] || script="$(dirname "${BASH_SOURCE[0]}")/tls.py"
-    [[ -f $script ]] || script=/usr/local/lib/remnacust-installer/tls.py
     [[ -f $script ]] || die 'В выбранном выпуске нет настройки TLS. Используйте latest.'
     python3 "$script" "$@"
 }
@@ -1642,6 +1826,9 @@ deploy() {
         fi
         backup_current
         configure_panel_updates "$WORK/compose.after.json"
+        if [[ $COMPONENT == node ]]; then
+            helper plan-node-state --source "$WORK/compose.after.json" --inspect "$WORK/container.before.json" --directory "$DEPLOY" --target "$WORK/node-state-plan.json"
+        fi
         # Validate the merged candidate while the original applications run.
         docker compose --project-name "$PROJECT" --project-directory "$DEPLOY" -f "$WORK/compose.after.json" \
             --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.validated.json"
@@ -1657,6 +1844,11 @@ before.pop('x-remnacust-release',None);after.pop('x-remnacust-release',None)
 if before!=after:raise SystemExit('Основной Compose отличается от проверенной конфигурации; обновление остановлено')
 PY
         compose stop "${APPS[@]}"
+        if [[ $COMPONENT == node ]]; then
+            step 'Сохранение настроек ядра и лимитов ноды' helper snapshot-node-state --source "$WORK/node-state-plan.json"
+            helper preserve-node-state-rollback --source "$WORK/node-state-plan.json" --directory "$BACKUP"
+            step 'Совместимость образа ноды с сохранёнными квотами' verify_node_image_policy
+        fi
         if [[ $COMPONENT == panel ]]; then
             # Refresh the dump after all known writers have stopped. Infrastructure stays running.
             step 'Финальная копия PostgreSQL' backup_panel_data
@@ -1684,9 +1876,25 @@ PY
     helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     if [[ $ACTION != install-* ]]; then install_cli; fi
     CHANGED=false; trap - ERR
+    if [[ $ACTION == upgrade-* || $ACTION == migrate-remnawave-* ]]; then
+        cleanup_old_images
+    fi
     completion_summary
     if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
 }
+cleanup_old_images() {
+    local cleaner="$HELPER_ROOT/image_cleanup.py"
+    [[ -f $cleaner ]] || return 0
+    local -a options=(--component "$COMPONENT" --keep "$IMAGE")
+    [[ ! -f $WORK/project-containers.json ]] || options+=(--before "$WORK/project-containers.json")
+    [[ -z $SUBSCRIPTION_IMAGE ]] || options+=(--keep "$SUBSCRIPTION_IMAGE")
+    if python3 "$cleaner" "${options[@]}" >> "$LOG" 2>&1; then
+        info 'Старые образы очищены; текущая и предыдущая версии сохранены'
+    else
+        info 'Обновление готово; очистка образов отложена, подробности в журнале'
+    fi
+}
+
 completion_row() {
     if (($(terminal_width) >= 64)); then
         printf '  %s %s%s%s\n' "$1" "$BOLD" "$2" "$RESET"
@@ -1986,26 +2194,49 @@ restore_panel() {
     [[ -n $BACKUP && -d $BACKUP && ! -L $BACKUP ]] || die 'Укажите --backup с каталогом копии'
     local requested; requested=$(realpath "$BACKUP")
     helper verify-backup --directory "$requested"
-    confirm "Восстановить БД из $requested; текущие данные будут заменены"
     docker inspect "$(compose ps --all --quiet "$(get mainService)")" > "$WORK/container.before.json"
-    IMAGE=$(get image); database_environment; check_writers
+    IMAGE=$(python3 - "$WORK/container.before.json" <<'PY'
+import json,re,sys
+image=json.load(open(sys.argv[1]))[0]['Image']
+if not re.fullmatch(r'sha256:[a-f0-9]{64}',image):raise SystemExit('Не определён установленный образ панели')
+print(image)
+PY
+    )
+    helper_file_copy "$STATE" "$WORK/restore-current-state.json"
+    compose --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/restore-current-compose.json"
+    compose --profile '*' config --no-env-resolution --format json > "$WORK/restore-environment-paths.json"
+    compose --profile '*' config --format json > "$WORK/restore-current-effective.json"
+    helper plan-panel-data-restore --source "$WORK/restore-current-compose.json" --state "$WORK/restore-current-state.json" \
+        --roles "$WORK/restore-current-effective.json" --environment-source "$WORK/restore-environment-paths.json" \
+        --current-inspect "$WORK/container.before.json" --directory "$requested" --image "$IMAGE" \
+        --plan "$WORK/panel-restore-plan.json" --target "$WORK/panel-restore-compose.json"
+    docker compose --project-name "$PROJECT" --project-directory "$DEPLOY" -f "$WORK/panel-restore-compose.json" --profile '*' config --quiet
+    confirm "Восстановить данные и ключи из $requested; установленная версия и подключения сохранятся"
+    database_environment; check_writers
     backup_current; info "Копия текущей БД перед восстановлением: $BACKUP"
     compose stop "${APPS[@]}"
     # Do not start an old panel against a partially restored database on failure.
     CHANGED=true; DB_CHANGED=true; trap recover ERR
-    cp "$requested/container.before.json" "$WORK/container.before.json"; database_environment
+    helper validate-panel-data-restore --source "$WORK/panel-restore-plan.json"
+    python3 - "$WORK/panel-restore-plan.json" "$WORK/database.env" <<'PY'
+import json,pathlib,sys
+values=json.load(open(sys.argv[1]))['database']
+if set(values)!={'DATABASE_URL','APP_SECRET'} or any('\n' in v or '\r' in v for v in values.values()):raise SystemExit('Некорректные данные восстановления')
+pathlib.Path(sys.argv[2]).write_text(''.join(k+'='+v+'\n' for k,v in values.items()))
+PY
     RESTORE_DUMP="$requested/database.dump"
     step 'Восстановление схемы и данных одной транзакцией' restore_dump
+    # Persist the restored signing identity even if a later migration fails.
+    # Creating the API container stopped makes the next backup/restore inspect
+    # the correct key without publishing an API or starting dependent services.
+    helper commit-panel-data-restore --source "$WORK/panel-restore-plan.json" --state "$WORK/panel-restored-state.json"
+    STATE="$WORK/panel-restored-state.json"; load_state
+    helper_file_copy "$STATE" "$ROOT/registry/panel.json"
+    compose up --no-start --no-deps --no-build --pull never "$(get mainService)"
+    refresh_restored_update_identity
     step 'Совместимость восстановленной базы' docker run --rm --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" --entrypoint node "$IMAGE" dist/database-compatibility.js --apply
-    helper restore-compose --directory "$requested"
-    python3 - "$requested" <<'PY'
-import json,pathlib,shutil,sys
-p=pathlib.Path(sys.argv[1]);s=json.load(open(p/'state.before.json'))
-for i,path in enumerate(s['composeFiles']):shutil.copyfile(p/('original-'+str(i)),path)
-for path,name in json.load(open(p/'env-files.json')).items():shutil.copyfile(p/name,path)
-if (p/'environment.before').exists():shutil.copyfile(p/'environment.before',pathlib.Path(s['directory'])/'.env')
-PY
-    STATE="$requested/state.before.json"; load_state
+    step 'Защита резервов после восстановления' quarantine_restored_quotas
+    refresh_restored_subscription_page
     load_restore_apps
     if ((${#START_APPS[@]})); then
         compose up -d --no-deps --no-build --pull never "${START_APPS[@]}"
@@ -2017,6 +2248,44 @@ PY
     if [[ -f $BACKUP/fingerprints.json ]]; then step 'Проверка данных восстановленной панели' verify_database; fi
     helper_file_copy "$STATE" "$ROOT/registry/panel.json"; CHANGED=false; trap - ERR
     info 'Копия восстановлена'
+}
+
+
+refresh_restored_update_identity() {
+    [[ -e $ROOT/update-agent.json || -L $ROOT/update-agent.json ]] || return 0
+    local script="${HELPER%/*}/update-agent.py"
+    [[ -f $script ]] || die 'Не найден помощник обновления панели'
+    docker inspect "$(compose ps --all --quiet "$(get mainService)")" > "$WORK/container.restored.json"
+    python3 "$script" --root "$ROOT" restore-identity --inspect "$WORK/container.restored.json"
+}
+
+refresh_restored_subscription_page() {
+    local count script token_uuid
+    count=$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1])).get("subscriptionServices",[])))' "$WORK/panel-restore-plan.json")
+    [[ $count != 0 ]] || return 0
+    script="${HELPER%/*}/subscription.cjs"
+    [[ -f $script ]] || die 'Не найден помощник настройки сайта подписки'
+    token_uuid=$(get subscriptionTokenUuid)
+    # Credential stdout must never enter the operation log. Provisioning honors
+    # token expiry/scope revocations and does not start the page or API.
+    docker run --rm -i --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" \
+        --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$token_uuid" --entrypoint node "$IMAGE" - \
+        < "$script" > "$WORK/subscription-token.txt"
+    chmod 600 "$WORK/subscription-token.txt"
+    helper restore-panel-subscription-token --plan "$WORK/panel-restore-plan.json" --source "$WORK/subscription-token.txt"
+    rm -f -- "$WORK/subscription-token.txt"
+}
+
+quarantine_restored_quotas() {
+    # Called with all panel writers stopped, after migration and before start.
+    # Existing node reserves keep working; restored SQL cannot mint fresh credit.
+    docker run --rm -i --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" --entrypoint node "$IMAGE" - <<'JS'
+const {spawnSync}=require('node:child_process');const u=new URL(process.env.DATABASE_URL);
+const env={...process.env,PGHOST:u.hostname,PGPORT:u.port||'5432',PGUSER:decodeURIComponent(u.username),PGPASSWORD:decodeURIComponent(u.password),PGDATABASE:decodeURIComponent(u.pathname.slice(1))};
+if(u.searchParams.has('sslmode'))env.PGSSLMODE=u.searchParams.get('sslmode');
+const sql="DO $$ BEGIN IF to_regprocedure('public.xera_quarantine_restored_quotas()') IS NOT NULL THEN PERFORM public.xera_quarantine_restored_quotas(); END IF; END $$";
+const result=spawnSync('psql',['--quiet','--set','ON_ERROR_STOP=on','-c',sql],{env,stdio:'inherit'});process.exit(result.status??1);
+JS
 }
 restore_dump() {
     docker run --rm -i --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" \
@@ -2076,7 +2345,7 @@ migrate_marzban() {
     local output; output="$ROOT/backups/marzban-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     local -a args=(--source-url "$MARZBAN_URL" --destination-url "$DESTINATION_URL" --internal-squad "$INTERNAL_SQUAD" --quota-mode "$QUOTA_MODE" --output "$output")
     $YES && args+=(--yes); $DRY_RUN && args+=(--dry-run); $PRESERVE_SUBHASH && args+=(--preserve-subhash)
-    python3 "$SOURCE/installer/marzban.py" "${args[@]}"
+    python3 "$HELPER_ROOT/marzban.py" "${args[@]}"
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

@@ -66,6 +66,15 @@ def component_files(kind, commit, local_sources):
 
 
 def validate(files, version, versions):
+    namespace = {'__name__': 'release_helper_bundle'}
+    exec(compile(files['installer/helper_bundle.py'], 'installer/helper_bundle.py', 'exec'), namespace)
+    raw_contract = files['installer/helper-contract.json']
+    helpers = {name: files[name if name in {'LICENSE', 'NOTICE.md'} else 'installer/' + name]
+               for name in namespace['manifest'](raw_contract)['files']}
+    if namespace['validate'](files['installer/installer.sh'], raw_contract, helpers)['version'] != version:
+        raise ValueError('Installer helper version mismatch')
+    if namespace['embedded'](files['installer/installer.sh']) is None:
+        raise ValueError('Release installer must carry offline helpers')
     for name, data in files.items():
         path = PurePosixPath(name)
         if any(p in {'.private', '.playwright-cli', 'playwright-report', 'test-results', '.superdesign'}
@@ -135,6 +144,14 @@ def package(root, tag, local_sources=None, check=False):
                 if name in files:
                     raise ValueError('Overlapping source: ' + name)
                 files[name] = data
+    if b'\r' in files['installer/installer.sh']:
+        raise ValueError('Shell script requires LF: installer/installer.sh')
+    helper_namespace = {'__name__': 'release_helper_bundle'}
+    exec(compile(files['installer/helper_bundle.py'], 'installer/helper_bundle.py', 'exec'), helper_namespace)
+    contract = files['installer/helper-contract.json']
+    helpers = {name: files[name if name in {'LICENSE', 'NOTICE.md'} else 'installer/' + name]
+               for name in helper_namespace['manifest'](contract)['files']}
+    files['installer/installer.sh'] = helper_namespace['render'](files['installer/installer.sh'], contract, helpers)
     validate(files, tag[1:], versions)
     if check:
         print(f'PASS {tag}: {len(files)} pinned source files, versions and archive paths')

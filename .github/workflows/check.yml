@@ -5,14 +5,23 @@ permissions:
 jobs:
   installer:
     runs-on: ubuntu-latest
+    env:
+      REMNACUST_NODE_SOURCE: ${{ github.workspace }}/node-repository
     steps:
       - uses: actions/checkout@v4
+      - id: node-source
+        run: python3 -c "import json; print('commit='+json.load(open('component-sources.json'))['node']['commit'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: lottman/Remnacust-node
+          ref: ${{ steps.node-source.outputs.commit }}
+          path: node-repository
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - name: Load Docker test images from public mirror
         run: |
-          for image in alpine:3.22 postgres:18.4; do
+          for image in alpine:3.22 postgres:18.4 node:24.21-trixie-slim; do
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
@@ -21,6 +30,10 @@ jobs:
           REMNACUST_TEST_REAL_COMPOSE: '1'
       - run: bash installer/tests/database-network-docker.sh
       - run: bash installer/tests/net-admin-docker.sh
+      - run: python3 installer/tests/image-cleanup-docker.py
+      - run: sudo python3 installer/tests/node_state_docker.integration.py
+      - run: sudo python3 installer/tests/node_policy_image_docker.integration.py
+      - run: python3 installer/tests/panel_restore_docker.integration.py
       - run: bash tests/database-repair.test.sh
       - run: python3 tests/package-release.test.py
       - run: python3 tests/images.test.py

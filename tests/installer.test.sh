@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/helper_bundle.py" check --root "$root"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_helper_bundle.py"
 bash "$root/installer/tests/bootstrap.sh"
 bash "$root/installer/tests/service-state.sh"
 bash "$root/installer/tests/supported-os.sh"
@@ -21,4 +23,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_completion.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_tls.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_installer.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_compose_upgrade.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_panel_restore.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_node_state.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_node_state_archive.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_node_rollback_workflow.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/tests/update-agent.test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_image_cleanup.py"

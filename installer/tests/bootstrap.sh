@@ -39,11 +39,13 @@ printf '%s\n' "$url" >> "$FIXTURE/requests"
 [[ ${MOCK_FAIL:-false} != true ]] || exit 22
 case "$url" in
     https://api.github.com/repos/lottman/Remnacust-installer/releases/latest|https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v1.1.1) cp "$FIXTURE/release.json" "$out";;
-    https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v1.1.2) cp "$FIXTURE/release-v1.1.2.json" "$out";;
+    https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v*) cp "$FIXTURE/release-${url##*/}.json" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/SHA256SUMS) cp "$FIXTURE/SHA256SUMS-v1.1.2" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/remnacust-source-v1.1.2.tar.gz) cp "$FIXTURE/remnacust-source-v1.1.2.tar.gz" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.1/SHA256SUMS) cp "$FIXTURE/SHA256SUMS" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.1/remnacust-source-v1.1.1.tar.gz) cp "$FIXTURE/remnacust-source-v1.1.1.tar.gz" "$out";;
+    https://github.com/lottman/Remnacust-installer/releases/download/v*/SHA256SUMS) tag=${url%/*}; cp "$FIXTURE/SHA256SUMS-${tag##*/}" "$out";;
+    https://github.com/lottman/Remnacust-installer/releases/download/v*/remnacust-source-v*.tar.gz) cp "$FIXTURE/${url##*/}" "$out";;
     *) exit 22;;
 esac
 MOCK
@@ -140,17 +142,21 @@ grep -qx 'stop api processor scheduler' "$fixture/failure-requests"
 ! grep -q postgres "$fixture/failure-requests"
 pass 'failed migration stops every writer and preserves infrastructure'
 (
- COMPONENT=node; CHANGED=true; DB_CHANGED=false; BACKUP="$fixture/backup"; LOG="$fixture/failure.log"; START_APPS=(node)
+ COMPONENT=node; CHANGED=true; DB_CHANGED=false; BACKUP="$fixture/backup"; LOG="$fixture/failure.log"; APPS=(node); START_APPS=(node)
+ verify_node_image_policy() { printf 'probe\n' >> "$fixture/node-requests"; }
+ wait_ready() { :; }; helper_file_copy() { :; }
  load_state() { :; }; compose() { printf '%s\n' "$*" >> "$fixture/node-requests"; }
  helper() { printf '%s\n' "$*" >> "$fixture/node-requests"; }
  recover
 ) >/dev/null 2>&1 || true
 grep -qx 'up -d --no-deps --no-build --pull never node' "$fixture/node-requests"
-[[ $(head -n 1 "$fixture/node-requests") == "restore-compose --directory $fixture/backup" ]]
+[[ $(sed -n '1p' "$fixture/node-requests") == "stop node" ]]
+[[ $(sed -n '2p' "$fixture/node-requests") == "restore-compose --directory $fixture/backup" ]]
+[[ $(sed -n '3p' "$fixture/node-requests") == probe ]]
 pass 'node rollback restarts original image without pulling or rebuilding'
 (
  COMPONENT=node; CHANGED=true; DB_CHANGED=false; BACKUP="$fixture/backup"; LOG="$fixture/failure.log"; START_APPS=(node)
- helper() { return 1; }; compose() { touch "$fixture/unsafe-restart"; }
+ helper() { return 1; }; compose() { if [[ $1 == up ]]; then touch "$fixture/unsafe-restart"; fi; }
  recover
 ) >/dev/null 2>&1 || true
 [[ ! -f $fixture/unsafe-restart ]]
@@ -182,40 +188,37 @@ pass 'first boot failure retains registry and recovery CLI'
     WORK="$fixture/cli-work"; SOURCE="$fixture/old-source"
     mkdir -p "$WORK" "$SOURCE/installer"
     printf '#!/bin/bash\necho old-installer\n' > "$SOURCE/installer/installer.sh"
-    install() {
-        case "${!#}" in
-            "$WORK/installer-entry.sh") command install "$@";;
-            /usr/local/bin/remnacust) command install -m 0755 "${@: -2:1}" "$fixture/installed-cli";;
-            /usr/local/lib/remnacust-installer*) :;;
-            *) exit 1;;
-        esac
-    }
-    ln() { :; }
-    install_cli
-    cmp "$project/installer.sh" "$fixture/installed-cli"
+    install_cli "$fixture/cli-bin" "$fixture/helper-cache"
+    python3 - "$project" "$fixture/cli-bin/remnacust" <<'PY'
+import sys,pathlib
+sys.path.insert(0,sys.argv[1]);import helper_bundle
+assert helper_bundle.canonical(pathlib.Path(sys.argv[1]+'/installer.sh').read_bytes())==helper_bundle.canonical(pathlib.Path(sys.argv[2]).read_bytes())
+assert helper_bundle.embedded(pathlib.Path(sys.argv[2]).read_bytes()) is not None
+PY
     # Calling the installed entry again must work when its destination already exists.
-    source "$fixture/installed-cli"
+    source "$fixture/cli-bin/remnacust"
     WORK="$fixture/cli-work"; SOURCE="$fixture/old-source"
-    install_cli
-    cmp "$project/installer.sh" "$fixture/installed-cli"
+    install_cli "$fixture/cli-bin" "$fixture/helper-cache"
+    bash -n "$fixture/cli-bin/remnacust"
 )
 pass 'installing an older bundle preserves current CLI policy and supports self-update'
 make_patch_release() {
-    python3 - "$fixture" "$1" "${2:-1.1.1}" <<'PY'
+    python3 - "$fixture" "$1" "${2:-1.1.1}" "${3:-1.1.2}" <<'PY'
 import hashlib,json,pathlib,sys,tarfile
 root=pathlib.Path(sys.argv[1]);source=root/'archive';version=sys.argv[2];panel_version=sys.argv[3]
-(source/'VERSION').write_text('1.1.2\n')
+release_version=sys.argv[4];tag='v'+release_version
+(source/'VERSION').write_text(release_version+'\n')
 (source/'component-sources.json').write_text(json.dumps({kind:{'repository':'lottman/Remnacust-'+kind,'commit':'a'*40,'version':version if kind=='node' else panel_version if kind=='panel' else '1.1.1'} for kind in ['panel','node','core']}))
 for package in ['panel/frontend','panel/backend','subscription-page/frontend','subscription-page/backend']:
     (source/package/'package.json').write_text(json.dumps({'version':panel_version}))
-name='remnacust-source-v1.1.2.tar.gz'
+name='remnacust-source-'+tag+'.tar.gz'
 with tarfile.open(root/name,'w:gz') as archive:archive.add(source,arcname='.')
 digest=hashlib.sha256((root/name).read_bytes()).hexdigest()
-(root/'SHA256SUMS-v1.1.2').write_text(digest+'  '+name+'\n')
-release=dict(tag_name='v1.1.2',draft=False,prerelease=False,assets=[])
-for asset,local in [(name,name),('SHA256SUMS','SHA256SUMS-v1.1.2')]:
-    release['assets'].append(dict(name=asset,state='uploaded',browser_download_url='https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/'+asset,digest='sha256:'+hashlib.sha256((root/local).read_bytes()).hexdigest()))
-(root/'release-v1.1.2.json').write_text(json.dumps(release))
+(root/('SHA256SUMS-'+tag)).write_text(digest+'  '+name+'\n')
+release=dict(tag_name=tag,draft=False,prerelease=False,assets=[])
+for asset,local in [(name,name),('SHA256SUMS','SHA256SUMS-'+tag)]:
+    release['assets'].append(dict(name=asset,state='uploaded',browser_download_url='https://github.com/lottman/Remnacust-installer/releases/download/'+tag+'/'+asset,digest='sha256:'+hashlib.sha256((root/local).read_bytes()).hexdigest()))
+(root/('release-'+tag+'.json')).write_text(json.dumps(release))
 PY
 }
 make_patch_release 1.1.1
@@ -227,14 +230,51 @@ pass 'downloaded source accepts four-part panel and subscription versions'
 mkdir -p "$fixture/control"
 REMNACUST_RELEASE_INFO_FILE="$fixture/control/release.json" REMNACUST_RELEASE_ENTRY_FILE="$fixture/control/installer.sh" \
     bash "$project/installer.sh" --check-release --version 1.1.2 > "$fixture/result"
-cmp "$fixture/archive/installer/installer.sh" "$fixture/control/installer.sh"
-python3 - "$fixture/control" <<'PY'
+python3 - "$fixture/control" "$project" <<'PY'
 import json,pathlib,sys
 root=pathlib.Path(sys.argv[1])
+sys.path.insert(0,sys.argv[2]);import helper_bundle
+assert helper_bundle.canonical((root/'installer.sh').read_bytes())==helper_bundle.canonical(pathlib.Path(sys.argv[2]+'/installer.sh').read_bytes())
+assert helper_bundle.embedded((root/'installer.sh').read_bytes()) is not None
 assert json.loads((root/'release.json').read_text())=={'installerVersion':'1.1.2','panelVersion':'1.1.7.1'}
 assert (root/'installer.sh').stat().st_mode&0o777==0o600
 PY
 pass 'self-update exports the verified installer entry and panel version with private permissions'
+(
+    # The exported entry also works when the old installation has no helper contract.
+    source "$fixture/control/installer.sh"
+    WORK="$fixture/export-work";mkdir -p "$WORK"
+    download(){ echo UNEXPECTED_NETWORK >&2; return 99; }
+    installed_helper; helper --help | grep -q plan-panel-data-restore
+)
+pass 'exported entry carries its restore planner without legacy or online helpers'
+new_version=$(python3 - "$project/../VERSION" <<'PY'
+import pathlib,sys
+major,minor,patch=map(int,pathlib.Path(sys.argv[1]).read_text().strip().split('.'))
+print(f'{major}.{minor}.{patch+1}')
+PY
+)
+python3 - "$project" "$fixture/archive" "$new_version" <<'PY'
+import pathlib,shutil,sys
+sys.path.insert(0,sys.argv[1]);import helper_bundle
+source=pathlib.Path(sys.argv[1]);target=pathlib.Path(sys.argv[2])
+for name in helper_bundle.FILES:
+    shutil.copyfile(source.parent/name if name in {'LICENSE','NOTICE.md'} else source/name,target/name if name in {'LICENSE','NOTICE.md'} else target/'installer'/name)
+(target/'installer/installer.sh').write_bytes((source/'installer.sh').read_bytes()+b'\n# next fixture entry\n')
+(target/'VERSION').write_text(sys.argv[3]+'\n');helper_bundle.sync(target)
+PY
+make_patch_release 1.1.1 1.1.7.1 "$new_version"
+REMNACUST_RELEASE_INFO_FILE="$fixture/control/release.json" REMNACUST_RELEASE_ENTRY_FILE="$fixture/control/installer.sh" \
+    bash "$project/installer.sh" --check-release --version "$new_version" > "$fixture/result"
+python3 - "$project" "$fixture/control/installer.sh" "$new_version" <<'PY'
+import pathlib,sys
+sys.path.insert(0,sys.argv[1]);import helper_bundle
+entry=pathlib.Path(sys.argv[2]).read_bytes();raw,files=helper_bundle.embedded(entry)
+assert helper_bundle.manifest(raw)['version']==sys.argv[3]
+assert b'# next fixture entry' in helper_bundle.code(entry)
+assert helper_bundle.validate(entry,raw,files)
+PY
+pass 'self-update selects the paired entry and complete cohort from a newer release'
 make_patch_release 1.1.1 1.1.7.1.1
 reject 'five-part panel versions remain invalid' bash "$project/installer.sh" --check-release --version 1.1.2
 grep -q 'Неверная версия компонента: panel' "$fixture/result"

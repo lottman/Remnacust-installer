@@ -124,6 +124,18 @@ class ComposeUpgradeTests(unittest.TestCase):
         with self.assertRaises(runtime.ConfigurationError): self.commit()
         self.assertEqual(main.read_text(), 'main'); self.assertEqual(overlay.read_text(), 'unselected')
 
+    def test_next_update_accepts_empty_layer_left_by_previous_consolidation(self):
+        main = self.deployment/'compose.json'; main.write_text('original')
+        overlay = self.deployment/'compose.override.yaml'
+        runtime.write(overlay, {'services': {}})
+        self.setup_config([main], 'panel')
+        self.commit()
+        self.assertEqual(runtime.load(main)['services']['app']['image'], 'new@sha256:'+'a'*64)
+        self.assertEqual(runtime.load(overlay), {'services': {}})
+        runtime.restore_compose(self.backup)
+        self.assertEqual(main.read_text(), 'original')
+        self.assertEqual(runtime.load(overlay), {'services': {}})
+
     def test_tampered_snapshot_does_not_restore_any_files(self):
         main = self.deployment/'compose.json'; main.write_text('original')
         self.setup_config([main]); self.commit()

@@ -10,6 +10,19 @@ import unittest
 
 spec=importlib.util.spec_from_file_location('package_release',Path(__file__).resolve().parents[1]/'scripts/package-source-release.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+helper_spec=importlib.util.spec_from_file_location('helper_bundle',Path(__file__).resolve().parents[1]/'installer/helper_bundle.py')
+helpers=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(helpers)
+
+def fixture_helpers(root):
+    directory=root/'installer';directory.mkdir(parents=True,exist_ok=True)
+    for name in helpers.FILES:
+        path=root/name if name in {'LICENSE','NOTICE.md'} else directory/name
+        if not path.exists():path.write_bytes(b'fixture\n')
+    (directory/'helper_bundle.py').write_bytes(Path(helper_spec.origin).read_bytes())
+    (directory/'installer.sh').write_bytes(b"#!/usr/bin/env bash\nHELPER_BUNDLE_SHA256='"+b'0'*64+b"'\n# fixture\nexit 0\n")
+    helpers.sync(root)
+    entry,raw,files=helpers.source_bundle(root)
+    (directory/'installer.sh').write_bytes(helpers.render(entry,raw,files))
 
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
@@ -30,7 +43,9 @@ class ReleaseTests(unittest.TestCase):
             self.write(directory,files);self.init(directory)
             self.lock[kind]={'repository':module.REPOSITORIES[kind],'commit':self.git(directory,'rev-parse','HEAD').strip()}
         own={'VERSION':'1.1.1\n','LICENSE':'fixture license\n','NOTICE.md':'fixture notice\n','component-sources.json':json.dumps(self.lock),**{'installer/'+p:'fixture\n' for p in ['installer.sh','runtime.py','database.cjs','marzban.py']}}
-        self.write(self.root,own);self.init(self.root);self.git(self.root,'tag','v1.1.1')
+        self.write(self.root,own);fixture_helpers(self.root)
+        self.expected_entry=(self.root/'installer/installer.sh').read_bytes()
+        self.init(self.root);self.git(self.root,'tag','v1.1.1')
     def tearDown(self):self.temp.cleanup()
     def write(self,root,files):
         for name,data in files.items():
@@ -49,7 +64,8 @@ class ReleaseTests(unittest.TestCase):
     def test_untracked_secret_and_local_changes_are_excluded(self):
         self.write(self.root,{'.env':'private','installer/installer.sh':'local change'})
         destination=module.package(self.root,'v1.1.1',self.parent)
-        self.assertEqual((destination/'installer.sh').read_text(),'fixture\n')
+        self.assertEqual((destination/'installer.sh').read_bytes(),self.expected_entry)
+        self.assertIsNotNone(helpers.embedded(self.expected_entry))
     def test_panel_compatibility_is_copied_from_exact_pin(self):
         expected=module.component_files('panel',self.lock['panel']['commit'],self.parent)['docs/COMPATIBILITY.md']
         self.write(self.parent/'Remnacust-panel',{'docs/COMPATIBILITY.md':'uncommitted change\n'})
@@ -65,7 +81,7 @@ class ReleaseTests(unittest.TestCase):
             module.package(self.root,'v1.1.1',self.parent)
     def test_stale_compatibility_is_rejected(self):
         directory=self.parent/'Remnacust-panel'
-        current=(directory/'docs/COMPATIBILITY.md').read_text()
+        current=(directory/'docs/COMPATIBILITY.md').read_text(encoding='utf-8')
         self.write(directory,{'docs/COMPATIBILITY.md':current.replace('1.1.1-remnacust','1.1.0-remnacust')})
         self.git(directory,'add','.');self.git(directory,'commit','-m','Stale compatibility fixture')
         self.lock['panel']['commit']=self.git(directory,'rev-parse','HEAD').strip()
@@ -116,6 +132,7 @@ class ReleaseTests(unittest.TestCase):
     def test_installer_patch_keeps_pinned_application_versions(self):
         for entry in self.lock.values():entry['version']='1.1.1'
         self.write(self.root,{'VERSION':'1.1.2\n','component-sources.json':json.dumps(self.lock)})
+        fixture_helpers(self.root)
         self.retag();self.git(self.root,'tag','v1.1.2')
         module.package(self.root,'v1.1.2',self.parent,check=True)
     def test_incorrect_pinned_version_is_rejected(self):
@@ -141,17 +158,22 @@ class RuntimeFilesTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         tree=ast.parse((Path(__file__).resolve().parents[1]/'scripts/package-docker-release.py').read_text(encoding='utf-8'))
         function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='runtime_files')
-        scope={};exec(compile(ast.Module(body=[function],type_ignores=[]),'runtime_files','exec'),scope)
+        scope={'importlib':importlib};exec(compile(ast.Module(body=[function],type_ignores=[]),'runtime_files','exec'),scope)
         self.read_files=scope['runtime_files']
         self.names=['VERSION','component-sources.json','images.json','LICENSE','NOTICE.md','panel/backend/.env.sample']
-        self.names+=['installer/'+name for name in ['installer.sh','runtime.py','database.cjs','subscription.cjs','marzban.py','images.py','tls.py','update-agent.py','README.md']]
+        self.names+=['installer/'+name for name in ['installer.sh','helper-contract.json','README.md']+list(n for n in helpers.FILES if n not in {'LICENSE','NOTICE.md'})]
         for name in self.names+['installer/debug.txt','installer/backup-password.txt','installer/.private/review.md']:
             path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(name.encode())
+        (self.root/'VERSION').write_text('1.1.1\n')
+        fixture_helpers(self.root)
     def tearDown(self):self.temp.cleanup()
     def test_only_runtime_dependencies_are_included(self):
-        self.assertEqual(self.read_files(self.root),{name:name.encode() for name in self.names})
+        files=self.read_files(self.root)
+        self.assertEqual(set(files),set(self.names))
+        for name in self.names:self.assertEqual(files[name],(self.root/name).read_bytes())
+        self.assertIsNotNone(helpers.embedded(files['installer/installer.sh']))
     def test_missing_runtime_dependency_is_rejected(self):
         (self.root/'installer/tls.py').unlink()
-        with self.assertRaises(FileNotFoundError):self.read_files(self.root)
+        with self.assertRaisesRegex(ValueError,'regular file.*tls.py'):self.read_files(self.root)
 
 if __name__=='__main__':unittest.main()

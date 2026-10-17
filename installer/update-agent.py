@@ -16,7 +16,7 @@ import uuid
 
 import runtime
 
-SCRIPT = '/usr/local/lib/remnacust-installer/update-agent.py'
+SCRIPT = str(Path(__file__).resolve())
 CLI = '/usr/local/bin/remnacust'
 CONTAINER_CONTROL = '/run/remnacust-control'
 SERVICE = 'remnacust-panel-update.service'
@@ -94,12 +94,29 @@ def setup(root, state_path, compose_path, inspection=None):
                                               'targetVersion': None, 'error': None}, mode=0o644)
     quoted_root = json.dumps(str(root)).replace('%', '%%')
     unit = ('[Unit]\nDescription=Remnacust panel updates\nAfter=docker.service\n\n'
-            '[Service]\nType=simple\nExecStart=/usr/bin/python3 ' + SCRIPT + ' --root ' + quoted_root + ' serve\n'
+            '[Service]\nType=simple\nExecStart=/usr/bin/python3 -B ' + json.dumps(SCRIPT).replace('%', '%%') + ' --root ' + quoted_root + ' serve\n'
             'Restart=on-failure\nRestartSec=3\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n')
     runtime.write(UNIT_ROOT / SERVICE, unit, mode=0o644)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
     subprocess.run(['systemctl', 'enable', '--now', SERVICE], check=True)
     subprocess.run(['systemctl', 'restart', SERVICE], check=True)
+
+
+def restore_identity(root, inspection):
+    """Rekey an already configured agent; requests load this token each time."""
+    root = root.resolve()
+    target = root / 'update-agent.json'
+    if target.is_symlink() or (root / 'control').is_symlink():
+        raise UpdateError('UNSAFE_PATH')
+    if not target.exists():
+        return
+    read_json(target)
+    secret = runtime.environment(runtime.inspect_one(inspection)).get('APP_SECRET', '')
+    if not 32 <= len(secret) <= 4096 or any(ch in secret for ch in ['\r', '\n', '\x00']):
+        raise UpdateError('MISSING_SECRET')
+    token = hmac.new(secret.encode(), PURPOSE, hashlib.sha256).hexdigest()
+    runtime.write(target, {'token': token})
+
 
 
 class Agent:
@@ -177,7 +194,7 @@ class Agent:
             try:
                 subprocess.run(['systemd-run', '--quiet', '--collect', '--service-type=exec',
                     '--unit=remnacust-panel-update-' + request, '--property=UMask=0077',
-                    '--property=RuntimeMaxSec=7200', '/usr/bin/python3', SCRIPT,
+                    '--property=RuntimeMaxSec=7200', '/usr/bin/python3', '-B', SCRIPT,
                     '--root', str(self.root), 'worker', '--job', request], check=True, timeout=15)
             except (OSError, subprocess.SubprocessError):
                 state.update(active=False, phase='failed', error='START_FAILED')
@@ -283,13 +300,15 @@ def serve(agent):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path('/opt/remnacust'))
-    parser.add_argument('operation', choices=['serve', 'worker', 'setup'])
+    parser.add_argument('operation', choices=['serve', 'worker', 'setup', 'restore-identity'])
     parser.add_argument('--job'); parser.add_argument('--state'); parser.add_argument('--compose'); parser.add_argument('--inspect')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit('Run the panel update service as root')
     if args.operation == 'setup':
         setup(args.root, args.state, args.compose, args.inspect)
+    elif args.operation == 'restore-identity':
+        restore_identity(args.root, args.inspect)
     elif args.operation == 'worker':
         Agent(args.root).work(args.job)
     else:
