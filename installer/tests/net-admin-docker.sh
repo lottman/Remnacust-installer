@@ -20,6 +20,9 @@ for enabled in false true; do
     [[ $actual == "$enabled" ]]
     echo "PASS panel NET_ADMIN=$enabled is applied by Docker Compose"
 done
+docker compose --project-name "$project" --file "$fixture/compose.json" down --volumes >/dev/null 2>&1
+# Docker would create missing bind parents as root, preventing runner cleanup.
+mkdir -p "$fixture/run" "$fixture/logs" "$fixture/state/host-policy" "$fixture/state/core-manager"
 for enabled in false true; do
     options=()
     if [[ $enabled == false ]]; then options=(--node-no-net-admin); fi
