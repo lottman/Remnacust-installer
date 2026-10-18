@@ -22,6 +22,63 @@ CONTAINER_CONTROL = '/run/remnacust-control'
 SERVICE = 'remnacust-panel-update.service'
 UNIT_ROOT = Path('/etc/systemd/system')
 PURPOSE = b'remnacust-panel-update-v1'
+STAGES = ('checking', 'download', 'preparation', 'backup', 'applying', 'readiness', 'verifying', 'cleanup')
+
+
+def record_progress(root, request, stage, label, event):
+    """Publish bounded step events, never command arguments or raw process output."""
+    request = job_id(request)
+    root = root.resolve()
+    state = read_json(root / 'control/status.json')
+    if state.get('jobId') != request or not state.get('active'):
+        return
+    if stage not in STAGES or event not in ('running', 'done', 'failed'):
+        raise UpdateError('INVALID_PROGRESS')
+    path = root / 'control' / ('progress-' + request + '.json')
+    now = time.time()
+    try:
+        progress = read_json(path)
+    except FileNotFoundError:
+        progress = {'stage': stage, 'stageStartedAt': now, 'events': [], 'durations': {}}
+    previous = progress['stage']
+    # Optional/repeated substeps cannot move the overall operation backwards.
+    if STAGES.index(stage) > STAGES.index(previous):
+        progress['durations'][previous] = max(0, now - progress['stageStartedAt'])
+        progress.update(stage=stage, stageStartedAt=now)
+    label = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', label)[:120]
+    progress['events'] = (progress['events'] + [{'at': now, 'label': label, 'event': event}])[-24:]
+    progress['updatedAt'] = now
+    runtime.write(path, progress, mode=0o644)
+
+
+def update_progress(root, state):
+    request = state.get('jobId')
+    if not request:
+        return None
+    try:
+        progress = read_json(root / 'control' / ('progress-' + job_id(request) + '.json'))
+    except (OSError, ValueError, KeyError):
+        return None
+    now = time.time()
+    index = STAGES.index(progress['stage'])
+    completed = state.get('phase') == 'completed'
+    remaining = None
+    if state.get('active'):
+        try:
+            baseline = read_json(root / 'control/update-timings.json')
+            durations = baseline['durations']
+            if all(stage in durations for stage in STAGES[index:]):
+                remaining = round(max(0, sum(durations[stage] for stage in STAGES[index:]) - (now - progress['stageStartedAt'])))
+                if remaining == 0:
+                    remaining = None  # A slower run must not display a permanent "0 seconds".
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    return {'stage': progress['stage'], 'stageIndex': index + 1, 'stageCount': len(STAGES),
+            'completedStages': len(STAGES) if completed else index,
+            'percent': 100 if completed else round(index * 100 / len(STAGES)),
+            'startedAt': state.get('startedAt'), 'updatedAt': progress['updatedAt'],
+            'elapsedSeconds': round(max(0, (state.get('finishedAt') or now) - state.get('startedAt', now))),
+            'estimatedRemainingSeconds': remaining, 'events': progress['events']}
 
 
 class UpdateError(ValueError):
@@ -149,13 +206,14 @@ class Agent:
                     if lock:
                         state = self.state()
                         if state.get('active') and state.get('jobId') == checked_job:
-                            state.update(active=False, phase='failed', error='INTERRUPTED')
+                            state.update(active=False, phase='failed', error='INTERRUPTED', finishedAt=time.time())
                             self.save(state)
         try:
             current = self.installed()
         except (OSError, ValueError, KeyError):
             current = None
-        return {**state, 'available': current is not None, 'installedVersion': current}
+        return {**state, 'available': current is not None, 'installedVersion': current,
+                'progress': update_progress(self.root, state)}
 
     def lock(self, wait=True):
         class Lock:
@@ -188,6 +246,14 @@ class Agent:
                 raise UpdateError('UPDATE_BUSY')
             if target_parts <= version(self.installed()):
                 raise UpdateError('NOT_NEWER')
+            # One bounded live journal is sufficient; the private raw logs retain history.
+            for previous in self.control.glob('progress-*.json'):
+                try:
+                    job_id(previous.name[len('progress-'):-len('.json')])
+                    if not previous.is_symlink() and previous.is_file():
+                        previous.unlink()
+                except (OSError, ValueError):
+                    pass
             state = {'active': True, 'phase': 'queued', 'jobId': request, 'targetVersion': target,
                      'startedAt': time.time(), 'error': None}
             self.save(state)
@@ -215,10 +281,11 @@ class Agent:
                 log_dir.mkdir(mode=0o700, exist_ok=True)
                 fd = os.open(log_dir / ('panel-update-' + request + '.log'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, 'wb') as log:
-                    env = {**os.environ, 'REMNACUST_ROOT': str(self.root), 'REMNACUST_RELEASE_INFO_FILE': str(info),
+                    env = {**os.environ, 'REMNACUST_ROOT': str(self.root), 'REMNACUST_UPDATE_JOB': request, 'REMNACUST_RELEASE_INFO_FILE': str(info),
                        'REMNACUST_RELEASE_ENTRY_FILE': str(entry)}
                     state['phase'] = 'checking'
                     self.save(state)
+                    record_progress(self.root, request, 'checking', 'Проверка выпуска', 'running')
                     subprocess.run([CLI, '--check-release', '--version', 'latest'], env=env,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, check=True, timeout=900)
                     release = read_json(info)
@@ -235,10 +302,24 @@ class Agent:
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, check=True)
                     if self.installed() != state['targetVersion']:
                         raise UpdateError('VERSION_MISMATCH')
+                    record_progress(self.root, request, 'cleanup', 'Обновление завершено', 'done')
                     state.update(active=False, phase='completed', error=None)
+                    try:
+                        progress = read_json(self.control / ('progress-' + request + '.json'))
+                        progress['durations'][progress['stage']] = max(0, time.time() - progress['stageStartedAt'])
+                        runtime.write(self.control / 'update-timings.json', {'durations': progress['durations']})
+                    except (OSError, ValueError, KeyError):
+                        pass
             except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+                try:
+                    progress = update_progress(self.root, state)
+                    record_progress(self.root, request, progress['stage'] if progress else 'checking',
+                                    'Обновление не завершено', 'failed')
+                except (OSError, ValueError, KeyError):
+                    pass
                 state.update(active=False, phase='failed', error=str(error) if isinstance(error, UpdateError) else 'UPDATE_FAILED')
             finally:
+                state['finishedAt'] = time.time()
                 self.save(state)
                 info.unlink(missing_ok=True)
                 entry.unlink(missing_ok=True)
@@ -300,12 +381,15 @@ def serve(agent):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path('/opt/remnacust'))
-    parser.add_argument('operation', choices=['serve', 'worker', 'setup', 'restore-identity'])
+    parser.add_argument('operation', choices=['serve', 'worker', 'setup', 'restore-identity', 'progress'])
+    parser.add_argument('--stage'); parser.add_argument('--label'); parser.add_argument('--event')
     parser.add_argument('--job'); parser.add_argument('--state'); parser.add_argument('--compose'); parser.add_argument('--inspect')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit('Run the panel update service as root')
-    if args.operation == 'setup':
+    if args.operation == 'progress':
+        record_progress(args.root, args.job, args.stage, args.label, args.event)
+    elif args.operation == 'setup':
         setup(args.root, args.state, args.compose, args.inspect)
     elif args.operation == 'restore-identity':
         restore_identity(args.root, args.inspect)

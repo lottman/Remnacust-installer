@@ -123,11 +123,25 @@ class InputWorkflowTests(unittest.TestCase):
             self.assertNotIn('Добавить NET_ADMIN', output)
 
     def test_node_net_admin_upgrade_preserves_enabled_without_prompt(self):
-        command = 'source "$1"; COMPONENT=node; helper() { printf yes; }; STATE=unused; node_net_admin_wizard unused; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"'
+        command = 'source "$1"; COMPONENT=node; helper() { printf yes; }; node_effective_net_admin() { printf yes; }; STATE=unused; node_net_admin_wizard unused; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"'
         code, output = self.terminal(command, [])
         self.assertEqual(code, 0, output)
         self.assertIn('NET-ADMIN=true', output)
         self.assertNotIn('Добавить NET_ADMIN', output)
+
+    def test_declared_but_missing_node_capability_still_prompts(self):
+        command = 'source "$1"; COMPONENT=node; helper() { printf yes; }; node_effective_net_admin() { printf no; }; STATE=unused; node_net_admin_wizard unused; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"'
+        code, output = self.terminal(command, [('Добавить NET_ADMIN контейнеру ноды? y/n [n]: ', 'y\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('NET-ADMIN=true', output)
+        self.assertIn('не подтверждено', output)
+
+    def test_unattended_node_install_does_not_add_net_admin_without_opt_in(self):
+        command = 'source "$1"; COMPONENT=node; node_net_admin_wizard; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"'
+        result = subprocess.run(['bash', '-c', command, 'test', str(INSTALLER)],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('NET-ADMIN=false', result.stdout)
 
     def test_panel_net_admin_without_terminal_defaults_off_and_old_release_rejects_enable(self):
         command = 'source "$1"; COMPONENT=panel; panel_net_admin_wizard; printf "NET-ADMIN=%s" "$PANEL_NET_ADMIN"'

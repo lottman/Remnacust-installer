@@ -54,6 +54,27 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(agent.UpdateError, 'UPDATE_BUSY'):
             self.agent.start('1.1.7.6', str(uuid.uuid4()))
 
+    def test_progress_is_bounded_monotonic_and_estimate_requires_a_successful_baseline(self):
+        self.start()
+        for index in range(35):
+            agent.record_progress(self.root, self.request, 'download', 'Step ' + str(index), 'running')
+        agent.record_progress(self.root, self.request, 'checking', 'Earlier optional step', 'done')
+        progress = self.agent.status()['progress']
+        self.assertEqual(progress['stage'], 'download')
+        self.assertEqual(len(progress['events']), 24)
+        self.assertIsNone(progress['estimatedRemainingSeconds'])
+        runtime.write(self.root / 'control/update-timings.json', {'durations': dict.fromkeys(agent.STAGES, 30)})
+        self.assertGreater(self.agent.status()['progress']['estimatedRemainingSeconds'], 0)
+        self.assertLess(len(json.dumps(self.agent.status()).encode()), 16384)
+        state = self.agent.state(); state.update(active=False, phase='completed', finishedAt=time.time()); self.agent.save(state)
+        self.assertEqual(self.agent.status()['progress']['percent'], 100)
+        self.assertIsNone(self.agent.status()['progress']['estimatedRemainingSeconds'])
+
+    def test_progress_from_another_job_cannot_replace_current_events(self):
+        self.start()
+        agent.record_progress(self.root, str(uuid.uuid4()), 'download', 'Wrong job', 'running')
+        self.assertIsNone(self.agent.status()['progress'])
+
     def test_no_downgrade_invalid_input_or_uninstalled_panel(self):
         for value in ['1.1.7.4', '1.1.7.3', '1.1.7', '1.1.7.4;id', '../foo', '1.1.7.5-beta', '9' * 200 + '.1.1']:
             with self.assertRaises(agent.UpdateError):
@@ -125,6 +146,7 @@ class UpdateTests(unittest.TestCase):
         self.work(fail=True)
         self.assertEqual(self.agent.state()['phase'], 'failed')
         self.assertEqual(self.agent.state()['error'], 'UPDATE_FAILED')
+        self.assertEqual(self.agent.status()['progress']['events'][-1]['event'], 'failed')
 
     def test_setup_preserves_infrastructure_and_shares_control_with_all_applications(self):
         directory = self.root / 'panel'; directory.mkdir()

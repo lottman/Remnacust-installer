@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "a175f24a403ec30704abec7d8e6ce8e89f27182c2b6e4daddea56ba87da34eee",
+  "entry_sha256": "13903aee2c746400479163a7a7260a340fbe6d0bffed7b4691e1e37010fe763b",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -42,10 +42,10 @@
       "sha256": "5710f5d84736b0b2be369c551ca9acf49d26b58f0381fb99318488b2c409e427"
     },
     "update-agent.py": {
-      "bytes": 14455,
-      "sha256": "bc09c628a0e74fe832aa0308eb5b9967c60806f3f5558ad7b7a3dc3ae6f97ac7"
+      "bytes": 19170,
+      "sha256": "9acb1555bfedc9c7ad3ddea0dcd098f7a0b61cc6136e9903b867e59494c89d1f"
     }
   },
   "schema": 1,
-  "version": "1.2.63"
+  "version": "1.2.64"
 }

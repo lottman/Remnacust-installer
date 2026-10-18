@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='e33e51dcebcd573e91fe9fe87da09f4395d3f67de7d7819796465f15b67231a4'
+HELPER_BUNDLE_SHA256='15dc2290c31ba1e1c8651395ed2003c46ed7f7d314108b21988208dfccf6445a'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -14,7 +14,7 @@ PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP='
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE=''
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
-NODE_NET_ADMIN=true
+NODE_NET_ADMIN=false
 NODE_NET_ADMIN_ADDED=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
@@ -427,9 +427,23 @@ confirm() {
 cleanup() {
     if [[ -n $WORK && -f $WORK/.installer-owned ]]; then rm -rf -- "$WORK"; fi
 }
+report_update_progress() {
+    [[ -n ${REMNACUST_UPDATE_JOB:-} && -n ${HELPER_ROOT:-} ]] || return 0
+    python3 "$HELPER_ROOT/update-agent.py" --root "$ROOT" progress --job "$REMNACUST_UPDATE_JOB" \
+        --stage "$1" --label "$2" --event "$3" >> "$LOG" 2>&1 || true
+}
 step() {
-    local title=$1 pid status=0 i=0 display width; shift
+    local title=$1 pid status=0 i=0 display width stage=preparation; shift
+    case "$1" in
+        fetch_source) stage=checking;;
+        prepare_image|prepare_subscription_image) stage=download;;
+        backup_panel_data) stage=backup;;
+        wait_ready) stage=readiness;;
+        verify_database) stage=verifying;;
+        compose) stage=applying;;
+    esac
     [[ -n $LOG ]] || die 'Не настроен журнал операции'
+    report_update_progress "$stage" "$title" running
     "$@" >> "$LOG" 2>&1 & pid=$!
     local LC_ALL=C.UTF-8
     if [[ -t 1 && -n $ACCENT ]]; then
@@ -445,6 +459,8 @@ step() {
         terminal_text "… $title" '  ' '    '
     fi
     wait "$pid" || status=$?
+    if ((status)); then report_update_progress "$stage" "$title" failed
+    else report_update_progress "$stage" "$title" done; fi
     if ((status)); then printf '%s  × %s · журнал: %s%s\n' "$ROSE" "$title" "$LOG" "$RESET" >&2; return "$status"; fi
     info "✓ $title"
 }
@@ -1344,15 +1360,31 @@ panel_net_admin_wizard() {
     fi
 }
 
+node_effective_net_admin() {
+    local id=${1:-${CONTAINER:-}}
+    if [[ -z ${1:-} && -n ${WORK:-} && -f $WORK/container.before.json ]]; then
+        id=$(python3 -c 'import json,sys;v=json.load(open(sys.argv[1]));print((v[0] if isinstance(v,list) else v).get("Id",""))' "$WORK/container.before.json") || return 1
+    fi
+    [[ -n $id ]] || return 1
+    # Read the effective capability of an actual process in this container.
+    timeout 10 docker exec "$id" node -e 'const fs=require("node:fs");const m=fs.readFileSync("/proc/self/status","utf8").match(/^CapEff:\s*([a-f0-9]+)/mi);if(!m)process.exit(2);process.stdout.write((BigInt("0x"+m[1])&(1n<<12n))!==0n?"yes":"no")' 2>/dev/null
+}
 node_net_admin_wizard() {
     [[ $COMPONENT == node ]] || return 0
-    local choice enabled=no
+    local choice enabled=no effective=unknown
     if [[ -n ${1:-} ]]; then
         enabled=$(helper node-capability --source "$1" --state "$STATE")
-        if [[ $enabled == yes ]]; then
-            info 'NET_ADMIN уже включён у ноды — сохраняем без повторного вопроса.'
+        effective=$(node_effective_net_admin) || effective=unknown
+        if [[ $effective == yes ]]; then
+            if [[ $enabled != yes ]]; then
+                helper node-capability --source "$1" --state "$STATE" --key enable >/dev/null
+            fi
+            info 'NET_ADMIN подтверждён в контейнере ноды — сохраняем без повторного вопроса.'
             NODE_NET_ADMIN=true
             return 0
+        fi
+        if [[ $enabled == yes ]]; then
+            info 'NET_ADMIN указан в Compose, но фактическое право контейнера не подтверждено.'
         fi
         NODE_NET_ADMIN=false
     fi
@@ -1853,7 +1885,10 @@ deploy() {
             database_environment; check_writers
             step 'Проверка истории миграций и исходных ключей' database_run preflight
         fi
+        report_update_progress preparation 'Проверка текущей установки' done
+        report_update_progress backup 'Резервная копия текущей установки' running
         backup_current
+        report_update_progress backup 'Резервная копия текущей установки' done
         configure_panel_updates "$WORK/compose.after.json"
         if [[ $COMPONENT == node ]]; then
             helper plan-node-state --source "$WORK/compose.after.json" --inspect "$WORK/container.before.json" --directory "$DEPLOY" --target "$WORK/node-state-plan.json"
@@ -1861,6 +1896,7 @@ deploy() {
         # Validate the merged candidate while the original applications run.
         docker compose --project-name "$PROJECT" --project-directory "$DEPLOY" -f "$WORK/compose.after.json" \
             --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.validated.json"
+        report_update_progress applying 'Применение Compose и обновление приложений' running
         CHANGED=true
         helper commit-compose --source "$WORK/compose.after.json" --state "$STATE" --directory "$BACKUP" \
             --version "${COMPONENT_VERSION:-${TAG#v}}" --key "$TAG"
@@ -1888,6 +1924,13 @@ PY
         step 'Запуск обновлённых приложений' compose up -d --no-deps --no-build --pull never "${START_APPS[@]}"
     fi
     step 'Проверка готовности приложений' wait_ready
+    if [[ $COMPONENT == node ]] && $NODE_NET_ADMIN; then
+        local actual_capability
+        actual_capability=$(node_effective_net_admin "$(compose ps --all --quiet "$(get mainService)")") || actual_capability=unknown
+        if [[ $actual_capability != yes ]]; then
+            info 'NET_ADMIN запрошен в Compose, но после запуска не подтверждён. Сетевые функции могут быть ограничены настройками хоста.'
+        fi
+    fi
     if [[ $ACTION == install-panel ]] && $SUBSCRIPTION_PAGE; then
         step 'Подключение сайта подписки' initialize_subscription_page
         START_APPS+=(remnawave-subscription-page)
@@ -1914,14 +1957,17 @@ PY
     if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
 }
 cleanup_old_images() {
+    report_update_progress cleanup 'Очистка старых образов' running
     local cleaner="$HELPER_ROOT/image_cleanup.py"
     [[ -f $cleaner ]] || return 0
     local -a options=(--component "$COMPONENT" --keep "$IMAGE")
     [[ ! -f $WORK/project-containers.json ]] || options+=(--before "$WORK/project-containers.json")
     [[ -z $SUBSCRIPTION_IMAGE ]] || options+=(--keep "$SUBSCRIPTION_IMAGE")
     if python3 "$cleaner" "${options[@]}" >> "$LOG" 2>&1; then
+        report_update_progress cleanup 'Очистка старых образов' done
         info 'Старые образы очищены; текущая и предыдущая версии сохранены'
     else
+        report_update_progress cleanup 'Очистка образов отложена; обновление завершено' done
         info 'Обновление готово; очистка образов отложена, подробности в журнале'
     fi
 }
