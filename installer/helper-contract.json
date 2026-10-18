@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "59a1b37d4d07e94b2026816aa01e574149a64851bad83822c67b49a38a0d7370",
+  "entry_sha256": "a175f24a403ec30704abec7d8e6ce8e89f27182c2b6e4daddea56ba87da34eee",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -30,8 +30,8 @@
       "sha256": "2d5f3bbba656c009fe9f2472fc10f44f85ce7a70799fffb9a929784836e40262"
     },
     "runtime.py": {
-      "bytes": 66579,
-      "sha256": "d5a9a1ad8a2335eceea8472e8a3ab10453a6d47ff4e85817ceb25c9f042c964e"
+      "bytes": 67922,
+      "sha256": "fceb4fce13c69936e91f19ec51a7aae6b9a916edbc16a8217ae05d7ab95615cb"
     },
     "subscription.cjs": {
       "bytes": 2017,
@@ -47,5 +47,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.59"
+  "version": "1.2.60"
 }

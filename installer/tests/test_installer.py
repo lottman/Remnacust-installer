@@ -18,6 +18,17 @@ import marzban
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_node_net_admin_can_be_declined_and_compare_only_allows_requested_capability(self):
+        config, _ = runtime.fresh('node', '/opt/test', 'test-node', 'app', node_net_admin=False)
+        self.assertEqual(config['services']['remnanode']['cap_add'], [])
+        before = {'Config': {'Env': ['SECRET_KEY=kept']}, 'HostConfig': {'CapAdd': ['SYS_NICE'], 'CapDrop': ['NET_ADMIN']}}
+        after = copy.deepcopy(before)
+        after['HostConfig'].update(CapAdd=['SYS_NICE', 'NET_ADMIN'], CapDrop=[])
+        with self.assertRaises(runtime.ConfigurationError): runtime.compare_environment(before, after)
+        runtime.compare_environment(before, after, allow_net_admin=True)
+        after['HostConfig']['CapAdd'].append('SYS_ADMIN')
+        with self.assertRaises(runtime.ConfigurationError): runtime.compare_environment(before, after, allow_net_admin=True)
+
     def test_node_upgrade_preserves_list_environment_without_resolving_values(self):
         old = {'services': {'remnanode': {'image': 'remnacust-node:1.1.1',
             'environment': ['SECRET_KEY=original==', 'NODE_PORT=72', 'TOKEN=${KEEP_LITERAL}', 'FROM_HOST', 'EMPTY=', 'TOKEN=last=value'],

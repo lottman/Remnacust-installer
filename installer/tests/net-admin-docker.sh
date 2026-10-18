@@ -20,3 +20,14 @@ for enabled in false true; do
     [[ $actual == "$enabled" ]]
     echo "PASS panel NET_ADMIN=$enabled is applied by Docker Compose"
 done
+for enabled in false true; do
+    options=()
+    if [[ $enabled == false ]]; then options=(--node-no-net-admin); fi
+    python3 "$root/installer/runtime.py" fresh --component node --directory "$fixture" \
+        --project "$project" --image alpine:3.22 \
+        --target "$fixture/compose.json" --state "$fixture/state.json" "${options[@]}"
+    actual=$(docker compose --project-name "$project" --file "$fixture/compose.json" run --rm --no-deps \
+        --entrypoint sh remnanode -c 'cap=$(awk "/^CapEff:/ {print \$2}" /proc/self/status); if [ "$((0x$cap & 4096))" -ne 0 ]; then echo true; else echo false; fi')
+    [[ $actual == "$enabled" ]]
+    echo "PASS node NET_ADMIN=$enabled is applied by Docker Compose"
+done

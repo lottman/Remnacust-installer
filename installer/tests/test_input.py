@@ -103,11 +103,31 @@ class InputWorkflowTests(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertIn('NET-ADMIN=' + enabled, output)
             self.assertNotIn('Добавить NET_ADMIN', output)
-        for args in ['install-node --net-admin', 'upgrade-panel --net-admin',
+        for args in ['upgrade-panel --net-admin',
                      'migrate-remnawave-panel --no-net-admin', 'install-panel --net-admin --no-net-admin']:
             code, output = self.terminal(f'source "$1"; parse_args {args}; printf UNEXPECTED-ACTION', [])
             self.assertNotEqual(code, 0, output)
             self.assertNotIn('UNEXPECTED-ACTION', output)
+
+    def test_node_net_admin_prompt_and_explicit_flags(self):
+        for reply, enabled in [('y\n', 'true'), ('n\n', 'false'), ('\n', 'false')]:
+            command = 'source "$1"; COMPONENT=node; node_net_admin_wizard; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"'
+            code, output = self.terminal(command, [('Добавить NET_ADMIN контейнеру ноды? y/n [n]: ', reply)])
+            self.assertEqual(code, 0, output)
+            self.assertIn('NET-ADMIN=' + enabled, output)
+        for flag, enabled in [('--net-admin', 'true'), ('--no-net-admin', 'false')]:
+            command = f'source "$1"; parse_args install-node {flag}; COMPONENT=node; node_net_admin_wizard; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"'
+            code, output = self.terminal(command, [])
+            self.assertEqual(code, 0, output)
+            self.assertIn('NET-ADMIN=' + enabled, output)
+            self.assertNotIn('Добавить NET_ADMIN', output)
+
+    def test_node_net_admin_upgrade_preserves_enabled_without_prompt(self):
+        command = 'source "$1"; COMPONENT=node; helper() { printf yes; }; STATE=unused; node_net_admin_wizard unused; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"'
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('NET-ADMIN=true', output)
+        self.assertNotIn('Добавить NET_ADMIN', output)
 
     def test_panel_net_admin_without_terminal_defaults_off_and_old_release_rejects_enable(self):
         command = 'source "$1"; COMPONENT=panel; panel_net_admin_wizard; printf "NET-ADMIN=%s" "$PANEL_NET_ADMIN"'

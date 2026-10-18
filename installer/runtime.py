@@ -746,7 +746,7 @@ def nginx_config(hostname):
 '''
 
 
-def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010', panel_net_admin=False):
+def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010', panel_net_admin=False, node_net_admin=True):
     if panel_net_admin and component != 'panel':
         fail('Выбор NET_ADMIN панели доступен только для новой панели')
     directory = Path(directory).resolve()
@@ -795,7 +795,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
     else:
         main = 'remnanode'
         app = dict(common, image=image, network_mode='host', env_file=[str(directory / '.env')],
-                   cap_add=['NET_ADMIN'], volumes=[str(directory / 'run') + ':/var/lib/remnacust/run', str(directory / 'logs') + ':/var/log/supervisor',
+                   cap_add=['NET_ADMIN'] if node_net_admin else [], volumes=[str(directory / 'run') + ':/var/lib/remnacust/run', str(directory / 'logs') + ':/var/log/supervisor',
                    str(directory / 'state/host-policy') + ':/var/lib/remnanode', str(directory / 'state/core-manager') + ':/var/lib/remnawave/core-manager'])
         services = {main: app}
         extras = []
@@ -823,7 +823,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
     return result, state
 
 
-def compare_environment(before, after):
+def compare_environment(before, after, allow_net_admin=False):
     old, new = environment(before), environment(after)
     for key in old:
         if key.startswith(('APP_', 'JWT_', 'POSTGRES_', 'REDIS_', 'HWID_', 'METRICS_', 'WEBHOOK_')) or key in {'DATABASE_URL', 'DIRECT_URL', 'FRONT_END_DOMAIN', 'SUB_PUBLIC_DOMAIN', 'SECRET_KEY', 'NODE_PORT', 'INSTANCE_TYPE'}:
@@ -850,6 +850,13 @@ def compare_environment(before, after):
     if old_mounts != new_mounts:
         fail('Изменились тома приложения')
     for name in ['NetworkMode', 'PortBindings', 'CapAdd', 'CapDrop', 'Privileged']:
+        if allow_net_admin and name in ('CapAdd', 'CapDrop'):
+            caps = lambda container: {str(cap).upper().removeprefix('CAP_') for cap in (container.get('HostConfig', {}).get(name) or [])}
+            old_caps, new_caps = caps(before), caps(after)
+            if name == 'CapAdd' and new_caps == old_caps | {'NET_ADMIN'}:
+                continue
+            if name == 'CapDrop' and new_caps == old_caps - {'NET_ADMIN'}:
+                continue
         if before.get('HostConfig', {}).get(name) != after.get('HostConfig', {}).get(name):
             fail('Изменился HostConfig: ' + name)
 
@@ -1041,7 +1048,7 @@ def snapshot_node_state(plan, run=subprocess.run, copy_state=copy_node_state_arc
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token'])
+    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
@@ -1049,13 +1056,24 @@ def main():
     parser.add_argument('--plan'); parser.add_argument('--current-inspect'); parser.add_argument('--environment-source')
     parser.add_argument('--network', default='')
     parser.add_argument('--panel-net-admin', action='store_true')
+    parser.add_argument('--node-no-net-admin', action='store_true')
     parser.add_argument('--domain', default=''); parser.add_argument('--port', default='3000')
     parser.add_argument('--subscription-urls', default='')
     parser.add_argument('--subscription-image', default=''); parser.add_argument('--subscription-port', default='3010')
     parser.add_argument('--proxy', choices=['caddy', 'existing'], default='caddy')
     parser.add_argument('--node-domain', default=''); parser.add_argument('--key'); parser.add_argument('--version')
     args = parser.parse_args()
-    if args.operation == 'hash-backup':
+    if args.operation == 'node-capability':
+        config = load(args.source)
+        service = config['services'][load(args.state)['mainService']]
+        enabled = any(str(cap).upper().removeprefix('CAP_') in ('NET_ADMIN', 'ALL') for cap in service.get('cap_add', [])) or service.get('privileged') is True
+        if args.key == 'enable' and not enabled:
+            service.setdefault('cap_add', []).append('NET_ADMIN')
+            service['cap_drop'] = [cap for cap in service.get('cap_drop', []) if str(cap).upper().removeprefix('CAP_') != 'NET_ADMIN']
+            write(args.source, config)
+            enabled = True
+        print('yes' if enabled else 'no')
+    elif args.operation == 'hash-backup':
         backup_hashes(args.directory)
     elif args.operation == 'plan-node-state':
         config = load(args.source)
@@ -1113,10 +1131,10 @@ def main():
         write(p/'nginx.conf', nginx_config(args.domain))
         write(p/'www/index.html', '<!doctype html><html lang="en"><meta charset="utf-8"><title>Service</title><p>Service is available.</p></html>\n', mode=0o644)
     elif args.operation == 'fresh':
-        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port, args.panel_net_admin)
+        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port, args.panel_net_admin, not args.node_no_net_admin)
         write(args.target, config); write(args.state, state)
     elif args.operation == 'compare':
-        compare_environment(inspect_one(args.source), inspect_one(args.inspect))
+        compare_environment(inspect_one(args.source), inspect_one(args.inspect), args.key == 'net-admin-added')
         print('Секреты, порты и тома приложения сохранены')
     elif args.operation == 'validate':
         if args.domain: domain(args.domain)

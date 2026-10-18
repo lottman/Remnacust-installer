@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='40da716fb8109b0aa3df79625edde187c18109dc4fb6331350a6ac4982589701'
+HELPER_BUNDLE_SHA256='72d4b5a3a8b680afd17468b3ea6fcfbe13530f3657118bba32782d136faa4af1'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -14,6 +14,8 @@ PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP='
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE=''
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
+NODE_NET_ADMIN=true
+NODE_NET_ADMIN_ADDED=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
@@ -113,8 +115,8 @@ Remnacust · installer.sh
   --container NAME          Контейнер приложения при миграции
   --project-name NAME       Имя новой установки Compose
   --domain DOMAIN           Домен новой панели
-  --net-admin               Добавить NET_ADMIN только контейнеру новой панели
-  --no-net-admin            Установить новую панель без NET_ADMIN (по умолчанию)
+  --net-admin               Добавить NET_ADMIN новой панели или устанавливаемой/обновляемой ноде
+  --no-net-admin            Новая панель/нода без NET_ADMIN; при обновлении включённое право сохраняется
   --subscription-urls URLS  Один или два адреса сайта подписки через запятую; первый — основной
   --subscription-page       Установить сайт подписки вместе с новой панелью
   --no-subscription-page    Оставить подписки через панель / указанный внешний сайт
@@ -302,7 +304,7 @@ parse_args() {
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
     [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
     [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна только для новой панели'
-    [[ -z $ACTION || $ACTION == install-panel || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны только для новой панели'
+    [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
     [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
@@ -1331,7 +1333,7 @@ panel_net_admin_wizard() {
     [[ $COMPONENT == panel ]] || return 0
     if [[ -t 0 ]] && ! $PANEL_NET_ADMIN_SET; then
         info 'NET_ADMIN разрешает управление сетью внутри контейнера панели.'
-        info 'Для закрытия соединений и nftables это право требуется на нодах; у новых нод оно уже включено.'
+        info 'Для закрытия соединений и nftables это право требуется на нодах; при установке ноды можно выбрать его отдельно.'
         local choice
         choice=$(ask_yes_no 'Добавить NET_ADMIN контейнеру панели?') || return $?
         PANEL_NET_ADMIN=false; [[ $choice != yes ]] || PANEL_NET_ADMIN=true
@@ -1339,6 +1341,31 @@ panel_net_admin_wizard() {
     fi
     if $PANEL_NET_ADMIN && ! python3 "$HELPER" --help | grep -q -- '--panel-net-admin'; then
         die 'Этот выпуск не поддерживает выбор NET_ADMIN панели. Выберите latest.'
+    fi
+}
+
+node_net_admin_wizard() {
+    [[ $COMPONENT == node ]] || return 0
+    local choice enabled=no
+    if [[ -n ${1:-} ]]; then
+        enabled=$(helper node-capability --source "$1" --state "$STATE")
+        if [[ $enabled == yes ]]; then
+            info 'NET_ADMIN уже включён у ноды — сохраняем без повторного вопроса.'
+            NODE_NET_ADMIN=true
+            return 0
+        fi
+        NODE_NET_ADMIN=false
+    fi
+    if $PANEL_NET_ADMIN_SET; then
+        NODE_NET_ADMIN=$PANEL_NET_ADMIN
+    elif [[ -t 0 ]]; then
+        info 'NET_ADMIN нужен для сетевых ограничений и принудительного закрытия соединений. Без него эти возможности ограничены.'
+        choice=$(ask_yes_no 'Добавить NET_ADMIN контейнеру ноды?') || return $?
+        NODE_NET_ADMIN=false; [[ $choice != yes ]] || NODE_NET_ADMIN=true
+    fi
+    if [[ -n ${1:-} ]] && $NODE_NET_ADMIN; then
+        helper node-capability --source "$1" --state "$STATE" --key enable >/dev/null
+        NODE_NET_ADMIN_ADDED=true
     fi
 }
 
@@ -1378,6 +1405,7 @@ fresh_files() {
     local -a subscription_options=()
     local -a capability_options=()
     if [[ $COMPONENT == panel ]] && $PANEL_NET_ADMIN; then capability_options=(--panel-net-admin); fi
+    if [[ $COMPONENT == node ]] && ! $NODE_NET_ADMIN; then capability_options=(--node-no-net-admin); fi
     [[ $COMPONENT != panel || -z $SUBSCRIPTION_URLS ]] || subscription_options=(--subscription-urls "$SUBSCRIPTION_URLS")
     if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then
         subscription_options+=(--subscription-image "$SUBSCRIPTION_IMAGE" --subscription-port "$SUBSCRIPTION_PORT")
@@ -1761,7 +1789,7 @@ node_acl() {
     else info "UFW не активен. Разрешите TCP $PORT только от $PANEL_IP в firewall провайдера"; fi
 }
 deploy() {
-    [[ $ACTION == install-panel || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны только для новой панели'
+    [[ $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
     [[ $ACTION == install-* || -z $PORT ]] || die '--port задаёт порт новой установки. Обновление и миграция сохраняют фактический порт существующего контейнера.'
     if [[ $ACTION == install-* ]]; then
         info "$ACTION · новая установка $COMPONENT"
@@ -1775,7 +1803,7 @@ deploy() {
     trap recover ERR
     release_source
     if [[ $ACTION == install-* ]]; then
-        if [[ $COMPONENT == panel ]]; then panel_net_admin_wizard; fi
+        if [[ $COMPONENT == panel ]]; then panel_net_admin_wizard; else node_net_admin_wizard; fi
         if [[ $COMPONENT == panel ]]; then subscription_wizard; fi
         if [[ $COMPONENT == panel ]]; then PORT=${PORT:-3000}; else PORT=${PORT:-2222}; fi
         local -a installation_validation=(--domain "$DOMAIN" --node-domain "$NODE_DOMAIN" --port "$PORT" --project "${PROJECT:-remnacust-$COMPONENT}")
@@ -1820,6 +1848,7 @@ deploy() {
             ((${#detected[@]} != 1)) || CONTAINER=${detected[0]}
         fi
         find_existing
+        if [[ $COMPONENT == node ]]; then node_net_admin_wizard "$WORK/compose.after.json"; fi
         if [[ $COMPONENT == panel ]]; then
             database_environment; check_writers
             step 'Проверка истории миграций и исходных ключей' database_run preflight
@@ -1869,7 +1898,9 @@ PY
     fi
     if [[ $ACTION != install-* ]]; then
         docker inspect "$(compose ps --all --quiet "$(get mainService)")" > "$WORK/container.after.json"
-        helper compare --source "$WORK/container.before.json" --inspect "$WORK/container.after.json"
+        local -a compare_options=()
+        if [[ $COMPONENT == node ]] && $NODE_NET_ADMIN_ADDED; then compare_options=(--key net-admin-added); fi
+        helper compare --source "$WORK/container.before.json" --inspect "$WORK/container.after.json" "${compare_options[@]}"
         if [[ $COMPONENT == panel ]]; then step 'Проверка сохранности данных' verify_database; fi
     fi
     helper record --state "$STATE" --version "${COMPONENT_VERSION:-${TAG#v}}" --image "$IMAGE" --running "${START_APPS[@]}"
