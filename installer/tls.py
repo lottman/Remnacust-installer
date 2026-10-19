@@ -12,10 +12,10 @@ import tempfile
 from runtime import domain, subscription_domains, write
 
 
-def openssl(*args, data=None):
+def openssl(*args, data=None, failure_message='Некорректный PEM, зашифрованный ключ или ошибка проверки сертификата'):
     result = subprocess.run(['openssl', *args], input=data, capture_output=True, timeout=15)
     if result.returncode:
-        raise ValueError('Некорректный PEM, зашифрованный ключ или ошибка проверки сертификата')
+        raise ValueError(failure_message)
     return result.stdout
 
 
@@ -30,11 +30,13 @@ def certificate_pair(hostname, certificate, key, subscriptions=''):
     # Read once so validation and subsequent copying use exactly the same pair.
     cert_data, key_data = cert.read_bytes(), private.read_bytes()
     openssl('x509', '-noout', '-checkend', '86400', data=cert_data)
-    # OpenSSL checkhost prints a mismatch but can return success: inspect its result too.
-    if b'does match certificate' not in openssl('x509', '-noout', '-checkhost', hostname, data=cert_data):
+    # OpenSSL versions differ in mismatch exit status; reject nonzero status and mismatch output.
+    if b'does match certificate' not in openssl('x509', '-noout', '-checkhost', hostname, data=cert_data,
+                                                failure_message='Сертификат выдан для другого домена'):
         raise ValueError('Сертификат выдан для другого домена')
     for host in subscription_domains(subscriptions, hostname) if subscriptions else []:
-        if b'does match certificate' not in openssl('x509', '-noout', '-checkhost', host, data=cert_data):
+        if b'does match certificate' not in openssl('x509', '-noout', '-checkhost', host, data=cert_data,
+                                                    failure_message='Сертификат должен покрывать все домены сайта подписки'):
             raise ValueError('Сертификат должен покрывать все домены сайта подписки')
     import ssl
     from datetime import datetime, timezone

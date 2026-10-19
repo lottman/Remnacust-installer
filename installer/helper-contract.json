@@ -38,8 +38,8 @@
       "sha256": "a2aa81068d33d6f551c9fe1b616527165814d9fd485dbfe34306ad21a05d6c6c"
     },
     "tls.py": {
-      "bytes": 9139,
-      "sha256": "5710f5d84736b0b2be369c551ca9acf49d26b58f0381fb99318488b2c409e427"
+      "bytes": 9486,
+      "sha256": "d1971f0bfc795b125ab4ccc3edfbba70cf8db6ba3f4d2eab99dc7934acb60730"
     },
     "update-agent.py": {
       "bytes": 19170,
@@ -47,5 +47,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.65"
+  "version": "1.2.66"
 }

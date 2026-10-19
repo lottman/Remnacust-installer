@@ -36,6 +36,21 @@ class CertificateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tls.certificate_pair('other.example.com', self.cert, self.key)
 
+    def test_checkhost_mismatch_is_rejected_with_both_openssl_exit_behaviors(self):
+        tls.copy_pair('edge.example.com', self.cert, self.key, self.root)
+        previous = (self.root/'certs/fullchain.pem').read_bytes()
+        original_run = subprocess.run
+        for status in (0, 1):
+            def run(args, **kwargs):
+                if '-checkhost' in args and args[-1] == 'sub.example.com':
+                    return subprocess.CompletedProcess(args, status,
+                        stdout=b'Hostname sub.example.com does NOT match certificate\n', stderr=b'')
+                return original_run(args, **kwargs)
+            with self.subTest(status=status), patch.object(tls.subprocess, 'run', run):
+                with self.assertRaisesRegex(ValueError, 'все домены'):
+                    tls.copy_pair('edge.example.com', self.cert, self.key, self.root, 'sub.example.com')
+            self.assertEqual((self.root/'certs/fullchain.pem').read_bytes(), previous)
+
     def test_wrong_private_key_preserves_old_pair(self):
         tls.copy_pair('edge.example.com', self.cert, self.key, self.root)
         before = (self.root/'certs/privkey.pem').read_bytes()
