@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='a5ce1f05a9ad42268bbbcd41205a1ab3ddd5a5697396d67e46a5d98affd62bac'
+HELPER_BUNDLE_SHA256='b359c41471b40205a197e494e6413d98290ae82ce125c42225a43ffe76254867'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -1017,7 +1017,7 @@ PY
 
 resolve_release() {
     local endpoint
-    if [[ $VERSION == latest ]]; then endpoint=latest
+    if [[ $VERSION == latest ]]; then endpoint="latest?remnacust_check=$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
     else endpoint="tags/v${VERSION#v}"; fi
     download "https://api.github.com/repos/$REPO/releases/$endpoint" "$WORK/release.json" ||
         die "Релиз $VERSION недоступен в GitHub ($REPO). Проверьте публикацию релиза и сеть. Установка не изменена."

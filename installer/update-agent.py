@@ -13,6 +13,7 @@ import socketserver
 import subprocess
 import time
 import uuid
+from urllib.request import Request, urlopen
 
 import runtime
 
@@ -83,6 +84,31 @@ def update_progress(root, state):
 
 class UpdateError(ValueError):
     pass
+
+
+def latest_installer_release():
+    """Resolve mutable Latest once, then let the CLI verify that exact tag."""
+    repository = os.environ.get('REMNACUST_REPOSITORY', 'lottman/Remnacust-installer')
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+        raise UpdateError('INVALID_RELEASE')
+    request = Request(
+        f'https://api.github.com/repos/{repository}/releases/latest?remnacust_check={uuid.uuid4().hex}',
+        headers={'Accept': 'application/vnd.github+json', 'Cache-Control': 'no-cache',
+                 'User-Agent': 'Remnacust-update-agent'},
+    )
+    with urlopen(request, timeout=15) as response:
+        raw = response.read(256 * 1024 + 1)
+    if len(raw) > 256 * 1024:
+        raise UpdateError('INVALID_RELEASE')
+    release = json.loads(raw)
+    if not isinstance(release, dict):
+        raise UpdateError('INVALID_RELEASE')
+    tag = release.get('tag_name')
+    if (not isinstance(tag, str) or not re.fullmatch(r'v\d+\.\d+\.\d+', tag)
+            or release.get('draft') is not False or release.get('prerelease') is not False):
+        raise UpdateError('INVALID_RELEASE')
+    version(tag[1:])
+    return tag[1:]
 
 
 def version(value):
@@ -286,18 +312,26 @@ class Agent:
                     state['phase'] = 'checking'
                     self.save(state)
                     record_progress(self.root, request, 'checking', 'Проверка выпуска', 'running')
-                    subprocess.run([CLI, '--check-release', '--version', 'latest'], env=env,
+                    installer = latest_installer_release()
+                    subprocess.run([CLI, '--check-release', '--version', installer], env=env,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, check=True, timeout=900)
                     release = read_json(info)
-                    if release['panelVersion'] != state['targetVersion']:
+                    resolved = release['panelVersion']
+                    version(resolved)
+                    log.write(f"Verified installer {installer}: panel {resolved}; requested panel {state['targetVersion']}\n".encode())
+                    log.flush()
+                    if version(resolved) < version(state['targetVersion']):
                         raise UpdateError('RELEASE_NOT_READY')
-                    installer = release['installerVersion']
-                    if not re.fullmatch(r'\d+\.\d+\.\d+', installer):
+                    if version(resolved) <= version(self.installed()):
+                        raise UpdateError('NOT_NEWER')
+                    if release['installerVersion'] != installer:
                         raise UpdateError('INVALID_RELEASE')
-                    state['phase'] = 'updating'
-                    self.save(state)
                     if entry.is_symlink() or not entry.is_file():
                         raise UpdateError('INVALID_RELEASE')
+                    # Browser notifications may predate a newer published release.
+                    state.update(requestedVersion=state['targetVersion'], targetVersion=resolved, phase='updating')
+                    self.save(state)
+                    record_progress(self.root, request, 'checking', 'Выпуск проверен: панель ' + resolved, 'done')
                     subprocess.run(['/usr/bin/bash', str(entry), 'upgrade-panel', '--version', installer, '--yes'], env=env,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, check=True)
                     if self.installed() != state['targetVersion']:

@@ -14,6 +14,7 @@ import time
 import unittest
 from unittest.mock import patch
 import uuid
+import io
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'installer'))
 import runtime
@@ -112,19 +113,22 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(self.agent.status()['error'], 'INTERRUPTED')
             self.assertFalse(self.agent.state()['active'])
 
-    def work(self, panel_version='1.1.7.5', fail=False):
+    def work(self, panel_version='1.1.7.5', fail=False, installer_version='1.2.25', current_version=None):
         self.start()
         calls = []
         def run(command, **options):
             calls.append(command)
             if '--check-release' in command:
-                runtime.write(options['env']['REMNACUST_RELEASE_INFO_FILE'], {'installerVersion': '1.2.25', 'panelVersion': panel_version})
+                self.assertEqual(command[-2:], ['--version', '1.2.25'])
+                if current_version:
+                    runtime.write(self.root / 'registry/panel.json', {**self.current, 'version': current_version})
+                runtime.write(options['env']['REMNACUST_RELEASE_INFO_FILE'], {'installerVersion': installer_version, 'panelVersion': panel_version})
                 runtime.write(options['env']['REMNACUST_RELEASE_ENTRY_FILE'], '#!/usr/bin/env bash\nexit 0\n')
             elif 'upgrade-panel' in command:
                 if fail: raise subprocess.CalledProcessError(1, command)
                 runtime.write(self.root / 'registry/panel.json', {**self.current, 'version': panel_version})
             return subprocess.CompletedProcess(command, 0)
-        with patch.object(agent.subprocess, 'run', side_effect=run):
+        with patch.object(agent.subprocess, 'run', side_effect=run), patch.object(agent, 'latest_installer_release', return_value='1.2.25'):
             self.agent.work(self.request)
         return calls
 
@@ -141,6 +145,49 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(len(self.work('1.1.7.4')), 1)
         self.assertEqual(self.agent.state()['error'], 'RELEASE_NOT_READY')
         self.assertFalse(self.agent.state()['active'])
+
+    def test_newer_published_panel_supersedes_stale_browser_notification(self):
+        self.assertEqual(len(self.work('1.1.7.6')), 2)
+        state = self.agent.state()
+        self.assertEqual(state['phase'], 'completed')
+        self.assertEqual(state['requestedVersion'], '1.1.7.5')
+        self.assertEqual(state['targetVersion'], '1.1.7.6')
+        self.assertEqual(self.agent.installed(), '1.1.7.6')
+        self.assertTrue(any('1.1.7.6' in item['label'] for item in self.agent.status()['progress']['events']))
+
+    def test_resolved_release_cannot_downgrade_a_concurrently_updated_panel(self):
+        self.assertEqual(len(self.work('1.1.7.6', current_version='1.1.7.7')), 1)
+        self.assertEqual(self.agent.state()['error'], 'NOT_NEWER')
+
+    def test_cli_must_verify_the_same_installer_tag_resolved_before_checking(self):
+        self.assertEqual(len(self.work(installer_version='1.2.24')), 1)
+        self.assertEqual(self.agent.state()['error'], 'INVALID_RELEASE')
+
+    def test_metadata_failure_does_not_start_installer_or_leave_maintenance_active(self):
+        self.start()
+        with patch.object(agent, 'latest_installer_release', side_effect=OSError('private network details')), patch.object(agent.subprocess, 'run') as run:
+            self.agent.work(self.request)
+        run.assert_not_called()
+        self.assertFalse(self.agent.state()['active'])
+        self.assertEqual(self.agent.state()['error'], 'UPDATE_FAILED')
+        self.assertEqual(self.agent.installed(), self.current['version'])
+
+    def test_latest_metadata_is_fresh_bounded_and_stable(self):
+        release = {'tag_name': 'v1.2.70', 'draft': False, 'prerelease': False}
+        with patch.dict(os.environ, {'REMNACUST_REPOSITORY': 'lottman/Remnacust-installer'}):
+            with patch.object(agent, 'urlopen', side_effect=lambda *_args, **_kwargs: io.BytesIO(json.dumps(release).encode())) as opened:
+                self.assertEqual(agent.latest_installer_release(), '1.2.70')
+                first = opened.call_args.args[0]
+                self.assertTrue(first.full_url.startswith('https://api.github.com/repos/lottman/Remnacust-installer/releases/latest?remnacust_check='))
+                self.assertEqual(first.get_header('Cache-control'), 'no-cache')
+                self.assertEqual(opened.call_args.kwargs['timeout'], 15)
+                agent.latest_installer_release()
+                self.assertNotEqual(first.full_url, opened.call_args.args[0].full_url)
+            for value in [{**release, 'draft': True}, {**release, 'prerelease': True}, {**release, 'tag_name': 'main'}, []]:
+                with patch.object(agent, 'urlopen', return_value=io.BytesIO(json.dumps(value).encode())), self.assertRaises(agent.UpdateError):
+                    agent.latest_installer_release()
+            with patch.object(agent, 'urlopen', return_value=io.BytesIO(b' ' * (256 * 1024 + 1))), self.assertRaises(agent.UpdateError):
+                agent.latest_installer_release()
 
     def test_installer_failure_is_terminal_without_raw_error_exposure(self):
         self.work(fail=True)

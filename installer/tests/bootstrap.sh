@@ -38,7 +38,7 @@ done
 printf '%s\n' "$url" >> "$FIXTURE/requests"
 [[ ${MOCK_FAIL:-false} != true ]] || exit 22
 case "$url" in
-    https://api.github.com/repos/lottman/Remnacust-installer/releases/latest|https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v1.1.1) cp "$FIXTURE/release.json" "$out";;
+    https://api.github.com/repos/lottman/Remnacust-installer/releases/latest\?remnacust_check=*|https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v1.1.1) cp "$FIXTURE/release.json" "$out";;
     https://api.github.com/repos/lottman/Remnacust-installer/releases/tags/v*) cp "$FIXTURE/release-${url##*/}.json" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/SHA256SUMS) cp "$FIXTURE/SHA256SUMS-v1.1.2" "$out";;
     https://github.com/lottman/Remnacust-installer/releases/download/v1.1.2/remnacust-source-v1.1.2.tar.gz) cp "$FIXTURE/remnacust-source-v1.1.2.tar.gz" "$out";;
@@ -66,6 +66,7 @@ reject() {
 }
 bash "$project/installer.sh" --check-release </dev/null > "$fixture/result"
 grep -q '/releases/latest' "$fixture/requests";pass 'noninteractive version defaults to latest'
+grep -Eq '/releases/latest\?remnacust_check=[a-f0-9]{32}$' "$fixture/requests";pass 'latest metadata requests bypass shared HTTP cache'
 bash "$project/installer.sh" --check-release --version 1.1.1 > "$fixture/result"
 grep -q '/releases/tags/v1.1.1' "$fixture/requests";pass 'explicit version resolves an immutable release tag'
 reject 'invalid version is rejected' bash "$project/installer.sh" --check-release --version '../main'
