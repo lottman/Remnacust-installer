@@ -55,6 +55,7 @@ jobs:
           sudo python3 installer/tests/panel_restore_docker.integration.py
           bash tests/database-repair.test.sh
           python3 tests/package-release.test.py
+          python3 tests/core-catalog-package.test.py
           python3 tests/images.test.py
           python3 tests/build-metadata.test.py
           bash installer/tests/uninstall-docker.sh

@@ -41,6 +41,28 @@ def read_archive(data, strip_root=False):
     return files
 
 
+def validate_core_catalog(files, versions):
+    panel_version = tuple(int(part) for part in versions['panel'].split('-')[0].split('.'))
+    if panel_version < (1, 1, 7, 39):
+        return
+    name = 'panel/backend/src/modules/core-management/core-releases.json'
+    catalog = json.loads(files[name])
+    lock = json.loads(files['component-sources.json'])
+    if not catalog or catalog[0]['build'] != versions['core'] or catalog[0].get('sourceCommit') != lock['core']['commit']:
+        raise ValueError('Default core catalog does not match the pinned latest core')
+    ids = set()
+    for release in catalog:
+        if release['id'] in ids or not re.fullmatch(r'\d+\.\d+\.\d+', release['build']):
+            raise ValueError('Invalid default core catalog entry')
+        ids.add(release['id'])
+        if set(release['artifacts']) != {'amd64', 'arm64'}:
+            raise ValueError('Default core catalog must provide both architectures')
+        for arch, artifact in release['artifacts'].items():
+            expected = f'https://github.com/lottman/Remnacust-core/releases/download/v{release["build"]}/remnacust-core-{release["build"]}-linux-{arch}'
+            if artifact['url'] != expected or not re.fullmatch(r'[a-f0-9]{64}', artifact['sha256']):
+                raise ValueError('Default core catalog requires public pinned files and SHA256')
+
+
 def git_files(directory, revision):
     return read_archive(subprocess.check_output(
         ['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
@@ -116,6 +138,7 @@ def validate(files, version, versions):
     digest = files[name+'.sha256'].decode().split()[0]
     if hashlib.sha256(files[name]).hexdigest() != digest:
         raise ValueError('Bundled node core checksum mismatch')
+    validate_core_catalog(files, versions)
 
 
 def package(root, tag, local_sources=None, check=False):
