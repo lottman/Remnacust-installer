@@ -21,7 +21,7 @@ def main():
         binary.write_text('legacy-core-fixture')
         compose = root / 'compose.json'
         configuration = {'services': {'node': {
-            'image': 'node:24.21-trixie-slim', 'network_mode': 'none',
+            'image': 'node:24.22.1-trixie-slim', 'network_mode': 'none',
             'volumes': [str(policy) + ':/var/lib/remnanode:ro', str(binary) + ':/usr/local/bin/xray:ro', str(checkpoint_root) + ':/var/lib/remnacust/run/core-state:ro'],
         }}}
         compose.write_text(json.dumps(configuration))

@@ -37,7 +37,7 @@ def main():
         (legacy / 'installer.sh').write_bytes(helper_bundle.render(entry, contract, files))
         (legacy / 'runtime.py').write_text('raise SystemExit("legacy runtime executed")\n')
         (legacy / 'database.cjs').write_text('throw Error("legacy database executed");\n')
-        (root / 'Dockerfile').write_text('FROM postgres:18.4\nCOPY --from=node:24.21-trixie-slim /usr/local/bin/node /usr/local/bin/node\nWORKDIR /fixture\nCOPY database-compatibility.js dist/database-compatibility.js\nENTRYPOINT ["node"]\nCMD ["-e", "setInterval(()=>{},1000)"]\n')
+        (root / 'Dockerfile').write_text('FROM postgres:18.4\nCOPY --from=node:24.22.1-trixie-slim /usr/local/bin/node /usr/local/bin/node\nWORKDIR /fixture\nCOPY database-compatibility.js dist/database-compatibility.js\nENTRYPOINT ["node"]\nCMD ["-e", "setInterval(()=>{},1000)"]\n')
         (root / 'database-compatibility.js').write_text(r"""
 const {spawnSync}=require('node:child_process');
 const u=new URL(process.env.DATABASE_URL);
