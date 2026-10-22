@@ -15,7 +15,8 @@ async function request(path, method = 'GET', body, authenticated = true) {
         method, headers: { ...headers, ...(authenticated && token ? { Authorization: 'Bearer ' + token } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000),
     });
-    return { status: response.status, body: await response.json() };
+    const text = await response.text();
+    return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 async function createUser(name, limit) {
     const result = await request('/api/users', 'POST', {
@@ -54,7 +55,7 @@ async function checkGeofiles() {
         })).status, 200, 'Geofile reference validates and persists through the production template service');
         assert.equal((await request('/api/geofiles/' + file.id, 'DELETE')).status, 409, 'Saved template prevents deleting its dataset');
     } finally {
-        if (template) assert.equal((await request('/api/subscription-templates/' + template.uuid, 'DELETE')).status, 200);
+        if (template) assert.equal((await request('/api/subscription-templates/' + template.uuid, 'DELETE')).status, 204);
         if (file) assert.equal((await request('/api/geofiles/' + file.id, 'DELETE')).status, 200);
     }
     console.log('PASS geofiles: real authentication, binary HTTP upload/download, database references and deletion protection');
