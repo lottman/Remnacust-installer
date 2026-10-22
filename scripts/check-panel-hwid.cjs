@@ -26,6 +26,39 @@ async function createUser(name, limit) {
     users.push(BigInt(result.body.response.id));
     return result.body.response;
 }
+async function checkGeofiles() {
+    const endpoint = 'http://127.0.0.1:3000';
+    let file, template;
+    try {
+        for (const [route, method] of [['', 'GET'], ['/upload?name=fixture&kind=singbox-json', 'POST'], ['/import', 'POST'], ['/invalid', 'DELETE']])
+            assert.equal((await fetch(endpoint + '/api/geofiles' + route, { method, headers, signal: AbortSignal.timeout(10000) })).status, 401);
+        const data = Buffer.from(JSON.stringify({ version: 3, rules: [{ domain_suffix: ['fixture.example.test'] }] }));
+        const uploaded = await fetch(endpoint + '/api/geofiles/upload?name=runtime-fixture&kind=singbox-json', {
+            method: 'POST', headers: { ...headers, 'Content-Type': 'application/octet-stream', Authorization: 'Bearer ' + token },
+            body: data, signal: AbortSignal.timeout(10000),
+        });
+        assert.equal(uploaded.status, 201, 'Geofile upload through real JWT guard and raw HTTP body');
+        file = (await uploaded.json()).response;
+        const downloaded = await fetch(endpoint + `/api/sub/geofiles/${file.id}/${file.filename}`, { headers, signal: AbortSignal.timeout(10000) });
+        assert.equal(downloaded.status, 200);
+        assert.equal(downloaded.headers.get('x-content-type-options'), 'nosniff');
+        assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), data);
+        const created = await request('/api/subscription-templates', 'POST', { name: 'GEO_RUNTIME_FIXTURE', templateType: 'SINGBOX' });
+        assert.equal(created.status, 201);
+        template = created.body.response;
+        assert.ok(template.uuid);
+        assert.equal((await request('/api/subscription-templates', 'PATCH', {
+            uuid: template.uuid,
+            templateJson: { outbounds: [{ type: 'direct', tag: 'direct' }], route: { final: 'direct' },
+                remnacust: { geofiles: [{ id: file.id, target: 'direct' }] } },
+        })).status, 200, 'Geofile reference validates and persists through the production template service');
+        assert.equal((await request('/api/geofiles/' + file.id, 'DELETE')).status, 409, 'Saved template prevents deleting its dataset');
+    } finally {
+        if (template) assert.equal((await request('/api/subscription-templates/' + template.uuid, 'DELETE')).status, 200);
+        if (file) assert.equal((await request('/api/geofiles/' + file.id, 'DELETE')).status, 200);
+    }
+    console.log('PASS geofiles: real authentication, binary HTTP upload/download, database references and deletion protection');
+}
 async function main() {
     // Refuse accidental execution against an existing installation.
     assert.equal(await prisma.users.count(), 0, 'HWID fixture requires an empty user database');
@@ -41,6 +74,7 @@ async function main() {
         assert.equal(registration.status, 201);
         token = registration.body.response.accessToken;
         adminCreated = true;
+        await checkGeofiles();
         const inherited = await createUser('hwid_fixture_inherited');
         assert.equal(inherited.hwidDeviceLimit, null, 'Omitted count must inherit the general limit');
         // Set the fallback through the real API so cached settings are invalidated too.
