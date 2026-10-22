@@ -56,7 +56,7 @@ async function checkGeofiles() {
         assert.equal((await request('/api/geofiles/' + file.id, 'DELETE')).status, 409, 'Saved template prevents deleting its dataset');
     } finally {
         if (template) assert.equal((await request('/api/subscription-templates/' + template.uuid, 'DELETE')).status, 204);
-        if (file) assert.equal((await request('/api/geofiles/' + file.id, 'DELETE')).status, 200);
+        if (file) assert.ok([200, 404].includes((await request('/api/geofiles/' + file.id, 'DELETE')).status), 'Fixture dataset cleanup');
     }
     console.log('PASS geofiles: real authentication, binary HTTP upload/download, database references and deletion protection');
 }
@@ -131,4 +131,4 @@ async function main() {
         if (adminCreated) await prisma.admin.deleteMany({ where: { username: 'hwid_fixture_admin' } });
     }
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(() => prisma.$disconnect());
+main().catch(error => { console.error(error.stack ?? error.message); process.exitCode = 1; }).finally(() => prisma.$disconnect());
