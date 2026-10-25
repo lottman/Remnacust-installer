@@ -30,6 +30,12 @@ def render(config):
         if set(backend) != {'address', 'port'}:
             raise ValueError('Invalid backend fields')
         address = ipaddress.ip_address(backend['address'])
+        if getattr(address, 'scope_id', None):
+            raise ValueError('Scoped backend addresses are not supported')
+        # Python 3.12 does not classify mapped IPv4 loopback/link-local as such.
+        # Canonicalize before validation and deduplication on every supported OS.
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
         if address.is_unspecified or address.is_multicast or address.is_loopback or address.is_link_local:
             raise ValueError('Use a routable backend address')
         target = backend['port']

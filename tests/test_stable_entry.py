@@ -21,10 +21,21 @@ class EntryTests(unittest.TestCase):
         for change in [{'listenPort': 22}, {'strategy': 'x\nfrontend injected'},
                        {'backends': []}, {'backends': [{'address': '127.0.0.1', 'port': 443}]},
                        {'backends': [{'address': 'a.test;bad', 'port': 443}]},
+                       {'backends': [{'address': '::ffff:127.0.0.1', 'port': 443}]},
+                       {'backends': [{'address': '::ffff:169.254.169.254', 'port': 443}]},
+                       {'backends': [{'address': '::ffff:0.0.0.0', 'port': 443}]},
+                       {'backends': [{'address': '::ffff:224.0.0.1', 'port': 443}]},
+                       {'backends': [{'address': '2001:db8::1%lo\nfrontend injected', 'port': 443}]},
                        {'backends': [{'address': '192.0.2.1', 'port': True}]}]:
             with self.assertRaises(ValueError):
                 entry.render({**base, **change})
         self.assertIn('backup', entry.render({**base, 'backends': base['backends'] + [{'address': '192.0.2.2', 'port': 443}]}))
+
+    def test_mapped_addresses_cannot_duplicate_a_backend(self):
+        config = {'listenPort': 443, 'strategy': 'priority', 'backends': [
+            {'address': '192.0.2.1', 'port': 443}, {'address': '::ffff:c000:201', 'port': 443}]}
+        with self.assertRaisesRegex(ValueError, 'Duplicate backend'):
+            entry.render(config)
 
     @unittest.skipUnless(os.environ.get('REMNACUST_ISOLATED_NET') == '1', 'isolated root network test')
     def test_real_haproxy_connection_selection_priority_failover_and_graceful_reload(self):

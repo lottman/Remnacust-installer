@@ -38,8 +38,8 @@
       "sha256": "fceb4fce13c69936e91f19ec51a7aae6b9a916edbc16a8217ae05d7ab95615cb"
     },
     "stable_entry.py": {
-      "bytes": 6089,
-      "sha256": "386606a5aba21941eb61dac928b23fd2ae3b420345d525a32639fa44d53f645b"
+      "bytes": 6495,
+      "sha256": "d55d86e57e830436db6c37b7660c30bd8f5dae3660ffb2a10f3e11ae124a8ced"
     },
     "subscription.cjs": {
       "bytes": 2017,
@@ -55,5 +55,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.89"
+  "version": "1.2.90"
 }
