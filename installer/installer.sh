@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='e2939f4b22f9d471b20a175a1a8067636b2e569414bdf314f0be2ae4eb41f28c'
+HELPER_BUNDLE_SHA256='c2259442d56c6bbcd43c5c08e971789780a371632f0431cc66b970c4987c2108'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -10,7 +10,7 @@ REPO=${REMNACUST_REPOSITORY:-lottman/Remnacust-installer}
 ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
-PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
+PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP='' ENTRY_CONFIG=''
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE=''
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
@@ -107,6 +107,7 @@ Remnacust · installer.sh
   restore-panel             Данные и ключи из копии; текущая версия сохраняется
   renew-node-certificate    Копирование обновлённого TLS и перезапуск ноды
   renew-panel-certificate   Копирование обновлённого TLS и reload Caddy
+  configure-entry-node      Применить постоянный TCP-вход из --entry-config
   --help, -h                Эта справка
 
   --component panel|node    Компонент для команд обслуживания
@@ -130,7 +131,8 @@ Remnacust · installer.sh
   --cert-file PATH          Готовый fullchain.pem для --tls-method existing
   --key-file PATH           Его приватный ключ privkey.pem
   --dns-credentials PATH    Закрытый INI-файл выбранного DNS-провайдера
-  --panel-ip IP[/CIDR]      IP панели; ограничение API новой ноды через UFW
+  --panel-ip IP[/CIDR]      Все входящие порты и ping только от панели, кроме SSH
+  --entry-config FILE      JSON постоянного TCP-входа (configure-entry-node)
   --backup PATH             Каталог копии для restore-panel
   --yes                     Пропустить подтверждение выбранного действия
   --source-url URL          Адрес Marzban для переноса
@@ -274,9 +276,9 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate|configure-entry-node)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode|--entry-config)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
@@ -284,7 +286,7 @@ parse_args() {
                     --subscription-urls) SUBSCRIPTION_URLS=$2; SUBSCRIPTION_SET=true;;
                     --subscription-port) SUBSCRIPTION_PORT=$2; SUBSCRIPTION_SET=true;;
                     --server-ip) SERVER_IPS=$2;;
-                    --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;;
+                    --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;; --entry-config) ENTRY_CONFIG=$2;;
                     --source-url) MARZBAN_URL=$2;; --destination-url) DESTINATION_URL=$2;; --internal-squad) INTERNAL_SQUAD=$2;; --quota-mode) QUOTA_MODE=$2;;
                 esac; shift ;;
             --subscription-page|--no-subscription-page)
@@ -1007,6 +1009,12 @@ PY
     mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
     LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     case "$ACTION" in
+        configure-entry-node)
+            [[ -n $ENTRY_CONFIG && -f $ENTRY_CONFIG && ! -L $ENTRY_CONFIG ]] || die 'Укажите --entry-config с JSON постоянного входа'
+            installed_helper
+            python3 -I "$HELPER_ROOT/stable_entry.py" render --config "$ENTRY_CONFIG" > /dev/null
+            command -v haproxy >/dev/null || { apt-get update; apt-get install -y --no-install-recommends haproxy; }
+            python3 -I "$HELPER_ROOT/stable_entry.py" apply --config "$ENTRY_CONFIG";;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
         *) service_action;;
@@ -1548,7 +1556,7 @@ certificate_wizard() {
     else
         if [[ -t 0 ]]; then
             [[ -n $PORT ]] || PORT=$(ask 'Порт API ноды' 2222)
-            [[ -n $PANEL_IP ]] || PANEL_IP=$(ask 'IP/CIDR панели для доступа к API (Enter — свой firewall)')
+            [[ -n $PANEL_IP ]] || PANEL_IP=$(ask 'IP/CIDR главного сервера: все входящие порты кроме SSH только от него (Enter — свой firewall)')
         fi
         if [[ -t 0 && -z $NODE_DOMAIN ]]; then
             choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде?')
@@ -1596,6 +1604,9 @@ certificate_wizard() {
     fi
 }
 certificate_preflight() {
+    if [[ $COMPONENT == node && -n $PANEL_IP && $TLS_METHOD == http ]]; then
+        die '--panel-ip закрывает HTTP-01 от внешних проверок. Используйте DNS-01 или готовый сертификат с внешним продлением.'
+    fi
     local domain=${NODE_DOMAIN:-$DOMAIN}
     local -a subscription_options=(); local subscriptions
     subscriptions=$(managed_subscription_options)
@@ -1814,11 +1825,10 @@ configure_certificate() {
 }
 node_acl() {
     [[ -n $PANEL_IP ]] || { info "Ограничьте TCP $PORT адресом панели в firewall провайдера"; return; }
-    if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
-        # Never enable/flush the host firewall or change SSH rules.
-        ufw insert 1 allow from "$PANEL_IP" to any port "$PORT" proto tcp comment 'Remnacust node API'
-        ufw insert 2 deny to any port "$PORT" proto tcp comment 'Remnacust node API'
-    else info "UFW не активен. Разрешите TCP $PORT только от $PANEL_IP в firewall провайдера"; fi
+    command -v nft >/dev/null || apt-get install -y --no-install-recommends nftables
+    python3 -I "$HELPER_ROOT/node_firewall.py" apply --panel "$PANEL_IP"
+    info "Все входящие порты и ping разрешены только от $PANEL_IP; SSH сохранён. Клиенты VPN должны идти через главный сервер."
+    info 'Отмена ограничения: python3 /etc/remnacust-node-firewall/guard.py remove'
 }
 deploy() {
     [[ $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
@@ -1870,6 +1880,9 @@ deploy() {
         configure_certificate
         if [[ $COMPONENT == node ]]; then node_acl; fi
         step 'Запуск установки' compose up -d --no-build
+        # Compose may create its bridge only on first start. Refresh the owned
+        # guard before readiness checks so container-originated traffic works.
+        if [[ $COMPONENT == node && -n $PANEL_IP ]]; then node_acl; fi
     else
         if [[ $ACTION == upgrade-* && -z $DIRECTORY$CONTAINER$COMPOSE_FILE && -f $ROOT/registry/$COMPONENT.json ]]; then
             STATE="$ROOT/registry/$COMPONENT.json"; load_state

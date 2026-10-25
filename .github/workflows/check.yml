@@ -28,6 +28,12 @@ jobs:
       - run: bash -n installer/installer.sh && bash tests/installer.test.sh
         env:
           REMNACUST_TEST_REAL_COMPOSE: '1'
+      - name: Verify node guard and connection-time entry in isolated networks
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nftables iproute2 iputils-ping haproxy
+          sudo python3 tests/test_node_firewall.py --network
+          sudo python3 tests/test_stable_entry.py --network
       - run: bash installer/tests/database-network-docker.sh
       - run: bash installer/tests/net-admin-docker.sh
       - run: python3 installer/tests/image-cleanup-docker.py

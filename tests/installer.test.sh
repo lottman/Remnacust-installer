@@ -3,6 +3,8 @@ set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/helper_bundle.py" check --root "$root"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_helper_bundle.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/tests/test_node_firewall.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/tests/test_stable_entry.py"
 bash "$root/installer/tests/bootstrap.sh"
 bash "$root/installer/tests/service-state.sh"
 bash "$root/installer/tests/supported-os.sh"

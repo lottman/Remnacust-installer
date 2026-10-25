@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "385c761750fbacc36f5f9ad3345c79e6db9d694797954d0e09bd3f5dabfa5149",
+  "entry_sha256": "f727f686e8d438c5c423e4ae91fdc25e3537973057ce6bdc96cb91ea53244826",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -14,8 +14,8 @@
       "sha256": "69e4b56c33bc83411ddb43be2b5e5174548a16528e6346e97ebf15b41fce8f6c"
     },
     "helper_bundle.py": {
-      "bytes": 11309,
-      "sha256": "0ad8b6305fb4dc84446b75233ffc85bd1de4fc557fd8077e1c1d1fa08b47c218"
+      "bytes": 11348,
+      "sha256": "d23668f1fff0e67896bd1771e52da4eb2abd120abd1e9f112916d85dbd1f372c"
     },
     "image_cleanup.py": {
       "bytes": 4761,
@@ -29,9 +29,17 @@
       "bytes": 14142,
       "sha256": "2d5f3bbba656c009fe9f2472fc10f44f85ce7a70799fffb9a929784836e40262"
     },
+    "node_firewall.py": {
+      "bytes": 7072,
+      "sha256": "cbc556c8dcb29b5d6b18b396552d6d27c2cf39db3de5eae35725aa23206408d8"
+    },
     "runtime.py": {
       "bytes": 67922,
       "sha256": "fceb4fce13c69936e91f19ec51a7aae6b9a916edbc16a8217ae05d7ab95615cb"
+    },
+    "stable_entry.py": {
+      "bytes": 6089,
+      "sha256": "386606a5aba21941eb61dac928b23fd2ae3b420345d525a32639fa44d53f645b"
     },
     "subscription.cjs": {
       "bytes": 2017,
@@ -47,5 +55,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.88"
+  "version": "1.2.89"
 }
