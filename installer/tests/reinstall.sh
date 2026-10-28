@@ -34,7 +34,7 @@ cp "$ROOT/registry/panel.json" "$fixture/old-registry.json"
 assert_fresh_target
 select_fresh_target
 [[ $PROJECT == remnacust-panel-* && $PROJECT != remnacust-panel ]]
-[[ $DIRECTORY == "$ROOT/panel-"* && ! -e $DIRECTORY ]]
+[[ $DIRECTORY == "$ROOT/panel" && ! -e $DIRECTORY ]]
 cmp "$ROOT/registry/panel.json" "$fixture/old-registry.json"
 fresh_files
 archive_retired_registry
@@ -56,8 +56,8 @@ mkdir -p "$ROOT/panel"
 printf 'APP_SECRET=retained\n' > "$ROOT/panel/.env"
 touch "$ROOT/panel/.remnacust-uninstalled"
 assert_fresh_target; select_fresh_target; fresh_files
-grep -qx 'APP_SECRET=retained' "$ROOT/panel/.env"
-printf 'PASS nonempty old directory is preserved while new files use a separate directory\n'
+find "$ROOT/backups" -path '*/reinstalled-panel-*/.env' -exec grep -qx 'APP_SECRET=retained' {} \;
+printf 'PASS nonempty old directory is preserved in backups while new files use the canonical directory\n'
 prepare restored
 mkdir -p "$ROOT/panel"; printf 'services: {}\n' > "$ROOT/panel/compose.json"
 printf 'APP_SECRET=old-secret\n' > "$ROOT/panel/.env"
@@ -78,9 +78,9 @@ done
 ACTION=install-panel
 assert_fresh_target; select_fresh_target; fresh_files; archive_retired_registry
 helper_file_copy "$STATE" "$ROOT/registry/panel.json"
-grep -qx 'APP_SECRET=old-secret' "$ROOT/panel/.env"
-grep -qx 'services: {}' "$ROOT/panel/compose.json"
-[[ -f $ROOT/panel/.remnacust-uninstalled && $DEPLOY != "$ROOT/panel" ]]
+find "$ROOT/backups" -path '*/reinstalled-panel-*/.env' -exec grep -qx 'APP_SECRET=old-secret' {} \;
+find "$ROOT/backups" -path '*/reinstalled-panel-*/compose.json' -exec grep -qx 'services: {}' {} \;
+[[ ! -f $ROOT/panel/.remnacust-uninstalled && $DEPLOY == "$ROOT/panel" ]]
 ACTION=start; assert_not_uninstalled
 printf 'PASS legacy recoverable=true and retained Compose allow only fresh installation; the old marker does not block the new deployment\n'
 prepare retained-node
@@ -103,7 +103,7 @@ for ACTION in start restart; do
     grep -q 'Доступна только новая установка' "$fixture/output"
 done
 ACTION=install-node; assert_fresh_target; select_fresh_target
-[[ $PROJECT == remnacust-node-* && $DIRECTORY == "$ROOT/node-"* ]]
+[[ $PROJECT == remnacust-node-* && $DIRECTORY == "$ROOT/node" ]]
 printf 'PASS retained legacy node also offers a fresh isolated installation and cannot be restarted\n'
 prepare vanished
 mkdir -p "$ROOT/panel"

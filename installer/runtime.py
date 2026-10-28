@@ -1097,11 +1097,20 @@ def write_layout(state, config):
             index += [component + ': ' + registered['directory'],
                       '  Карта файлов: ' + str(Path(registered['directory']) / 'FILES.txt'),
                       *['  Compose: ' + value for value in registered.get('composeFiles', [])]]
+            if (Path(registered['directory']) / '.env').is_file():
+                index += ['  Окружение: ' + str(Path(registered['directory']) / '.env')]
             page = registered.get('subscriptionMigration')
             if page:
                 index += ['  Страница подписки: ' + page['directory'],
                           '  Карта файлов сайта: ' + str(Path(page['directory']) / 'FILES.txt'),
                           *['  Compose сайта: ' + value for value in page['composeFiles']]]
+    for record in sorted((root / 'registry/subscription-pages').glob('*.json'))[:32]:
+        if record.is_symlink():
+            continue
+        page = load(record)
+        index += ['subscription-page: ' + page['directory'],
+                  '  Окружение: ' + str(Path(page['directory']) / '.env'),
+                  *['  Compose: ' + value for value in page.get('composeFiles', [])]]
     index += ['', 'backups/ — копии по компоненту и времени операции',
               'logs/ — журналы установщика', 'registry/ — реестр установок', 'control/ — канал обновления панели',
               'Скрытые .env видны через ls -la. Данные Docker остаются в сохранённых томах.']

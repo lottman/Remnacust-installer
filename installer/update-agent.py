@@ -16,6 +16,7 @@ import uuid
 from urllib.request import Request, urlopen
 
 import runtime
+import subscription_pages
 
 SCRIPT = str(Path(__file__).resolve())
 CLI = '/usr/local/bin/remnacust'
@@ -220,6 +221,73 @@ class Agent:
         version(record['version'])
         return record['version']
 
+    def pages(self):
+        result = subscription_pages.listing(self.root)
+        for item in result:
+            try:
+                job = read_json(self.control / ('page-' + item['id'] + '.json'))
+                if job.get('phase') in ('queued', 'running') and time.time() - job.get('startedAt', 0) > 7200:
+                    job.update(phase='failed', error='INTERRUPTED')
+                item['job'] = {key: job.get(key) for key in ('requestId', 'operation', 'phase', 'error')}
+            except FileNotFoundError:
+                item['job'] = None
+        return {'pages': result}
+
+    def page_start(self, page, operation, request):
+        request = job_id(request)
+        if operation not in ('start', 'stop', 'restart', 'upgrade'):
+            raise UpdateError('INVALID_REQUEST')
+        subscription_pages.selected(self.root, page)
+        with self.lock(False) as locked:
+            if not locked or self.state().get('active'):
+                raise UpdateError('UPDATE_BUSY')
+            path = self.control / ('page-' + page + '.json')
+            try:
+                previous = read_json(path)
+                if previous.get('requestId') == request:
+                    if previous.get('operation') != operation:
+                        raise UpdateError('INVALID_REQUEST')
+                    return previous
+                if previous.get('phase') in ('queued', 'running') and time.time() - previous.get('startedAt', 0) < 7200:
+                    raise UpdateError('UPDATE_BUSY')
+            except FileNotFoundError:
+                pass
+            state = {'page': page, 'operation': operation, 'requestId': request, 'phase': 'queued', 'startedAt': time.time(), 'error': None}
+            runtime.write(path, state)
+            try:
+                subprocess.run(['systemd-run', '--quiet', '--collect', '--service-type=exec', '--unit=remnacust-page-' + request,
+                    '--property=UMask=0077', '--property=RuntimeMaxSec=7200', '/usr/bin/python3', '-B', SCRIPT,
+                    '--root', str(self.root), 'page-worker', '--page-id', page, '--job', request], check=True, timeout=15)
+            except (OSError, subprocess.SubprocessError):
+                state.update(phase='failed', error='START_FAILED')
+                runtime.write(path, state)
+                raise UpdateError('START_FAILED')
+            return state
+
+    def page_work(self, page, request):
+        request = job_id(request)
+        subscription_pages.selected(self.root, page)
+        path = self.control / ('page-' + page + '.json')
+        with self.lock():
+            state = read_json(path)
+            if state.get('requestId') != request or state.get('phase') != 'queued':
+                return
+            operation = state['operation']
+            if operation not in ('start', 'stop', 'restart', 'upgrade'):
+                raise UpdateError('INVALID_REQUEST')
+            state.update(phase='running')
+            runtime.write(path, state)
+            try:
+                log = self.root / 'logs' / ('page-' + request + '.log')
+                fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'wb') as output:
+                    args = [CLI, 'upgrade-subscription-page', '--version', 'latest'] if operation == 'upgrade' else [CLI, 'manage-subscription-page', '--page-operation', operation]
+                    subprocess.run([*args, '--page-id', page, '--yes'], stdin=subprocess.DEVNULL, stdout=output, stderr=output, check=True, timeout=7100)
+                state.update(phase='completed', error=None)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                state.update(phase='failed', error='PAGE_OPERATION_FAILED')
+            runtime.write(path, state)
+
     def status(self):
         state = self.state()
         if state.get('active') and time.time() - state.get('startedAt', 0) > 60:
@@ -399,6 +467,17 @@ def serve(agent):
             try:
                 if self.command == 'GET' and self.path == '/status':
                     return self.reply(200, agent.status())
+                if self.command == 'GET' and self.path == '/pages':
+                    return self.reply(200, agent.pages())
+                if self.command == 'POST' and self.path == '/pages/action':
+                    lengths = self.headers.get_all('Content-Length', [])
+                    if len(lengths) != 1 or self.headers.get('Transfer-Encoding') or not lengths[0].isdigit() or not 0 < int(lengths[0]) <= 256:
+                        raise UpdateError('INVALID_REQUEST')
+                    data = json.loads(self.rfile.read(int(lengths[0])))
+                    if not isinstance(data, dict) or set(data) != {'pageId', 'operation', 'requestId'}:
+                        raise UpdateError('INVALID_REQUEST')
+                    agent.page_start(data['pageId'], data['operation'], data['requestId'])
+                    return self.reply(202, agent.pages())
                 if self.command == 'POST' and self.path == '/update':
                     lengths = self.headers.get_all('Content-Length', [])
                     if len(lengths) != 1 or self.headers.get('Transfer-Encoding') or not lengths[0].isdigit() or not 0 < int(lengths[0]) <= 256:
@@ -427,7 +506,8 @@ def serve(agent):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path('/opt/remnacust'))
-    parser.add_argument('operation', choices=['serve', 'worker', 'setup', 'restore-identity', 'progress'])
+    parser.add_argument('operation', choices=['serve', 'worker', 'page-worker', 'setup', 'restore-identity', 'progress'])
+    parser.add_argument('--page-id')
     parser.add_argument('--stage'); parser.add_argument('--label'); parser.add_argument('--event')
     parser.add_argument('--job'); parser.add_argument('--state'); parser.add_argument('--compose'); parser.add_argument('--inspect')
     args = parser.parse_args()
@@ -441,5 +521,7 @@ if __name__ == '__main__':
         restore_identity(args.root, args.inspect)
     elif args.operation == 'worker':
         Agent(args.root).work(args.job)
+    elif args.operation == 'page-worker':
+        Agent(args.root).page_work(args.page_id, args.job)
     else:
         serve(Agent(args.root))

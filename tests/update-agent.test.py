@@ -55,6 +55,38 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(agent.UpdateError, 'UPDATE_BUSY'):
             self.agent.start('1.1.7.6', str(uuid.uuid4()))
 
+    def test_page_actions_are_bounded_registered_and_idempotent(self):
+        page = 'a' * 24
+        with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            first = self.agent.page_start(page, 'restart', self.request)
+            self.assertEqual(first['phase'], 'queued')
+            self.assertEqual(self.agent.page_start(page, 'restart', self.request), first)
+            self.assertEqual(run.call_count, 1)
+            self.assertNotIn('restart', run.call_args.args[0])
+            with self.assertRaisesRegex(agent.UpdateError, 'UPDATE_BUSY'):
+                self.agent.page_start(page, 'upgrade', str(uuid.uuid4()))
+            with self.assertRaisesRegex(agent.UpdateError, 'INVALID_REQUEST'):
+                self.agent.page_start(page, 'exec', self.request)
+            with self.assertRaisesRegex(agent.UpdateError, 'INVALID_REQUEST'):
+                self.agent.page_start(page, 'stop', self.request)
+        with self.assertRaises(ValueError):
+            self.agent.page_start('../panel', 'restart', self.request)
+
+    def test_failed_page_operation_is_reported_without_private_output(self):
+        page = 'a' * 24
+        (self.root / 'logs').mkdir()
+        with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
+            self.agent.page_start(page, 'upgrade', self.request)
+        def fail(*args, **kwargs):
+            self.assertEqual(args[0], [agent.CLI, 'upgrade-subscription-page', '--version', 'latest', '--page-id', page, '--yes'])
+            raise subprocess.CalledProcessError(1, 'private-credential')
+        with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run', side_effect=fail):
+            self.agent.page_work(page, self.request)
+        job = runtime.load(self.root / 'control' / ('page-' + page + '.json'))
+        self.assertEqual(job['phase'], 'failed')
+        self.assertEqual(job['error'], 'PAGE_OPERATION_FAILED')
+        self.assertNotIn('private-credential', json.dumps(job))
+
     def test_progress_is_bounded_monotonic_and_estimate_requires_a_successful_baseline(self):
         self.start()
         for index in range(35):

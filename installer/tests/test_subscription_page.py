@@ -76,7 +76,6 @@ class SubscriptionPageTests(unittest.TestCase):
             (['install-panel', '--no-subscription-page'], 'RESULT=false|https://panel.example.com/api/sub', True),
             (['install-panel', '--subscription-page'], 'Исправьте --subscription-urls', False),
             (['install-panel', '--subscription-page', '--subscription-urls', 'panel.example.com'], 'Исправьте --subscription-urls', False),
-            (['upgrade-panel', '--subscription-page'], 'для новой панели или миграции', False),
             (['install-node', '--subscription-page'], 'для новой панели или миграции', False),
             (['install-panel', '--subscription-page', '--no-subscription-page'], 'Выберите один', False),
         ]:
@@ -85,6 +84,9 @@ class SubscriptionPageTests(unittest.TestCase):
                                       'test', str(installer), *flags], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode == 0, success, result.stderr)
             self.assertIn(expected, result.stdout + result.stderr)
+        allowed = subprocess.run(['bash', '-c', 'source "$1"; parse_args upgrade-panel --subscription-page; echo ALLOWED', 'test', str(installer)], capture_output=True, text=True, timeout=5)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertIn('ALLOWED', allowed.stdout)
 
     @unittest.skipIf(os.name == 'nt', 'OpenSSL on Linux')
     def test_manual_certificate_and_renewal_validate_all_domains_before_copying(self):

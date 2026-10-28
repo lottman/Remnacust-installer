@@ -204,7 +204,7 @@ class InputWorkflowTests(unittest.TestCase):
                 plain = re.sub(r'\x1b\[[0-9;]*m', '', output)
                 self.assertTrue(all(len(line) <= width for line in plain.splitlines()), plain)
                 self.assertEqual([int(number) for number in re.findall(r'^\s+(\d+)  ', plain, re.M)],
-                                 [1, 2, 3, 4, 5, 6, 10, 7, 8, 9, 11, 12, 0])
+                                 [1, 2, 13, 3, 4, 14, 15, 5, 6, 10, 7, 8, 9, 11, 12, 0])
 
     def test_no_color_progress_has_no_terminal_control_codes(self):
         command = 'source "$1"; LOG="$2/progress.log"; step "Проверка" sleep .15'
@@ -314,7 +314,7 @@ main "$@"
         code, output = self.terminal('bash "$1"', [('Действие: ', paste), ('Действие: ', '0\n')], script=self.menu_fixture())
         self.assertEqual(code, 0, output)
         self.assertEqual(output.count('Установка и обслуживание'), 1, output)
-        self.assertEqual(output.count('Выберите номер от 0 до 12.'), 1, output)
+        self.assertEqual(output.count('Выберите номер от 0 до 15.'), 1, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
     def test_return_from_action_does_not_execute_leftover_paste(self):

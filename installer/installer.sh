@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='0ed039aecc4e01b288baad0102bff487ebfc91ebd83c70e70b925de7dd0ba69e'
+HELPER_BUNDLE_SHA256='3613c5865848db66eef0b7fb4f10bd1b7ab8ea294e3824c130edc53128c712ec'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -10,9 +10,10 @@ REPO=${REMNACUST_REPOSITORY:-lottman/Remnacust-installer}
 ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
+PAGE_ID='' PAGE_OPERATION='' PAGE_PANEL_URL=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
-SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE=''
+SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE='' SUBSCRIPTION_IMAGE_VERSION=''
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
 NODE_NET_ADMIN=false
 NODE_NET_ADMIN_ADDED=false
@@ -98,6 +99,10 @@ Remnacust · installer.sh
   sudo bash installer.sh COMMAND [--version latest|1.2.24] [--yes]
 
   install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
+  normalize-layout          Постоянный каталог панели/ноды (--component panel|node)
+  install-subscription-page Страница подписки отдельно от панели
+  upgrade-subscription-page Обновить выбранную страницу подписки
+  manage-subscription-page  Список, запуск, остановка или перезапуск страниц
   install-node              Нода с нашим Xray; TLS/XHTTP по желанию
   upgrade-panel             Все процессы панели; БД и настройки сохраняются
   upgrade-node              Полное обновление ноды и встроенного Xray
@@ -117,6 +122,9 @@ Remnacust · installer.sh
   renew-panel-certificate   Копирование обновлённого TLS и reload Caddy
   --help, -h                Эта справка
 
+  --page-id ID              ID зарегистрированной страницы (из списка)
+  --page-operation ACTION   list, start, stop или restart
+  --panel-url URL           HTTPS панели; auto для панели на этом сервере
   --component panel|node    Компонент для команд обслуживания
   --directory PATH          Каталог существующей установки
   --compose-file PATH       Основной Compose-файл при миграции
@@ -171,9 +179,12 @@ show_menu() {
     terminal_section 'Установка'
     terminal_action 1 'Панель с нуля' install-panel "$panel_note" "$panel_install"
     terminal_action 2 'Нода с Xray' install-node "$node_note" "$node_install"
+    terminal_action 13 'Страница подписки отдельно' install-subscription-page
     terminal_section 'Обновление'
     terminal_action 3 'Обновить панель' upgrade-panel "$panel_upgrade" "$panel_available"
     terminal_action 4 'Обновить ноду и Xray' upgrade-node "$node_upgrade" "$node_available"
+    terminal_action 14 'Обновить страницу подписки' upgrade-subscription-page
+    terminal_action 15 'Управление страницами подписки' manage-subscription-page
     terminal_section 'Перенос'
     terminal_action 5 'Панель Remnawave' migrate-remnawave-panel
     terminal_action 6 'Нода Remnawave' migrate-remnawave-node
@@ -282,11 +293,12 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            install-subscription-page|upgrade-subscription-page|manage-subscription-page|normalize-layout|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --page-id|--page-operation|--panel-url|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
+                    --page-id) PAGE_ID=$2;; --page-operation) PAGE_OPERATION=$2;; --panel-url) PAGE_PANEL_URL=$2;;
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
                     --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2; PROXY_SET=true;;
                     --subscription-urls) SUBSCRIPTION_URLS=$2; SUBSCRIPTION_SET=true;;
@@ -310,8 +322,8 @@ parse_args() {
     [[ -z $VERSION ]] || valid_version "$VERSION" || die 'Версия: latest или SemVer'
     [[ -z $COMPONENT || $COMPONENT == panel || $COMPONENT == node ]] || die 'Компонент: panel или node'
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
-    [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
-    [[ -z $ACTION || $ACTION == install-panel || $ACTION == migrate-remnawave-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна для новой панели или миграции Remnawave'
+    [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-subscription-page || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
+    [[ -z $ACTION || $ACTION == install-panel || $ACTION == upgrade-panel || $ACTION == migrate-remnawave-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна для новой панели или миграции Remnawave'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
     [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
@@ -405,14 +417,30 @@ select_fresh_target() {
         REINSTALL_RECORD="$WORK/retired-registry.json"
         install -m 0600 "$ROOT/registry/$COMPONENT.json" "$REINSTALL_RECORD"
         [[ -n $PROJECT ]] || project="remnacust-$COMPONENT-$stamp"
-        [[ -n $DIRECTORY ]] || DIRECTORY="$ROOT/$COMPONENT-$stamp"
-        info 'Новая установка будет отдельно от сохранённых файлов и томов прежней установки.'
+        [[ -n $DIRECTORY ]] || DIRECTORY="$ROOT/$COMPONENT"
+        if [[ -d $DIRECTORY && -n $(find "$DIRECTORY" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+            python3 - "$DIRECTORY" <<'PY'
+import json,subprocess,sys
+directory=sys.argv[1]
+ids=subprocess.run(['docker','ps','--all','--quiet'],capture_output=True,text=True,check=True).stdout.split()
+containers=json.loads(subprocess.run(['docker','inspect',*ids],capture_output=True,text=True,check=True).stdout) if ids else []
+for item in containers:
+ labels=item.get('Config',{}).get('Labels') or {}
+ paths=[labels.get('com.docker.compose.project.working_dir',''),*labels.get('com.docker.compose.project.config_files','').split(','),*[mount.get('Source','') for mount in item.get('Mounts',[])]]
+ if any(path==directory or path.startswith(directory+'/') for path in paths):raise SystemExit('Каталог используется другим контейнером; новая установка остановлена без переноса файлов')
+PY
+            local retired_path="$ROOT/backups/reinstalled-$COMPONENT-$stamp"
+            mkdir -p "$ROOT/backups"
+            mv -- "$DIRECTORY" "$retired_path"
+            info "Файлы удалённой установки сохранены: $retired_path"
+        fi
+        info 'Рабочий каталог постоянный; прежние данные находятся в backups и сохранённых томах.'
     fi
     if project_has_volumes "$project"; then collision=true; fi
     if $collision; then
         [[ -z $PROJECT ]] || die "Тома проекта $PROJECT уже существуют. Для новой установки укажите другое --project-name; прежние данные сохраняются."
         project="remnacust-$COMPONENT-$stamp"
-        [[ -n $DIRECTORY ]] || DIRECTORY="$ROOT/$COMPONENT-$stamp"
+        [[ -n $DIRECTORY ]] || DIRECTORY="$ROOT/$COMPONENT"
         info 'Прежние тома сохраняются; для новой установки выбран отдельный проект Docker.'
     fi
     PROJECT=$project
@@ -633,6 +661,7 @@ select_subscription_image() {
         --repository "$REPO" --component subscription-page --architecture "$(dpkg --print-architecture)" > "$WORK/subscription-image.json"
     local IMAGE_METADATA="$WORK/subscription-image.json"
     SUBSCRIPTION_IMAGE=$(image_field image)
+    SUBSCRIPTION_IMAGE_VERSION=$(image_field version)
 }
 prepare_subscription_image() {
     local IMAGE=$SUBSCRIPTION_IMAGE IMAGE_METADATA="$WORK/subscription-image.json"
@@ -696,7 +725,7 @@ subscription_migration_wizard() {
     local script="$HELPER_ROOT/subscription_migration.py" count choice index
     [[ -f $script ]] || return 0
     if python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));sys.exit(not (s.get("subscriptionMigration") or s.get("subscriptionPage")))' "$STATE"; then return 0; fi
-    [[ $ACTION == migrate-remnawave-panel ]] || return 0
+    [[ $ACTION == migrate-remnawave-panel || $ACTION == upgrade-panel ]] || return 0
     local -a candidates=()
     mapfile -t candidates < <(docker ps --all --quiet)
     (("${#candidates[@]}")) || return 0
@@ -1000,12 +1029,12 @@ interactive_menu() {
     while true; do
         ACTION=''; COMPONENT=''
         show_menu
-        choice=$(ask_menu_choice 12) || return $?
+        choice=$(ask_menu_choice 15) || return $?
         case "$choice" in
             1) ACTION=install-panel;;
             2) ACTION=install-node;;
             3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
-            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu || return $?;;10) ACTION=migrate-marzban-panel;;11) ACTION=uninstall-panel;;12) ACTION=uninstall-node;;0) return 0;;
+            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu || return $?;;10) ACTION=migrate-marzban-panel;;11) ACTION=uninstall-panel;;12) ACTION=uninstall-node;;13) ACTION=install-subscription-page;;14) ACTION=upgrade-subscription-page;;15) ACTION=manage-subscription-page;;0) return 0;;
         esac
         [[ -n $ACTION ]] || { discard_pending_input; continue; }
         selection=("$ACTION")
@@ -1050,8 +1079,9 @@ PY
         fi
         info "Выпуск $TAG: SHA-256, пути архива и версии проверены"; return 0
     fi
-    case "$ACTION" in *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
+    case "$ACTION" in *subscription-page) COMPONENT=subscription-page;; *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
     case "$ACTION" in
+        *subscription-page) ;;
         upgrade-*)
             if ! component_installed "$COMPONENT" && [[ -z $CONTAINER ]]; then
                 die "$COMPONENT не установлен. Сначала install-$COMPONENT; для существующего Remnawave используйте migrate-remnawave-$COMPONENT с --directory или --container."
@@ -1062,6 +1092,8 @@ PY
     mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
     LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     case "$ACTION" in
+        normalize-layout) installed_helper; lock_operation; python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "${COMPONENT:-panel}";;
+        install-subscription-page|upgrade-subscription-page|manage-subscription-page) subscription_page_action;;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
         *) service_action;;
@@ -1454,6 +1486,92 @@ node_net_admin_wizard() {
         helper node-capability --source "$1" --state "$STATE" --key enable >/dev/null
         NODE_NET_ADMIN_ADDED=true
     fi
+}
+
+
+subscription_page_action() {
+    local script choice token_file endpoint
+    prepare_host; lock_operation
+    if [[ $ACTION == manage-subscription-page ]]; then
+        installed_helper
+        script="$HELPER_ROOT/subscription_pages.py"
+        [[ -f $script ]] || die 'Обновите установщик: управление страницами недоступно в старом выпуске'
+        case "${PAGE_OPERATION:-list}" in list|start|stop|restart) ;; *) die 'Действие страницы: list, start, stop, restart';; esac
+        if [[ ${PAGE_OPERATION:-list} == list ]]; then
+            python3 -I "$script" list --root "$ROOT"
+            [[ -t 0 ]] || return 0
+            PAGE_ID=$(ask_required 'ID страницы') || return $?
+            PAGE_OPERATION=$(ask 'Действие: start, stop, restart' restart) || return $?
+            case "$PAGE_OPERATION" in start|stop|restart) ;; *) die 'Выберите start, stop или restart';; esac
+        fi
+        confirm "$PAGE_OPERATION страницы $PAGE_ID"
+        python3 -I "$script" "$PAGE_OPERATION" --root "$ROOT" --page-id "$PAGE_ID"
+        return
+    fi
+    choose_version
+    confirm "Выполнить $ACTION ($VERSION)"
+    release_source
+    script="$HELPER_ROOT/subscription_pages.py"
+    select_subscription_image
+    step 'Готовый образ сайта подписки' prepare_subscription_image
+    if [[ $ACTION == upgrade-subscription-page ]]; then
+        if [[ -z $PAGE_ID ]]; then
+            python3 -I "$script" list --root "$ROOT"
+            PAGE_ID=$(ask_required 'ID страницы для обновления') || return $?
+        fi
+        python3 -I "$script" upgrade --root "$ROOT" --page-id "$PAGE_ID" --image "$SUBSCRIPTION_IMAGE" --version "$SUBSCRIPTION_IMAGE_VERSION" --release "$TAG"
+        info 'Страница подписки обновлена; состояние запуска сохранено.'
+        return
+    fi
+    endpoint=${PAGE_PANEL_URL:-}
+    if [[ -z $endpoint && -f $ROOT/registry/panel.json ]]; then endpoint=auto; fi
+    [[ -n $endpoint ]] || endpoint=$(ask_required 'HTTPS адрес панели') || return $?
+    DOMAIN=${DOMAIN:-$(ask_required 'Домен страницы подписки')}
+    PROJECT=${PROJECT:-remnacust-subscription-page}
+    DEPLOY=${DIRECTORY:-$ROOT/subscription-page}
+    if [[ -z $DIRECTORY && $PROJECT != remnacust-subscription-page ]]; then DEPLOY="$ROOT/subscription-pages/$PROJECT"; fi
+    PORT=${PORT:-$SUBSCRIPTION_PORT}
+    port_free "$PORT"
+    if ! $PROXY_SET; then
+        PROXY=existing
+        if [[ -t 0 ]]; then
+            choice=$(ask_yes_no 'Установить отдельный Caddy для HTTPS? Только если порты 80/443 свободны') || return $?
+            [[ $choice != yes ]] || PROXY=caddy
+        fi
+    fi
+    if [[ $PROXY == caddy ]]; then port_free 80; port_free 443; docker pull caddy:2-alpine; fi
+    token_file="$WORK/subscription-token.txt"
+    if [[ $endpoint == auto ]]; then
+        local panel_id
+        panel_id=$(python3 -I - "$ROOT/registry/panel.json" "$HELPER_ROOT" <<'PY'
+import json,sys
+sys.path.insert(0,sys.argv[2])
+from subscription_pages import inspect
+s=json.load(open(sys.argv[1]));c=inspect({**s,'service':s['mainService']})
+if not c or not c.get('State',{}).get('Running'):raise SystemExit('Локальная панель не запущена')
+print(c['Id'])
+PY
+        )
+        docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$(python3 -c 'import uuid;print(uuid.uuid4())')" "$panel_id" node - < "$HELPER_ROOT/subscription.cjs" > "$token_file"
+    else
+        if [[ -n ${REMNACUST_SUBSCRIPTION_TOKEN:-} ]]; then printf '%s' "$REMNACUST_SUBSCRIPTION_TOKEN" > "$token_file"
+        elif [[ -t 0 ]]; then
+            local token
+            while true; do
+                read -r -s -p 'API-токен с правами страницы подписки: ' token || return 1
+                printf '\n' >&2
+                [[ -z $token ]] || break
+                info 'Пустой токен: повторите ввод.'
+            done
+            printf '%s' "$token" > "$token_file"; unset token
+        else die 'Нужен REMNACUST_SUBSCRIPTION_TOKEN или локальная панель (--panel-url auto)'; fi
+    fi
+    chmod 600 "$token_file"
+    PAGE_ID=$(python3 -I "$script" install --root "$ROOT" --directory "$DEPLOY" --project "$PROJECT" --panel-url "$endpoint" --token-file "$token_file" --port "$PORT" --image "$SUBSCRIPTION_IMAGE" --domain "$DOMAIN" --proxy "$PROXY")
+    rm -f -- "$token_file"
+    install_cli
+    info "Страница установлена. ID: $PAGE_ID. Каталог: $DEPLOY"
+    [[ $PROXY != existing ]] || info "Направьте HTTPS домена $DOMAIN на 127.0.0.1:$PORT в вашем reverse proxy."
 }
 
 subscription_wizard() {
@@ -2040,6 +2158,9 @@ PY
         step 'Перенос и проверка страницы подписки' subscription_migration_apply
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     fi
+    step 'Постоянный рабочий каталог' python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "$COMPONENT"
+    helper_file_copy "$ROOT/registry/$COMPONENT.json" "$STATE"
+    load_state
     compose --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.layout.json"
     helper layout --state "$STATE" --source "$WORK/compose.layout.json"
     if [[ $ACTION == upgrade-* || $ACTION == migrate-remnawave-* ]]; then
