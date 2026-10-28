@@ -103,6 +103,19 @@ class UpdateTests(unittest.TestCase):
         run.assert_not_called()
         self.assertFalse(self.agent.state()['active'])
         self.assertEqual(self.agent.state()['error'], 'UPDATE_FAILED')
+        self.assertEqual((self.root / 'logs' / ('panel-update-' + self.request + '.log')).read_text(), 'fixture')
+
+    def test_release_resolution_failure_is_retained_only_in_private_log(self):
+        self.start()
+        detail = 'private network failure fixture'
+        with patch.object(agent, 'latest_installer_release', side_effect=OSError(detail)), patch.object(agent.subprocess, 'run') as commands:
+            self.agent.work(self.request)
+        commands.assert_not_called()
+        log = self.root / 'logs' / ('panel-update-' + self.request + '.log')
+        self.assertIn(detail, log.read_text())
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(detail, json.dumps(self.agent.status()))
+        self.assertEqual(self.agent.state()['phase'], 'failed')
 
     def test_dead_worker_releases_lock_but_running_worker_is_preserved(self):
         self.start()

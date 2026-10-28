@@ -302,10 +302,13 @@ class Agent:
                 return
             info = self.control / ('release-' + request + '.json')
             entry = self.control / ('release-' + request + '.sh')
+            log_created = False
+            log_path = self.root / 'logs' / ('panel-update-' + request + '.log')
             try:
                 log_dir = self.root / 'logs'
                 log_dir.mkdir(mode=0o700, exist_ok=True)
                 fd = os.open(log_dir / ('panel-update-' + request + '.log'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                log_created = True
                 with os.fdopen(fd, 'wb') as log:
                     env = {**os.environ, 'REMNACUST_ROOT': str(self.root), 'REMNACUST_UPDATE_JOB': request, 'REMNACUST_RELEASE_INFO_FILE': str(info),
                        'REMNACUST_RELEASE_ENTRY_FILE': str(entry)}
@@ -345,6 +348,15 @@ class Agent:
                     except (OSError, ValueError, KeyError):
                         pass
             except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+                # The output stream has closed by this point. Preserve Python/network
+                # failures too, without copying private diagnostics into public status.
+                if log_created:
+                    try:
+                        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+                        with os.fdopen(fd, 'wb') as log:
+                            log.write(('\nUpdate agent failure: ' + type(error).__name__ + ': ' + str(error) + '\n').encode('utf-8', errors='replace'))
+                    except OSError:
+                        pass
                 try:
                     progress = update_progress(self.root, state)
                     record_progress(self.root, request, progress['stage'] if progress else 'checking',

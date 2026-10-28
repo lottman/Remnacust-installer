@@ -48,6 +48,24 @@ class HelperTests(unittest.TestCase):
         self.assertIn('LICENSE', files)
         self.assertIn('image_cleanup.py', files)
 
+    def test_published_1_2_90_verifier_can_validate_and_render_new_release(self):
+        legacy_spec = importlib.util.spec_from_file_location('legacy_bundle', INSTALLER / 'tests/fixtures/helper_bundle-1.2.90.py')
+        legacy = importlib.util.module_from_spec(legacy_spec)
+        legacy_spec.loader.exec_module(legacy)
+        (self.source / 'VERSION').write_text('1.2.92\n')
+        bundle.sync(self.source)
+        entry, raw, files = legacy.source_bundle(self.source)
+        standalone = legacy.render(entry, raw, files)
+        current_raw, current_files = bundle.embedded(standalone)
+        self.assertEqual(current_raw, raw)
+        self.assertEqual(current_files, files)
+        self.assertIn('stable_entry.py', files)
+        self.assertNotIn(b'configure-entry-node', entry)
+        altered = json.loads(raw)
+        del altered['files']['stable_entry.py']
+        with self.assertRaisesRegex(ValueError, 'Incomplete helper cohort'):
+            legacy.manifest(json.dumps(altered).encode())
+
     def test_modified_entry_manifest_and_each_helper_are_rejected(self):
         for entry, raw, files in [
             (self.entry + b'# incompatible entry\n', self.manifest, self.files),
