@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='d790e1d817cc18b2f6429c26ad369058ba9891843a27ae62f9f928e37e64a200'
+HELPER_BUNDLE_SHA256='325bc3eb0e29718e14437f9d0bdf21284064670d4aa2c5a9315484b93896ec70'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -10,7 +10,7 @@ REPO=${REMNACUST_REPOSITORY:-lottman/Remnacust-installer}
 ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
-PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP='' ENTRY_CONFIG=''
+PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE=''
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
@@ -37,10 +37,18 @@ if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
 fi
 info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
 die() { printf '%s  Ошибка: %s%s\n' "$ROSE" "$*" "$RESET" >&2; exit 1; }
-ask() { local value display_default=${3:-${2:-}}; [[ -t 0 ]] || die "Задайте параметр: $1"; read -r -p "$1${2:+ [$display_default]}: " value || return 1; printf '%s' "${value:-${2:-}}"; }
+ask() { local value display_default=${3:-${2:-}}; [[ -t 0 ]] || die "Задайте параметр: $1"; IFS= read -r -p "$1${2:+ [$display_default]}: " value || return 1; value=$(trim_answer "$value"); printf '%s' "${value:-${2:-}}"; }
+ask_required() {
+    local value
+    while true; do
+        value=$(ask "$1") || return $?
+        if [[ -n $value ]]; then printf '%s' "$value"; return 0; fi
+        printf '  ! пустой ответ, повторите ввод\n' >&2
+    done
+}
 ask_node_secret() {
     [[ -t 0 ]] || die 'Задайте REMNACUST_NODE_SECRET или введите ключ интерактивно'
-    IFS= read -r -p 'SECRET_KEY из панели: ' REMNACUST_NODE_SECRET || return 1
+    REMNACUST_NODE_SECRET=$(ask_required 'SECRET_KEY из панели') || return 1
     export REMNACUST_NODE_SECRET
 }
 trim_answer() {
@@ -107,7 +115,6 @@ Remnacust · installer.sh
   restore-panel             Данные и ключи из копии; текущая версия сохраняется
   renew-node-certificate    Копирование обновлённого TLS и перезапуск ноды
   renew-panel-certificate   Копирование обновлённого TLS и reload Caddy
-  configure-entry-node      Применить постоянный TCP-вход из --entry-config
   --help, -h                Эта справка
 
   --component panel|node    Компонент для команд обслуживания
@@ -119,8 +126,8 @@ Remnacust · installer.sh
   --net-admin               Добавить NET_ADMIN новой панели или устанавливаемой/обновляемой ноде
   --no-net-admin            Новая панель/нода без NET_ADMIN; при обновлении включённое право сохраняется
   --subscription-urls URLS  Один или два адреса сайта подписки через запятую; первый — основной
-  --subscription-page       Установить сайт подписки вместе с новой панелью
-  --no-subscription-page    Оставить подписки через панель / указанный внешний сайт
+  --subscription-page       Установить сайт подписки / перенести найденный при миграции
+  --no-subscription-page    Не устанавливать / не переносить существующий сайт подписки
   --subscription-port PORT Порт сайта на loopback для вашего reverse proxy (3010)
   --server-ip IP[,IP]        Публичные IP сервера для проверки A/AAAA (NAT)
   --port PORT               Порт панели на loopback / API ноды
@@ -132,7 +139,6 @@ Remnacust · installer.sh
   --key-file PATH           Его приватный ключ privkey.pem
   --dns-credentials PATH    Закрытый INI-файл выбранного DNS-провайдера
   --panel-ip IP[/CIDR]      Все входящие порты и ping только от панели, кроме SSH
-  --entry-config FILE      JSON постоянного TCP-входа (configure-entry-node)
   --backup PATH             Каталог копии для restore-panel
   --yes                     Пропустить подтверждение выбранного действия
   --source-url URL          Адрес Marzban для переноса
@@ -276,9 +282,9 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate|configure-entry-node)
+            install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode|--entry-config)
+            --version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
@@ -286,7 +292,7 @@ parse_args() {
                     --subscription-urls) SUBSCRIPTION_URLS=$2; SUBSCRIPTION_SET=true;;
                     --subscription-port) SUBSCRIPTION_PORT=$2; SUBSCRIPTION_SET=true;;
                     --server-ip) SERVER_IPS=$2;;
-                    --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;; --entry-config) ENTRY_CONFIG=$2;;
+                    --node-domain) NODE_DOMAIN=$2;; --email) EMAIL=$2;; --tls-method) TLS_METHOD=$2;; --cert-file) CERT_FILE=$2;; --key-file) KEY_FILE=$2;; --dns-credentials) DNS_CREDENTIALS=$2;; --panel-ip) PANEL_IP=$2;; --backup) BACKUP=$2;;
                     --source-url) MARZBAN_URL=$2;; --destination-url) DESTINATION_URL=$2;; --internal-squad) INTERNAL_SQUAD=$2;; --quota-mode) QUOTA_MODE=$2;;
                 esac; shift ;;
             --subscription-page|--no-subscription-page)
@@ -305,7 +311,7 @@ parse_args() {
     [[ -z $COMPONENT || $COMPONENT == panel || $COMPONENT == node ]] || die 'Компонент: panel или node'
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
     [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
-    [[ -z $ACTION || $ACTION == install-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна только для новой панели'
+    [[ -z $ACTION || $ACTION == install-panel || $ACTION == migrate-remnawave-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна для новой панели или миграции Remnawave'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
     [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
@@ -658,7 +664,7 @@ find_existing() {
 import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
- for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls','subscriptionPage','subscriptionPort','subscriptionTokenUuid','composeEntryPoint']:
+ for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls','subscriptionPage','subscriptionPort','subscriptionTokenUuid','subscriptionMigration','composeEntryPoint']:
   if key in old and (key != 'apiPort' or key not in new) and (key != 'composeEntryPoint' or old[key] in new.get('composeFiles',[])):new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
@@ -669,7 +675,8 @@ PY
     local -a project_ids=(); mapfile -t project_ids < <(docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT")
     docker inspect "${project_ids[@]}" > "$WORK/project-containers.json"
     local -a subscription_options=()
-    if [[ $COMPONENT == panel && $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("subscriptionPage",False))' "$STATE") == True && $IMAGE != discovery-only ]]; then
+    if [[ $COMPONENT == panel && $IMAGE != discovery-only ]]; then subscription_migration_wizard; fi
+    if [[ $COMPONENT == panel && $IMAGE != discovery-only ]] && python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));sys.exit(not (s.get("subscriptionPage") or s.get("subscriptionMigration")))' "$STATE"; then
         select_subscription_image
         step 'Готовый образ сайта подписки' prepare_subscription_image
         subscription_options=(--subscription-image "$SUBSCRIPTION_IMAGE")
@@ -685,6 +692,52 @@ import json,sys
 p=sys.argv[1];s=json.load(open(p));s['applications']=sys.argv[2:];json.dump(s,open(p,'w'),indent=2)
 PY
 }
+subscription_migration_wizard() {
+    local script="$HELPER_ROOT/subscription_migration.py" count choice index
+    [[ -f $script ]] || return 0
+    if python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));sys.exit(not (s.get("subscriptionMigration") or s.get("subscriptionPage")))' "$STATE"; then return 0; fi
+    [[ $ACTION == migrate-remnawave-panel ]] || return 0
+    local -a candidates=()
+    mapfile -t candidates < <(docker ps --all --quiet)
+    (("${#candidates[@]}")) || return 0
+    docker inspect "${candidates[@]}" > "$WORK/subscription-containers.json"
+    python3 -I "$script" discover --panel "$WORK/container.before.json" --containers "$WORK/subscription-containers.json" --output "$WORK/subscription-candidates.json"
+    count=$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/subscription-candidates.json")
+    ((count > 0)) || return 0
+    python3 - "$WORK/subscription-candidates.json" <<'PY'
+import json,sys
+for index,item in enumerate(json.load(open(sys.argv[1])),1):
+ print(f"  {index}. Сайт подписки: {item['project']}/{item['service']} · {item['directory']}")
+PY
+    if $SUBSCRIPTION_PAGE_SET; then
+        choice=no; if $SUBSCRIPTION_PAGE; then choice=yes; fi
+    elif [[ -t 0 ]]; then
+        choice=$(ask_yes_no 'Перенести установленную страницу подписки на Remnacust?') || return $?
+    else choice=no; fi
+    if [[ $choice != yes ]]; then info 'Страница подписки сохранена без изменений.'; return 0; fi
+    index=1
+    if ((count > 1)); then
+        while true; do
+            index=$(ask_required 'Номер страницы для переноса') || return $?
+            if [[ $index =~ ^[0-9]{1,3}$ ]] && ((10#$index>=1 && 10#$index<=count)); then index=$((10#$index)); break; fi
+            printf '  Выберите номер от 1 до %s.\n' "$count" >&2
+        done
+    fi
+    python3 -I "$script" select --source "$WORK/subscription-candidates.json" --index "$((index-1))" --state "$STATE"
+}
+subscription_migration_apply() {
+    local script="$HELPER_ROOT/subscription_migration.py" token_uuid id
+    [[ -n $SUBSCRIPTION_IMAGE && -f $script ]] || return 1
+    token_uuid=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["subscriptionMigration"]["tokenUuid"])' "$STATE")
+    id=$(compose ps --quiet "$(get mainService)")
+    docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$token_uuid" "$id" node - < "$HELPER_ROOT/subscription.cjs" > "$WORK/migration-subscription-token.txt"
+    chmod 600 "$WORK/migration-subscription-token.txt"
+    local result=0
+    python3 -I "$script" upgrade --state "$STATE" --image "$SUBSCRIPTION_IMAGE" --token "$WORK/migration-subscription-token.txt" --backup-root "$ROOT/backups" --version "${COMPONENT_VERSION:-${TAG#v}}" --release "$TAG" || result=$?
+    rm -f -- "$WORK/migration-subscription-token.txt"
+    if ((result != 0)); then info 'Панель обновлена. Перенос сайта не завершён; предыдущая конфигурация сайта восстановлена.'; return "$result"; fi
+}
+
 backup_panel_data() {
     local id
     id=$(compose ps --all --quiet "$(get mainService)")
@@ -1009,12 +1062,6 @@ PY
     mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
     LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     case "$ACTION" in
-        configure-entry-node)
-            [[ -n $ENTRY_CONFIG && -f $ENTRY_CONFIG && ! -L $ENTRY_CONFIG ]] || die 'Укажите --entry-config с JSON постоянного входа'
-            installed_helper
-            python3 -I "$HELPER_ROOT/stable_entry.py" render --config "$ENTRY_CONFIG" > /dev/null
-            command -v haproxy >/dev/null || { apt-get update; apt-get install -y --no-install-recommends haproxy; }
-            python3 -I "$HELPER_ROOT/stable_entry.py" apply --config "$ENTRY_CONFIG";;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
         *) service_action;;
@@ -1135,7 +1182,7 @@ choose_version() {
 }
 release_source() {
     choose_version
-    if [[ $ACTION == install-panel && -z $DOMAIN ]]; then DOMAIN=$(ask 'Домен панели'); fi
+    if [[ $ACTION == install-panel && -z $DOMAIN ]]; then DOMAIN=$(ask_required 'Домен панели'); fi
     if [[ $ACTION == install-node && -z ${REMNACUST_NODE_SECRET:-} ]]; then
         ask_node_secret || return 1
     fi
@@ -1430,7 +1477,7 @@ subscription_wizard() {
         if [[ -t 0 ]] && ! $preset; then
             info 'Укажите один или два отдельных домена через запятую; первый — основной.'
             info "HTTPS сайта: тот же способ, что у панели ($PROXY / ${TLS_METHOD:-ваш proxy})."
-            SUBSCRIPTION_URLS=$(ask 'Домены сайта подписки') || return $?
+            SUBSCRIPTION_URLS=$(ask_required 'Домены сайта подписки') || return $?
         fi
         if normalized=$(helper "$operation" --domain "$DOMAIN" --subscription-urls "$SUBSCRIPTION_URLS"); then
             if $SUBSCRIPTION_PAGE; then
@@ -1458,7 +1505,7 @@ fresh_files() {
     fi
     if [[ $COMPONENT == panel ]]; then
         [[ -z $NODE_DOMAIN$PANEL_IP ]] || die '--node-domain и --panel-ip предназначены для install-node'
-        [[ -n $DOMAIN ]] || DOMAIN=$(ask 'Домен панели')
+        [[ -n $DOMAIN ]] || DOMAIN=$(ask_required 'Домен панели')
         PORT=${PORT:-3000}
     else
         PORT=${PORT:-2222}
@@ -1495,9 +1542,9 @@ fresh_files() {
     fi
     STATE="$WORK/state.json"
     helper fresh --component "$COMPONENT" --directory "$DEPLOY" --project "$PROJECT" --image "$IMAGE" --domain "$DOMAIN" \
-        --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" "${subscription_options[@]}" "${capability_options[@]}" --target "$DEPLOY/compose.json" --state "$STATE"
+        --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" "${subscription_options[@]}" "${capability_options[@]}" --target "$DEPLOY/docker-compose.yml" --state "$STATE"
     if [[ $COMPONENT == panel && $PROXY == caddy && ${TLS_METHOD:-auto} != auto ]]; then
-        python3 - "$DEPLOY/compose.json" "$DEPLOY" <<'PY'
+        python3 - "$DEPLOY/docker-compose.yml" "$DEPLOY" <<'PY'
 import json,sys
 p=sys.argv[1];s=json.load(open(p));s['services']['caddy']['volumes'].append(sys.argv[2]+'/certs:/var/lib/remnacust/tls:ro')
 json.dump(s,open(p,'w'),indent=2)
@@ -1541,7 +1588,7 @@ tls_helper() {
 certificate_wizard() {
     local choice domain suggested
     if [[ $COMPONENT == panel ]]; then
-        [[ -n $DOMAIN ]] || DOMAIN=$(ask 'Домен панели')
+        [[ -n $DOMAIN ]] || DOMAIN=$(ask_required 'Домен панели')
         if [[ -t 0 ]] && ! $PROXY_SET; then
             printf '\n  HTTPS панели\n  1  Caddy в Docker (новая установка)\n  2  Свой существующий Nginx/Caddy\n'
             choice=$(ask 'Reverse proxy' 1)
@@ -1560,7 +1607,7 @@ certificate_wizard() {
         fi
         if [[ -t 0 && -z $NODE_DOMAIN ]]; then
             choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде?')
-            case "$choice" in yes) NODE_DOMAIN=$(ask 'Домен ноды');;no) ;;esac
+            case "$choice" in yes) NODE_DOMAIN=$(ask_required 'Домен ноды');;no) ;;esac
         fi
         if [[ -z $NODE_DOMAIN ]]; then
             [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]] || die 'Для TLS ноды укажите --node-domain'
@@ -1584,14 +1631,26 @@ certificate_wizard() {
         [[ -z $EMAIL$DNS_CREDENTIALS ]] || die 'Для готового сертификата email и DNS credentials не нужны'
     else
         [[ -z $CERT_FILE$KEY_FILE ]] || die 'Пути к сертификату доступны при --tls-method existing'
-        [[ -n $EMAIL ]] || EMAIL=$(ask "Email для Let's Encrypt")
-        [[ $EMAIL =~ ^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die 'Некорректный email'
+        if [[ -z $EMAIL ]]; then
+            while true; do
+                EMAIL=$(ask_required "Email для Let's Encrypt") || return $?
+                [[ $EMAIL =~ ^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] && break
+                printf '  ! некорректный email, повторите ввод\n' >&2
+            done
+        else
+            [[ $EMAIL =~ ^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die 'Некорректный email'
+        fi
         if [[ $TLS_METHOD == cloudflare || $TLS_METHOD == gcore ]]; then
             if [[ -z $DNS_CREDENTIALS ]]; then
                 [[ -t 0 ]] || die 'Укажите --dns-credentials (INI, права 600)'
                 local secret
-                read -r -s -p "API token $TLS_METHOD (ввод скрыт): " secret; printf '\n'
-                [[ $secret =~ ^[A-Za-z0-9_.=-]+$ ]] || die 'Некорректный формат API token'
+                while true; do
+                    IFS= read -r -s -p "API token $TLS_METHOD (ввод скрыт): " secret || return 1
+                    printf '\n'
+                    secret=$(trim_answer "$secret")
+                    [[ $secret =~ ^[A-Za-z0-9_.=-]+$ ]] && break
+                    printf '  ! введите API token без пробелов\n' >&2
+                done
                 DNS_CREDENTIALS="$WORK/dns.ini"
                 if [[ $TLS_METHOD == cloudflare ]]; then printf 'dns_cloudflare_api_token = %s\n' "$secret" > "$DNS_CREDENTIALS"
                 else printf 'dns_gcore_apitoken = %s\n' "$secret" > "$DNS_CREDENTIALS"; fi
@@ -1605,7 +1664,7 @@ certificate_wizard() {
 }
 certificate_preflight() {
     if [[ $COMPONENT == node && -n $PANEL_IP && $TLS_METHOD == http ]]; then
-        die '--panel-ip закрывает HTTP-01 от внешних проверок. Используйте DNS-01 или готовый сертификат с внешним продлением.'
+        info 'Для HTTP-01 TCP 80 временно открывается во время выпуска и продления сертификата; затем снова закрывается.'
     fi
     local domain=${NODE_DOMAIN:-$DOMAIN}
     local -a subscription_options=(); local subscriptions
@@ -1794,7 +1853,14 @@ obtain_certificate() {
             tls_helper credentials --method "$TLS_METHOD" --source "$DNS_CREDENTIALS" --target "$ACME_ROOT/dns.ini"
             auth=(--authenticator "dns-$TLS_METHOD" "--dns-$TLS_METHOD-credentials" "$ACME_ROOT/dns.ini" "--dns-$TLS_METHOD-propagation-seconds" 90)
         else port_free 80; fi
-        step 'Сертификат Let’s Encrypt' "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" "${domains[@]}" "${auth[@]}"
+        local acme_open=false cert_status=0
+        if [[ $COMPONENT == node && $TLS_METHOD == http && -n $PANEL_IP ]] && command -v nft >/dev/null; then
+            python3 -I "$HELPER_ROOT/node_firewall.py" acme-open
+            acme_open=true
+        fi
+        step 'Сертификат Let’s Encrypt' "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" "${domains[@]}" "${auth[@]}" || cert_status=$?
+        if $acme_open; then python3 -I "$HELPER_ROOT/node_firewall.py" acme-close || cert_status=1; fi
+        ((cert_status == 0)) || return "$cert_status"
         lineage="$ACME_ROOT/config/live/$domain"
         CERT_FILE="$lineage/fullchain.pem"; KEY_FILE="$lineage/privkey.pem"
 }
@@ -1815,7 +1881,14 @@ configure_certificate() {
     if [[ $TLS_METHOD != existing ]]; then
         hook="$ACME_ROOT/deploy-hook.sh"; renew_cli="$ACME_ROOT/renew.sh"
         printf '#!/usr/bin/env bash\nset -eu\nexport REMNACUST_ROOT=%q\nexec /usr/local/bin/remnacust renew-%s-certificate --yes\n' "$ROOT" "$COMPONENT" > "$hook"
-        printf '#!/usr/bin/env bash\nset -eu\nexec %q renew --quiet --config-dir %q --work-dir %q --logs-dir %q --deploy-hook %q\n' "$CERTBOT" "$ACME_ROOT/config" "$ACME_ROOT/work" "$ACME_ROOT/logs" "$hook" > "$renew_cli"
+        local -a renewal_hooks=()
+        if [[ $COMPONENT == node && $TLS_METHOD == http && -n $PANEL_IP ]]; then
+            printf '#!/usr/bin/env bash\nset -eu\nexec /usr/bin/python3 -I /etc/remnacust-node-firewall/guard.py acme-open\n' > "$ACME_ROOT/acme-open.sh"
+            printf '#!/usr/bin/env bash\nset -eu\nexec /usr/bin/python3 -I /etc/remnacust-node-firewall/guard.py acme-close\n' > "$ACME_ROOT/acme-close.sh"
+            chmod 0700 "$ACME_ROOT/acme-open.sh" "$ACME_ROOT/acme-close.sh"
+            renewal_hooks=(--pre-hook "$ACME_ROOT/acme-open.sh" --post-hook "$ACME_ROOT/acme-close.sh")
+        fi
+        { printf '#!/usr/bin/env bash\nset -eu\nexec %q renew --quiet --config-dir %q --work-dir %q --logs-dir %q --deploy-hook %q' "$CERTBOT" "$ACME_ROOT/config" "$ACME_ROOT/work" "$ACME_ROOT/logs" "$hook"; if ((${#renewal_hooks[@]})); then printf ' %q' "${renewal_hooks[@]}"; fi; printf '\n'; } > "$renew_cli"
         chmod 0700 "$hook" "$renew_cli"
         service="remnacust-acme-$PROJECT"
         tls_helper timer --service "$service" --script "$renew_cli"
@@ -1875,7 +1948,7 @@ deploy() {
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
         # Keep recovery commands available if first boot or certificate issuance fails.
         install_cli
-        configure_panel_updates "$DEPLOY/compose.json"
+        configure_panel_updates "$DEPLOY/docker-compose.yml"
         if [[ $COMPONENT == panel ]]; then step 'Защита резервных копий' initialize_panel_backups; fi
         configure_certificate
         if [[ $COMPONENT == node ]]; then node_acl; fi
@@ -1963,6 +2036,12 @@ PY
     helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     if [[ $ACTION != install-* ]]; then install_cli; fi
     CHANGED=false; trap - ERR
+    if [[ $COMPONENT == panel ]] && python3 -c 'import json,sys;sys.exit(not json.load(open(sys.argv[1])).get("subscriptionMigration"))' "$STATE"; then
+        step 'Перенос и проверка страницы подписки' subscription_migration_apply
+        helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
+    fi
+    compose --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.layout.json"
+    helper layout --state "$STATE" --source "$WORK/compose.layout.json"
     if [[ $ACTION == upgrade-* || $ACTION == migrate-remnawave-* ]]; then
         cleanup_old_images
     fi
@@ -2067,6 +2146,7 @@ PY
         if [[ $ACTION == install-node ]]; then completion_row 'Ключ ноды:' "$directory/.env · SECRET_KEY"
         else completion_row 'Ключ ноды:' 'Сохранён из прежнего контейнера · SECRET_KEY в Compose'; fi
     fi
+    completion_row 'Карта файлов:' "$directory/FILES.txt (скрытые .env: ls -la)"
     completion_row 'Файл настроек:' "$directory/.env"
     [[ -z ${details[8]:-} ]] || completion_row 'Compose:' "${details[8]}"
     if [[ -n $certificate ]]; then
@@ -2429,9 +2509,9 @@ PY
 }
 migrate_marzban() {
     prepare_host; lock_operation; release_source
-    [[ -n $MARZBAN_URL ]] || MARZBAN_URL=$(ask 'URL Marzban (https://...)')
-    [[ -n $DESTINATION_URL ]] || DESTINATION_URL=$(ask 'URL установленной Remnacust (https://...)')
-    [[ -n $INTERNAL_SQUAD ]] || INTERNAL_SQUAD=$(ask 'UUID внутреннего сквада в Remnacust')
+    [[ -n $MARZBAN_URL ]] || MARZBAN_URL=$(ask_required 'URL Marzban (https://...)')
+    [[ -n $DESTINATION_URL ]] || DESTINATION_URL=$(ask_required 'URL установленной Remnacust (https://...)')
+    [[ -n $INTERNAL_SQUAD ]] || INTERNAL_SQUAD=$(ask_required 'UUID внутреннего сквада в Remnacust')
     local output; output="$ROOT/backups/marzban-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     local -a args=(--source-url "$MARZBAN_URL" --destination-url "$DESTINATION_URL" --internal-squad "$INTERNAL_SQUAD" --quota-mode "$QUOTA_MODE" --output "$output")
     $YES && args+=(--yes); $DRY_RUN && args+=(--dry-run); $PRESERVE_SUBHASH && args+=(--preserve-subhash)

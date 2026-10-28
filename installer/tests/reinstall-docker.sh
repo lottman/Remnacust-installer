@@ -90,14 +90,14 @@ port_free() { :; }
 install_cli() { :; }
 compose() {
     if [[ ${1:-} == up ]]; then
-        docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" up -d remnawave-db
+        docker compose --project-name "$PROJECT" -f "$DEPLOY/docker-compose.yml" up -d remnawave-db
     else
-        docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" "$@"
+        docker compose --project-name "$PROJECT" -f "$DEPLOY/docker-compose.yml" "$@"
     fi
 }
 wait_ready() {
     local db count
-    db=$(docker compose --project-name "$PROJECT" -f "$DEPLOY/compose.json" ps --quiet remnawave-db)
+    db=$(docker compose --project-name "$PROJECT" -f "$DEPLOY/docker-compose.yml" ps --quiet remnawave-db)
     for count in {1..60}; do
         if docker exec "$db" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
         sleep 1

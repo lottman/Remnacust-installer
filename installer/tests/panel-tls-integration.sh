@@ -30,7 +30,7 @@ tls_helper copy --domain "$DOMAIN" --certificate "$CERT_FILE" --key "$KEY_FILE" 
 tls_helper record --state "$STATE" --method existing --certificate "$CERT_FILE" --key "$KEY_FILE"
 mkdir -p "$fixture/www/api/auth"
 printf '{"response":{"isLoginAllowed":false,"isRegisterAllowed":true}}' > "$fixture/www/api/auth/status"
-python3 - "$DEPLOY/compose.json" "$fixture/www" <<'PY'
+python3 - "$DEPLOY/docker-compose.yml" "$fixture/www" <<'PY'
 import json,sys
 p=sys.argv[1];c=json.load(open(p));c['services']={'caddy':c['services']['caddy'],'remnawave':{'image':'python:3.12-alpine','command':['python','-m','http.server','3000','--directory','/www'],'volumes':[sys.argv[2]+':/www:ro']}}
 c['services']['caddy']['ports']=['127.0.0.1:43876:443'];json.dump(c,open(p,'w'))

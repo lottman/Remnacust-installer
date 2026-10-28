@@ -76,8 +76,8 @@ class SubscriptionPageTests(unittest.TestCase):
             (['install-panel', '--no-subscription-page'], 'RESULT=false|https://panel.example.com/api/sub', True),
             (['install-panel', '--subscription-page'], 'Исправьте --subscription-urls', False),
             (['install-panel', '--subscription-page', '--subscription-urls', 'panel.example.com'], 'Исправьте --subscription-urls', False),
-            (['upgrade-panel', '--subscription-page'], 'только для новой панели', False),
-            (['install-node', '--subscription-page'], 'только для новой панели', False),
+            (['upgrade-panel', '--subscription-page'], 'для новой панели или миграции', False),
+            (['install-node', '--subscription-page'], 'для новой панели или миграции', False),
             (['install-panel', '--subscription-page', '--no-subscription-page'], 'Выберите один', False),
         ]:
             result = subprocess.run(['bash', '-c', 'source "$1"; shift; parse_args "$@"; DOMAIN=panel.example.com; '

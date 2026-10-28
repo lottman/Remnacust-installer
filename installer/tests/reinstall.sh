@@ -44,7 +44,7 @@ import json,sys
 from pathlib import Path
 p=Path(sys.argv[1]);s=json.load(open(p/'registry/panel.json'))
 assert not s.get('uninstalled') and s['project']!='remnacust-panel'
-c=json.load(open(Path(s['directory'])/'compose.json'))
+c=json.load(open(s['composeFiles'][0]))
 assert c['name']==s['project'] and all('name' not in v and not v.get('external') for v in c['volumes'].values())
 old=list(p.glob('backups/reinstall-*/registry.json'));assert len(old)==1
 assert old[0].read_bytes()==Path(sys.argv[2]).read_bytes()

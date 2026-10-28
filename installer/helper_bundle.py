@@ -19,9 +19,9 @@ CONTRACT = 'helper-contract.json'
 FOOTER = b'\n# REMNACUST_HELPERS_V1\n'
 END = b'# END_REMNACUST_HELPERS_V1\n'
 ANCHOR = re.compile(rb"(?m)^HELPER_BUNDLE_SHA256='[a-f0-9]{64}'$")
-FILES = ('helper_bundle.py', 'runtime.py', 'database.cjs', 'subscription.cjs',
+FILES = ('helper_bundle.py', 'runtime.py', 'database.cjs', 'subscription.cjs', 'subscription_migration.py',
          'marzban.py', 'images.py', 'tls.py', 'update-agent.py', 'image_cleanup.py', 'node_firewall.py',
-         'stable_entry.py', 'LICENSE', 'NOTICE.md')
+         'LICENSE', 'NOTICE.md')
 MAX_RAW = 16 * 1024 * 1024
 MAX_FILE = 2 * 1024 * 1024
 

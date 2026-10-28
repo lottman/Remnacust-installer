@@ -37,12 +37,14 @@ def render(panel, ssh_ports, bridges):
     source = f'{family} saddr {panel} accept'
     trusted = ('iifname { ' + ', '.join(json.dumps(b) for b in sorted(set(bridges))) + ' } accept') if bridges else ''
     return f'''table inet {TABLE} {{
+ set acme_http {{ type inet_service; flags timeout; }}
  chain input {{
   type filter hook input priority -10; policy accept;
   iifname "lo" accept
   ct state invalid drop
   {source}
   tcp dport {{ {', '.join(map(str, ports))} }} accept
+  tcp dport @acme_http accept
   ct state established,related ct direction reply accept
   meta l4proto ipv6-icmp icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert }} ip6 hoplimit 255 accept
   meta l4proto ipv6-icmp icmpv6 type {{ destination-unreachable, packet-too-big, time-exceeded, parameter-problem }} accept
@@ -88,6 +90,25 @@ def replace_table(rules):
     transaction = (f'delete table inet {TABLE}\n' if existing.returncode == 0 else '') + rules
     run('nft', '-c', '-f', '-', data=transaction)
     run('nft', '-f', '-', data=transaction)
+
+
+def acme_window(open_window):
+    # A timed nftables element closes even if Certbot or the host process crashes.
+    if run('nft', 'list', 'table', 'inet', TABLE, check=False).returncode:
+        if run('nft', 'list', 'tables', check=False).returncode:
+            raise RuntimeError('Cannot inspect nftables')
+        return  # No owned guard is installed; external firewalls still apply.
+    if run('nft', 'list', 'set', 'inet', TABLE, 'acme_http', check=False).returncode:
+        if not open_window:
+            return
+        # Upgrade an older guard in place, without replacing its rules or state.
+        run('nft', '-f', '-', data=(
+            f'add set inet {TABLE} acme_http {{ type inet_service; flags timeout; }}\n'
+            f'insert rule inet {TABLE} input tcp dport @acme_http accept\n'
+        ))
+    run('nft', 'delete', 'element', 'inet', TABLE, 'acme_http', '{', '80', '}', check=False)
+    if open_window:
+        run('nft', 'add', 'element', 'inet', TABLE, 'acme_http', '{', '80', 'timeout', '15m', '}')
 
 
 def write(path, value):
@@ -150,7 +171,7 @@ WantedBy=multi-user.target
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['apply', 'restore', 'remove', 'render'])
+    parser.add_argument('action', choices=['apply', 'restore', 'remove', 'render', 'acme-open', 'acme-close'])
     parser.add_argument('--panel')
     args = parser.parse_args()
     if args.action == 'render':
@@ -174,6 +195,8 @@ def main():
             state = json.loads((ROOT / 'state.json').read_text())
             ports, bridges = discover()
             replace_table(render(state['panel'], sorted(set(ports + state['sshPorts'])), bridges))
+        elif args.action in ('acme-open', 'acme-close'):
+            acme_window(args.action == 'acme-open')
         else:
             run('systemctl', 'disable', 'remnacust-node-firewall.service', check=False)
             replace_table('')

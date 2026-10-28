@@ -579,6 +579,13 @@ def commit_compose(state_path, candidate_path, directory, version, release):
         primary = compose_path(deployment, originals[0] if originals else deployment/'compose.json')
     else:
         primary = paths[0]
+    if primary.name == 'compose.json':
+        if primary.exists() and primary not in paths:
+            paths.append(primary)
+        canonical = deployment / 'docker-compose.yml'
+        if canonical.exists() and canonical not in paths:
+            fail('docker-compose.yml уже существует вне активного набора; укажите основной файл явно')
+        primary = compose_path(deployment, canonical)
     paths.extend(neutral_compose_overrides(deployment, paths))
     config = load(candidate_path)
     state = load(state_path)
@@ -611,7 +618,10 @@ def commit_compose(state_path, candidate_path, directory, version, release):
         # file. Empty overlays prevent old image pins from overriding it.
         for path in paths:
             if path != primary:
-                write(path, {'services': {}})
+                if path.name == 'compose.json' or re.fullmatch(r'compose\.remnacust-[0-9]{8}T[0-9]{6}Z-[0-9]+\.json', path.name):
+                    path.unlink()
+                else:
+                    write(path, {'services': {}})
         state.update(composeFiles=[str(primary)], composeEntryPoint=str(primary))
         write(state_path, state)
     except Exception:
@@ -810,7 +820,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
             extras = ['node-nginx']
         result = {'name': project, 'services': services}
     state = {'schema': 1, 'component': component, 'directory': str(directory), 'project': project,
-             'composeFiles': [str(directory / 'compose.json')], 'mainService': main,
+             'composeFiles': [str(directory / 'docker-compose.yml')], 'mainService': main,
              'applications': [main], 'extraServices': extras, 'nodeDomain': node_domain,
              'panelDomain': hostname if component == 'panel' else '', 'proxy': proxy,
              'apiPort': number, 'ownedServices': list(services)}
@@ -1046,9 +1056,62 @@ def snapshot_node_state(plan, run=subprocess.run, copy_state=copy_node_state_arc
                 os.close(descriptor)
 
 
+def write_layout(state, config):
+    root = Path(os.environ.get('REMNACUST_ROOT', '/opt/remnacust')).resolve()
+    deployment = Path(state['directory']).resolve()
+    marker = 'Remnacust — расположение файлов\n'
+    env_files = set()
+    for service in config.get('services', {}).values():
+        for item in service.get('env_file', []):
+            value = item.get('path') if isinstance(item, dict) else item
+            if value:
+                path = Path(value)
+                env_files.add(str(path if path.is_absolute() else deployment / path))
+    if (deployment / '.env').is_file():
+        env_files.add(str(deployment / '.env'))
+    lines = [marker, 'Компонент: ' + state['component'], 'Рабочий каталог: ' + str(deployment),
+             '', 'Docker Compose:', *['  ' + path for path in state['composeFiles']],
+             '', 'Настройки окружения:', *['  ' + path for path in sorted(env_files)]]
+    if not env_files:
+        lines += ['  environment в основном Compose-файле; отдельный .env не используется.']
+    lines += ['', '.env — скрытый файл. Для просмотра списка используйте: ls -la',
+              'Не публикуйте .env, Compose с секретами и приватные ключи.',
+              '', 'Резервные копии и откат: ' + str(root / 'backups'),
+              'Журналы установщика: ' + str(root / 'logs'),
+              'Реестр установок: ' + str(root / 'registry'),
+              '', 'Команды: cd ' + str(deployment), '  docker compose ps', '  remnacust status --component ' + state['component']]
+    for name in ['Caddyfile', 'subscription.env', 'backup-password.txt', 'nginx.conf', 'certs', 'run', 'logs', 'state']:
+        if (deployment / name).exists():
+            lines.append(name + ': ' + str(deployment / name))
+    def publish(path, content):
+        if path.exists() and (path.is_symlink() or not path.read_text(encoding='utf-8').startswith(marker)):
+            print('Собственный FILES.txt сохранён: ' + str(path))
+            return
+        write(path, content)
+    publish(deployment / 'FILES.txt', '\n'.join(lines) + '\n')
+    index = [marker, 'Компоненты, их Compose и файлы окружения:', '']
+    for component in ['panel', 'node']:
+        record = root / 'registry' / (component + '.json')
+        if record.is_file() and not record.is_symlink():
+            registered = load(record)
+            index += [component + ': ' + registered['directory'],
+                      '  Карта файлов: ' + str(Path(registered['directory']) / 'FILES.txt'),
+                      *['  Compose: ' + value for value in registered.get('composeFiles', [])]]
+            page = registered.get('subscriptionMigration')
+            if page:
+                index += ['  Страница подписки: ' + page['directory'],
+                          '  Карта файлов сайта: ' + str(Path(page['directory']) / 'FILES.txt'),
+                          *['  Compose сайта: ' + value for value in page['composeFiles']]]
+    index += ['', 'backups/ — копии по компоненту и времени операции',
+              'logs/ — журналы установщика', 'registry/ — реестр установок', 'control/ — канал обновления панели',
+              'Скрытые .env видны через ls -la. Данные Docker остаются в сохранённых томах.']
+    if root != deployment:
+        publish(root / 'FILES.txt', '\n'.join(index) + '\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability'])
+    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'layout'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
@@ -1063,7 +1126,9 @@ def main():
     parser.add_argument('--proxy', choices=['caddy', 'existing'], default='caddy')
     parser.add_argument('--node-domain', default=''); parser.add_argument('--key'); parser.add_argument('--version')
     args = parser.parse_args()
-    if args.operation == 'node-capability':
+    if args.operation == 'layout':
+        write_layout(load(args.state), load(args.source))
+    elif args.operation == 'node-capability':
         config = load(args.source)
         service = config['services'][load(args.state)['mainService']]
         enabled = any(str(cap).upper().removeprefix('CAP_') in ('NET_ADMIN', 'ALL') for cap in service.get('cap_add', [])) or service.get('privileged') is True
@@ -1132,6 +1197,8 @@ def main():
         write(p/'www/index.html', '<!doctype html><html lang="en"><meta charset="utf-8"><title>Service</title><p>Service is available.</p></html>\n', mode=0o644)
     elif args.operation == 'fresh':
         config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port, args.panel_net_admin, not args.node_no_net_admin)
+        state['composeFiles'] = [str(Path(args.target).resolve())]
+        state['composeEntryPoint'] = str(Path(args.target).resolve())
         write(args.target, config); write(args.state, state)
     elif args.operation == 'compare':
         compare_environment(inspect_one(args.source), inspect_one(args.inspect), args.key == 'net-admin-added')

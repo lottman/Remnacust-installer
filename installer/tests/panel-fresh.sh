@@ -12,9 +12,9 @@ cleanup_test() {
     [[ $BASHPID == "$test_shell_pid" ]] || return 0
     if ((result)); then
         sed -E '/Пароль резервных копий:/d' "$test_root/operation.log" 2>/dev/null || true
-        docker compose --project-name "$test_project" -f "$test_root/deploy/compose.json" logs --tail 50 2>&1 || true
+        docker compose --project-name "$test_project" -f "$test_root/deploy/docker-compose.yml" logs --tail 50 2>&1 || true
     fi
-    docker compose --profile '*' --project-name "$test_project" -f "$test_root/deploy/compose.json" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    docker compose --profile '*' --project-name "$test_project" -f "$test_root/deploy/docker-compose.yml" down --volumes --remove-orphans >/dev/null 2>&1 || true
     [[ $test_root == /tmp/remnacust-fresh-test.* ]] && rm -rf -- "$test_root"
 }
 trap cleanup_test EXIT

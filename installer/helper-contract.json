@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "f727f686e8d438c5c423e4ae91fdc25e3537973057ce6bdc96cb91ea53244826",
+  "entry_sha256": "1594f2a2aeef25e120090831c4f7ea845366e7677da6af072b51e4abd177f8c2",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -14,8 +14,8 @@
       "sha256": "69e4b56c33bc83411ddb43be2b5e5174548a16528e6346e97ebf15b41fce8f6c"
     },
     "helper_bundle.py": {
-      "bytes": 11348,
-      "sha256": "d23668f1fff0e67896bd1771e52da4eb2abd120abd1e9f112916d85dbd1f372c"
+      "bytes": 11358,
+      "sha256": "9264cc28a8bd972825e7c3107f54c059345dc4a22b5caa7dfef85a875a9c7c97"
     },
     "image_cleanup.py": {
       "bytes": 4761,
@@ -30,20 +30,20 @@
       "sha256": "2d5f3bbba656c009fe9f2472fc10f44f85ce7a70799fffb9a929784836e40262"
     },
     "node_firewall.py": {
-      "bytes": 7072,
-      "sha256": "cbc556c8dcb29b5d6b18b396552d6d27c2cf39db3de5eae35725aa23206408d8"
+      "bytes": 8323,
+      "sha256": "6a0a19d79bc16e96919a5c4f79a95533f9203f3f154e191d6fa1083cd8919a86"
     },
     "runtime.py": {
-      "bytes": 67922,
-      "sha256": "fceb4fce13c69936e91f19ec51a7aae6b9a916edbc16a8217ae05d7ab95615cb"
-    },
-    "stable_entry.py": {
-      "bytes": 6495,
-      "sha256": "d55d86e57e830436db6c37b7660c30bd8f5dae3660ffb2a10f3e11ae124a8ced"
+      "bytes": 72565,
+      "sha256": "0d8997e1f5a4723307dce56b667576edb1c93afee90a4086befd43f234fb6b2d"
     },
     "subscription.cjs": {
       "bytes": 2017,
       "sha256": "a2aa81068d33d6f551c9fe1b616527165814d9fd485dbfe34306ad21a05d6c6c"
+    },
+    "subscription_migration.py": {
+      "bytes": 9469,
+      "sha256": "bf1b20f3d07d50bb0ebaa3a91b7d6cca3e9d5351b6bb7bf4b18f162597108e56"
     },
     "tls.py": {
       "bytes": 9486,
@@ -55,5 +55,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.90"
+  "version": "1.2.91"
 }

@@ -15,7 +15,7 @@ cleanup_test() {
         [[ -z $app_id ]] || docker logs --tail 70 "$app_id" 2>&1 || true
         docker ps -a --filter "label=com.docker.compose.project=$test_project" --format '{{.Names}} {{.Status}}'
     fi
-    docker compose --project-name "$test_project" -f "$test_root/deploy/compose.json" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    docker compose --project-name "$test_project" -f "$test_root/deploy/docker-compose.yml" down --volumes --remove-orphans >/dev/null 2>&1 || true
     [[ $test_root == /tmp/remnacust-integration.* ]] && rm -rf -- "$test_root"
 }
 trap cleanup_test EXIT
@@ -27,11 +27,11 @@ COMPONENT=panel; ACTION=install-panel; PROXY=existing; DOMAIN=panel.example.com;
 DIRECTORY="$test_root/deploy"; PROJECT=$test_project; IMAGE=remnawave/backend:3.4.4
 fresh_files
 # Start upstream with PostgreSQL 17: migration must not upgrade the database or change its mount.
-python3 - "$DEPLOY/compose.json" <<'PY'
+python3 - "$DEPLOY/docker-compose.yml" <<'PY'
 import json,sys
 p=sys.argv[1];c=json.load(open(p));s=c['services']['remnawave-db'];s['image']='postgres:17.6';s['volumes']=['database:/var/lib/postgresql/data'];json.dump(c,open(p,'w'))
 PY
-python3 - "$DEPLOY/compose.json" <<'PY'
+python3 - "$DEPLOY/docker-compose.yml" <<'PY'
 import copy,json,sys
 p=sys.argv[1];c=json.load(open(p));worker=copy.deepcopy(c['services']['remnawave'])
 worker.pop('ports',None);worker.pop('healthcheck',None)
@@ -53,7 +53,7 @@ prepare_image() { docker image inspect "$IMAGE" >/dev/null; }
 install_cli() { :; }
 YES=true; VERSION=latest; ACTION=migrate-remnawave-panel; CONTAINER=$old_id; DIRECTORY=''
 deploy
-python3 - "$DEPLOY/compose.json" "$STATE" "$IMAGE" <<'PY'
+python3 - "$DEPLOY/docker-compose.yml" "$STATE" "$IMAGE" <<'PY'
 import json,sys
 path,state,image=sys.argv[1:]
 config=json.load(open(path))

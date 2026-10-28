@@ -32,6 +32,11 @@ if (certificate_preflight) > "$fixture/reserved-node" 2>&1; then exit 1; fi
 grep -q 'продление используют порт 80' "$fixture/reserved-node"
 PORT=2222
 printf 'PASS application API ports cannot conflict with the new proxy or HTTP renewal\n'
+PANEL_IP=192.0.2.1; NODE_DOMAIN=node.example.com
+certificate_preflight > "$fixture/http-with-panel-ip"
+grep -q 'временно открывается' "$fixture/http-with-panel-ip"
+PANEL_IP=''
+printf 'PASS HTTP-01 can be selected with the panel source guard\n'
 for method in http cloudflare gcore; do
  COMPONENT=node; DOMAIN=''; NODE_DOMAIN=node.example.com; TLS_METHOD=$method; EMAIL=admin@example.com; PROJECT="fixture-$method"
  DNS_CREDENTIALS=''
@@ -65,4 +70,22 @@ renew_certificate
 grep -qx 'exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile --adapter caddyfile' "$fixture/compose-calls"
 ! grep -qE 'restart|stop|down' "$fixture/compose-calls"
 printf 'PASS panel renewal ignores another lineage and reloads only its Caddy\n'
+
+# Generate the real renewal command with mocked system-level operations.
+COMPONENT=node; NODE_DOMAIN=node.example.com; TLS_METHOD=http; PANEL_IP=192.0.2.1
+PROJECT=fixture-http; ACME_ROOT="$ROOT/acme/$PROJECT"; CERTBOT="$ROOT/tools/certbot/bin/certbot"
+DEPLOY="$fixture/deploy"; STATE="$fixture/state.json"; mkdir -p "$DEPLOY" "$ROOT/registry"
+managed_subscription_options() { :; }
+tls_helper() { :; }
+helper() { :; }
+helper_file_copy() { :; }
+compose() { :; }
+systemctl() { :; }
+configure_certificate
+bash -n "$ACME_ROOT/renew.sh" "$ACME_ROOT/acme-open.sh" "$ACME_ROOT/acme-close.sh"
+grep -q -- '--pre-hook' "$ACME_ROOT/renew.sh"
+grep -q -- '--post-hook' "$ACME_ROOT/renew.sh"
+grep -q 'guard.py acme-open' "$ACME_ROOT/acme-open.sh"
+grep -q 'guard.py acme-close' "$ACME_ROOT/acme-close.sh"
+printf 'PASS HTTP renewal installs bounded firewall open and close hooks\n'
 WORK=''

@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('guard', Path(__file__).parents[1] / 'installer/node_firewall.py')
 guard = importlib.util.module_from_spec(spec)
@@ -15,6 +16,26 @@ spec.loader.exec_module(guard)
 
 
 class PolicyValidation(unittest.TestCase):
+    def test_acme_window_is_fixed_to_port_80_and_expires(self):
+        calls = []
+        def fake_run(*args, **kwargs):
+            calls.append((args, kwargs))
+            return subprocess.CompletedProcess(args, 0, '', '')
+        with patch.object(guard, 'run', side_effect=fake_run):
+            guard.acme_window(True)
+            guard.acme_window(False)
+        add = [args for args, _ in calls if args[:3] == ('nft', 'add', 'element')]
+        self.assertEqual(len(add), 1)
+        self.assertIn('80', add[0])
+        self.assertIn('15m', add[0])
+        self.assertNotIn('443', add[0])
+        self.assertEqual(len([args for args, _ in calls if args[:3] == ('nft', 'delete', 'element')]), 2)
+
+    def test_acme_window_fails_closed_if_firewall_cannot_be_inspected(self):
+        with patch.object(guard, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'denied')):
+            with self.assertRaisesRegex(RuntimeError, 'inspect nftables'):
+                guard.acme_window(True)
+
     def test_invalid_sources_and_interface_injection(self):
         for value in ['0.0.0.0/0', '::/0', '0.0.0.0', '224.0.0.1', 'example.com', '1.2.3.4;drop']:
             with self.assertRaises(ValueError):
@@ -24,6 +45,9 @@ class PolicyValidation(unittest.TestCase):
                 guard.render('192.0.2.1', [22], bridges)
         self.assertIn('ip6 saddr 2001:db8::1/128 accept', guard.render('2001:db8::1', [2222], []))
         self.assertIn('22, 2222', guard.render('192.0.2.1', [2222], []))
+        policy = guard.render('192.0.2.1', [2222], [])
+        self.assertIn('set acme_http { type inet_service; flags timeout; }', policy)
+        self.assertIn('tcp dport @acme_http accept', policy)
 
     @unittest.skipUnless(os.environ.get('REMNACUST_ISOLATED_NET') == '1', 'isolated root network test')
     def test_real_input_forwarding_and_outbound_replies(self):
@@ -67,7 +91,7 @@ class PolicyValidation(unittest.TestCase):
         try:
             call('ip', 'link', 'set', 'lo', 'up')
             panel = client(0, 'panel0'); other = client(1, 'other0'); backend = client(2, 'docker0')
-            for port in [22, 2222, 443]:
+            for port in [22, 80, 2222, 443]:
                 listening(port)
             call('nft', 'add', 'table', 'inet', 'unrelated_sentinel')
             guard.replace_table(guard.render('10.203.0.2', [22, 2222], ['docker0']))
@@ -77,6 +101,15 @@ class PolicyValidation(unittest.TestCase):
                 ns(other, sys.executable, '-c', probe, '10.203.1.1', str(port))
             with self.assertRaises(subprocess.CalledProcessError):
                 ns(other, sys.executable, '-c', probe, '10.203.1.1', '443')
+            with self.assertRaises(subprocess.CalledProcessError):
+                ns(other, sys.executable, '-c', probe, '10.203.1.1', '80')
+            guard.acme_window(True)
+            ns(other, sys.executable, '-c', probe, '10.203.1.1', '80')
+            with self.assertRaises(subprocess.CalledProcessError):
+                ns(other, sys.executable, '-c', probe, '10.203.1.1', '443')
+            guard.acme_window(False)
+            with self.assertRaises(subprocess.CalledProcessError):
+                ns(other, sys.executable, '-c', probe, '10.203.1.1', '80')
             ns(panel, 'ping', '-c', '1', '-W', '1', '10.203.0.1')
             with self.assertRaises(subprocess.CalledProcessError):
                 ns(other, 'ping', '-c', '1', '-W', '1', '10.203.1.1')

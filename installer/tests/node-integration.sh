@@ -9,7 +9,7 @@ test_project="remnacust-node-test-$$"
 cleanup_test() {
     local result=$?
     if ((result)); then cat "$test_root/operation.log" 2>/dev/null || true; fi
-    docker compose --project-name "$test_project" -f "$test_root/deploy/compose.json" down --volumes >/dev/null 2>&1 || true
+    docker compose --project-name "$test_project" -f "$test_root/deploy/docker-compose.yml" down --volumes >/dev/null 2>&1 || true
     [[ $test_root == /tmp/remnacust-node-test.* ]] && rm -rf -- "$test_root"
 }
 trap cleanup_test EXIT
@@ -38,7 +38,7 @@ old_id=$(compose ps --quiet remnanode)
 ACTION=upgrade-node; CONTAINER=$old_id; DIRECTORY=''; PORT=''; CHANGED=false
 deploy
 [[ $(docker inspect --format '{{.Config.Image}}' "$(compose ps --quiet remnanode)") == "$test_image" ]]
-python3 - "$DEPLOY/compose.json" "$STATE" "$IMAGE" <<'PY'
+python3 - "$DEPLOY/docker-compose.yml" "$STATE" "$IMAGE" <<'PY'
 import json,sys
 path,state,image=sys.argv[1:]
 assert json.load(open(path))['services']['remnanode']['image']==image

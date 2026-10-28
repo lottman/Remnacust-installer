@@ -88,6 +88,33 @@ class InputWorkflowTests(unittest.TestCase):
         self.assertNotEqual(code, 0, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
+    def test_required_text_repeats_after_multiple_empty_answers_and_trims_spaces(self):
+        prompt = 'Обязательное поле: '
+        code, output = self.terminal('source "$1"; value=$(ask_required "Обязательное поле"); printf "RESULT=%s" "$value"',
+            [(prompt, '\n'), (prompt, '   \n'), (prompt, ' valid.example.com  \n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('RESULT=valid.example.com', output)
+        self.assertEqual(output.count('пустой ответ'), 2)
+
+    def test_required_text_eof_terminates_instead_of_looping(self):
+        code, output = self.terminal('source "$1"; value=$(ask_required "Обязательное поле"); printf UNEXPECTED-ACTION',
+            [('Обязательное поле: ', b'\x04')])
+        self.assertNotEqual(code, 0, output)
+        self.assertNotIn('UNEXPECTED-ACTION', output)
+
+    def test_email_repeats_empty_and_invalid_answers_without_advancing_tls_wizard(self):
+        command = 'source "$1"; WORK="$2"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; NODE_DOMAIN=edge.example.com; TLS_METHOD=http; certificate_wizard; printf "EMAIL=%s" "$EMAIL"'
+        prompt = "Email для Let's Encrypt: "
+        code, output = self.terminal(command, [(prompt, '\n'), (prompt, '\n'), (prompt, 'invalid\n'), (prompt, ' test@example.com  \n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('EMAIL=test@example.com', output)
+
+    def test_migration_accepts_explicit_subscription_opt_in_and_opt_out(self):
+        for flag, value in [('--subscription-page', 'true'), ('--no-subscription-page', 'false')]:
+            code, output = self.terminal(f'source "$1"; parse_args migrate-remnawave-panel {flag}; printf "SUBPAGE=%s" "$SUBSCRIPTION_PAGE"', [])
+            self.assertEqual(code, 0, output)
+            self.assertIn('SUBPAGE=' + value, output)
+
     def test_panel_net_admin_prompt_accepts_enable_decline_and_default(self):
         command = 'source "$1"; COMPONENT=panel; HELPER="${1%/*}/runtime.py"; panel_net_admin_wizard; printf "NET-ADMIN=%s" "$PANEL_NET_ADMIN"'
         for reply, enabled in [('y\n', 'true'), ('n\n', 'false'), ('\n', 'false')]:

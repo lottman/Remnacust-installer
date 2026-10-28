@@ -75,8 +75,11 @@ class ComposeUpgradeTests(unittest.TestCase):
         original = main.read_bytes()
         self.setup_config([shadow])
         self.commit()
-        self.assertEqual(runtime.load(main)['services']['app']['image'], 'new@sha256:'+'a'*64)
-        self.assertEqual(runtime.load(self.state)['composeEntryPoint'], str(main))
+        canonical = self.deployment/'docker-compose.yml'
+        self.assertEqual(runtime.load(canonical)['services']['app']['image'], 'new@sha256:'+'a'*64)
+        self.assertEqual(runtime.load(self.state)['composeEntryPoint'], str(canonical))
+        self.assertFalse(main.exists())
+        self.assertFalse(shadow.exists())
         runtime.restore_compose(self.backup)
         self.assertEqual(main.read_bytes(), original)
         self.assertEqual(runtime.load(shadow)['services']['app']['image'], 'old')
@@ -84,7 +87,7 @@ class ComposeUpgradeTests(unittest.TestCase):
     def test_legacy_missing_entry_point_is_created_and_removed_on_rollback(self):
         shadow = self.deployment/'compose.remnacust-20261010T120000Z-72.json'; shadow.write_text('{}')
         self.setup_config([shadow]); self.commit()
-        main = self.deployment/'compose.json'
+        main = self.deployment/'docker-compose.yml'
         self.assertTrue(main.exists())
         runtime.restore_compose(self.backup)
         self.assertFalse(main.exists())
@@ -130,7 +133,7 @@ class ComposeUpgradeTests(unittest.TestCase):
         runtime.write(overlay, {'services': {}})
         self.setup_config([main], 'panel')
         self.commit()
-        self.assertEqual(runtime.load(main)['services']['app']['image'], 'new@sha256:'+'a'*64)
+        self.assertEqual(runtime.load(self.deployment/'docker-compose.yml')['services']['app']['image'], 'new@sha256:'+'a'*64)
         self.assertEqual(runtime.load(overlay), {'services': {}})
         runtime.restore_compose(self.backup)
         self.assertEqual(main.read_text(), 'original')
@@ -139,10 +142,12 @@ class ComposeUpgradeTests(unittest.TestCase):
     def test_tampered_snapshot_does_not_restore_any_files(self):
         main = self.deployment/'compose.json'; main.write_text('original')
         self.setup_config([main]); self.commit()
-        after = main.read_bytes()
-        (self.backup/'compose-original-0').write_text('tampered')
+        canonical = self.deployment/'docker-compose.yml'
+        after = canonical.read_bytes()
+        original = next(item for item in runtime.load(self.backup/'compose-files.before.json')['files'] if item['existed'])
+        (self.backup/original['backup']).write_text('tampered')
         with self.assertRaises(runtime.ConfigurationError): runtime.restore_compose(self.backup)
-        self.assertEqual(main.read_bytes(), after)
+        self.assertEqual(canonical.read_bytes(), after)
 
     def test_real_compose_config_preserves_merged_settings_and_updates_all_app_roles(self):
         if not os.environ.get('REMNACUST_TEST_REAL_COMPOSE'):
