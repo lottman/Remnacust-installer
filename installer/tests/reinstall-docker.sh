@@ -82,8 +82,8 @@ set -Eeuo pipefail
 source "$1"
 prepare_host() { :; }
 release_source() {
-    SOURCE="$REINSTALL_FIXTURE/source"; HELPER="$REINSTALL_RUNTIME"; TAG=v1.2.3
-    HELPER_ROOT=$(dirname "$REINSTALL_RUNTIME")
+    installed_helper
+    SOURCE="$REINSTALL_FIXTURE/source"; TAG=v1.2.3
     COMPONENT_VERSION=1.1.2; IMAGE=node:24.22.1-trixie-slim
 }
 prepare_image() { docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE" >/dev/null; }
