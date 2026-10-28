@@ -83,6 +83,7 @@ source "$1"
 prepare_host() { :; }
 release_source() {
     SOURCE="$REINSTALL_FIXTURE/source"; HELPER="$REINSTALL_RUNTIME"; TAG=v1.2.3
+    HELPER_ROOT=$(dirname "$REINSTALL_RUNTIME")
     COMPONENT_VERSION=1.1.2; IMAGE=node:24.22.1-trixie-slim
 }
 prepare_image() { docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE" >/dev/null; }
@@ -110,8 +111,12 @@ bash "$fixture/install-fixture.sh" "$installer"
 new_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' "$REMNACUST_ROOT/registry/panel.json")
 projects+=("$new_project")
 [[ $new_project != "$old_project" ]]
-cmp "$REMNACUST_ROOT/panel/.env" "$fixture/old.env"
-cmp "$REMNACUST_ROOT/panel/compose.json" "$fixture/old-compose.json"
+retired=$(find "$REMNACUST_ROOT/backups" -maxdepth 1 -type d -name 'reinstalled-panel-*')
+[[ -n $retired && $retired != *$'\n'* ]]
+cmp "$retired/.env" "$fixture/old.env"
+cmp "$retired/compose.json" "$fixture/old-compose.json"
+[[ -f $REMNACUST_ROOT/panel/docker-compose.yml ]]
+if cmp -s "$REMNACUST_ROOT/panel/.env" "$fixture/old.env"; then exit 1; fi
 docker volume inspect "$old_volume" >/dev/null
 printf 'PASS main install path replaces the obsolete registry; new PostgreSQL accepts its new password and has a fresh database\n'
 
