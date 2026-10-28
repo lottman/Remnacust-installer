@@ -85,6 +85,9 @@ def main():
             (quota / 'quota/ledger.json').write_text('spent-after-new-start')
             (quota / 'usage/receipt.json').write_text('pending-after-new-start')
             runtime.restore_compose(backup)
+            primary = Path(runtime.load(backup / 'state.before.json')['composeEntryPoint'])
+            assert primary == root / 'docker-compose.yml'
+            assert runtime.load(root / 'compose.json')['services'] == {}
             restored = runtime.load(primary)['services']['node']
             assert restored['image'] == 'alpine:3.22'
             assert restored['volumes'] == mounts
