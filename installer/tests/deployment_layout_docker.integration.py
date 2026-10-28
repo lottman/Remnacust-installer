@@ -81,3 +81,10 @@ with tempfile.TemporaryDirectory(prefix='remnacust-layout-docker-') as temporary
         current_state = runtime.load(root / 'registry/panel.json')
         subprocess.run([*layout.compose_base(current_state), 'down', '--volumes', '--remove-orphans'], capture_output=True, timeout=180)
         subprocess.run(['docker', 'image', 'rm', image], capture_output=True, timeout=30)
+        if os.geteuid() != 0:
+            # PostgreSQL owns its bind data as container uid 999. Return only
+            # this disposable fixture to the runner before TemporaryDirectory cleans it.
+            assert root.resolve().parent == Path(tempfile.gettempdir()).resolve()
+            assert root.name.startswith('remnacust-layout-docker-')
+            run('docker', 'run', '--rm', '--network=none', '--mount', f'type=bind,source={root},target=/fixture',
+                'alpine:3.22', 'chown', '-R', f'{os.getuid()}:{os.getgid()}', '/fixture')
