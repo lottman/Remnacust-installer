@@ -150,7 +150,7 @@ for component in '' panel node subscription-page; do
         installed_helper() { HELPER_ROOT="$project"; }
         lock_operation() { :; }
         python3() { printf '%s\n' "$@" > "$fixture/cleanup-arguments"; }
-        run_action
+        cleanup_backups_action
         grep -qx -- '--cleanup-backups' "$fixture/cleanup-arguments"
         if [[ -n $component ]]; then grep -qx "$component" "$fixture/cleanup-arguments"; fi
     )

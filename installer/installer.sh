@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='259288661299f4fdff4dcd851f631cd640bfb6e59dfdfef10362612cc5441a4b'
+HELPER_BUNDLE_SHA256='6d2fc3a7c12da47392e09f2e416e479891e5cf79aa682596beae3e131bbe0099'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -1218,6 +1218,12 @@ interactive_menu() {
         fi
     done
 }
+cleanup_backups_action() {
+    installed_helper; lock_operation
+    local -a cleanup_options=()
+    [[ -z $COMPONENT ]] || cleanup_options=(--component "$COMPONENT")
+    python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --cleanup-backups "${cleanup_options[@]}"
+}
 run_action() {
     local result
     WORK=$(mktemp -d -t remnacust-installer.XXXXXXXX); touch "$WORK/.installer-owned"; trap cleanup EXIT
@@ -1266,11 +1272,7 @@ PY
                 PAGE_OPERATION=$ACTION; ACTION=manage-subscription-page; subscription_page_action
             else service_action; fi;;
         normalize-layout) installed_helper; lock_operation; python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "${COMPONENT:-panel}";;
-        cleanup-backups)
-            installed_helper; lock_operation
-            local -a cleanup_options=()
-            [[ -z $COMPONENT ]] || cleanup_options=(--component "$COMPONENT")
-            python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --cleanup-backups "${cleanup_options[@]}";;
+        cleanup-backups) cleanup_backups_action;;
         install-subscription-page|upgrade-subscription-page|manage-subscription-page) subscription_page_action;;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
