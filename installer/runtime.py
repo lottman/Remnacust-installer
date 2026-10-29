@@ -555,7 +555,7 @@ def preserve_node_state_rollback(plan_path, directory):
     backup_hashes(backup)
 
 
-def commit_compose(state_path, candidate_path, directory, version, release):
+def commit_compose(state_path, candidate_path, directory, version, release, preserve_release=False):
     backup = Path(directory)
     before = load(backup/'state.before.json')
     deployment = Path(before['directory']).resolve()
@@ -593,7 +593,7 @@ def commit_compose(state_path, candidate_path, directory, version, release):
         fail('Compose-конфигурация принадлежит другому проекту')
     if not all(name in config.get('services', {}) for name in state['applications']):
         fail('В новой Compose-конфигурации отсутствует приложение')
-    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version) or not re.fullmatch(r'v[0-9]+(?:\.[0-9]+){1,3}', release):
+    if not preserve_release and (not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version) or not re.fullmatch(r'v[0-9]+(?:\.[0-9]+){1,3}', release)):
         fail('Некорректная версия Compose-конфигурации')
     targets = list(dict.fromkeys([primary, *paths]))
     manifest = backup/'compose-files.before.json'
@@ -611,7 +611,8 @@ def commit_compose(state_path, candidate_path, directory, version, release):
     write(manifest, {'directory': str(deployment), 'files': records})
     backup_hashes(backup)
     original_state = Path(state_path).read_text(encoding='utf-8')
-    config['x-remnacust-release'] = {'installer': release, 'component': before['component'], 'version': version}
+    if not preserve_release:
+        config['x-remnacust-release'] = {'installer': release, 'component': before['component'], 'version': version}
     try:
         write(primary, config)
         # Effective settings from every active layer are now in the primary
@@ -1112,6 +1113,7 @@ def write_layout(state, config):
                   '  Окружение: ' + str(Path(page['directory']) / '.env'),
                   *['  Compose: ' + value for value in page.get('composeFiles', [])]]
     index += ['', 'backups/ — копии по компоненту и времени операции',
+              'backups/<компонент>/legacy-config-*/ — старые копии конфигурации, убранные из рабочего каталога',
               'logs/ — журналы установщика', 'registry/ — реестр установок', 'control/ — канал обновления панели',
               'Скрытые .env видны через ls -la. Данные Docker остаются в сохранённых томах.']
     if root != deployment:

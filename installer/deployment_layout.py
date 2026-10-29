@@ -2,6 +2,7 @@
 """Move an owned deployment to its canonical path without changing Docker data."""
 import argparse
 import copy
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -91,6 +92,117 @@ def archive_unused(root, component, containers):
         path.rename(archive)
 
 
+def archive_configs(root, state, containers=None):
+    """Archive known legacy copies only after excluding every live reference."""
+    root = root.resolve()
+    component = state.get('component', 'subscription-page')
+    if component not in ('panel', 'node', 'subscription-page'):
+        raise ValueError('INVALID_COMPONENT')
+    deployment = Path(state['directory'])
+    if deployment.is_symlink() or not deployment.is_dir():
+        raise ValueError('UNSAFE_DEPLOYMENT')
+    deployment = deployment.resolve()
+    candidates = [path for path in sorted(deployment.iterdir()) if
+                  (re.fullmatch(r'compose\.remnacust-\d{8}T\d{6}Z-\d+\.json', path.name)
+                   or path.name == 'Caddyfile.before-first-vpn')
+                  and not path.is_symlink() and path.is_file()]
+    if not candidates:
+        return None
+    if any(path.stat().st_size > 8 * 1024 * 1024 for path in candidates):
+        raise ValueError('LEGACY_CONFIG_TOO_LARGE')
+    containers = inventory() if containers is None else containers
+    registered = [state]
+    for record in sorted((root / 'registry').rglob('*.json')):
+        if record.is_symlink():
+            raise ValueError('UNSAFE_REGISTRY')
+        registered.append(runtime.load(record))
+    active = set()
+    for item in registered:
+        for owner in (item, item.get('subscriptionMigration') or {}):
+            for value in owner.get('composeFiles', []):
+                active.add((Path(owner['directory']) / value).resolve())
+    # Compose includes inactive profiles too. A copied file can still be an
+    # env_file, bind mount, config or secret of an otherwise stopped service.
+    config = command(compose_base(state), '--profile', '*', 'config', '--no-interpolate', '--no-env-resolution', '--format', 'json')
+    effective = json.loads(config)
+    references = json.dumps(effective, ensure_ascii=False)
+    source_paths = {Path(value) if Path(value).is_absolute() else deployment / value
+                    for value in state.get('composeFiles', [])}
+    source_paths.update(deployment / name for name in ('Caddyfile', 'nginx.conf'))
+    for path in source_paths:
+        if path.is_file() and not path.is_symlink():
+            if path.stat().st_size > 8 * 1024 * 1024:
+                raise ValueError('SOURCE_CONFIG_TOO_LARGE')
+            references += '\n' + path.read_text(encoding='utf-8')
+    patterns = [token for token in re.findall(r'''[^\s"'{};,]+''', references) if '*' in token or '?' in token or '[' in token]
+    mounts = [mount.get('Source', '') for container in containers for mount in container.get('Mounts', []) if mount.get('Type', 'bind') == 'bind']
+    mounts += [volume.get('source', '') for service in effective.get('services', {}).values()
+               for volume in service.get('volumes', []) if isinstance(volume, dict) and volume.get('type') == 'bind']
+    def mounted(path):
+        for value in mounts:
+            if not value:
+                continue
+            source = (deployment / value).resolve()
+            if source == path or source in path.parents:
+                return True
+        return False
+    candidates = [path for path in candidates if path.resolve() not in active
+                  and not referenced(path, containers) and not mounted(path)
+                  and path.name not in references
+                  and not any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns
+                              for value in (path.name, './' + path.name, str(path)))]
+    if not candidates:
+        return None
+    parent = root
+    for part in ('backups', component):
+        parent = parent / part
+        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+            raise ValueError('UNSAFE_BACKUP_PATH')
+        parent.mkdir(mode=0o700, exist_ok=True)
+        parent.chmod(0o700)
+    archive = parent / ('legacy-config-' + uuid.uuid4().hex)
+    archive.mkdir(mode=0o700)
+    files = [{'name': path.name, 'sha256': runtime.file_sha256(path),
+              'mode': path.stat().st_mode & 0o777} for path in candidates]
+    runtime.write(archive / 'manifest.json', {'directory': str(deployment), 'files': files})
+    moved = []
+    try:
+        for path, entry in zip(candidates, files):
+            if path.is_symlink() or runtime.file_sha256(path) != entry['sha256']:
+                raise ValueError('CONFIG_CHANGED_DURING_ARCHIVE')
+            path.rename(archive / path.name)
+            moved.append(path)
+    except BaseException:
+        for path in reversed(moved):
+            if not path.exists() and not path.is_symlink():
+                (archive / path.name).rename(path)
+        raise
+    print('Старые копии конфигурации перенесены: ' + str(archive))
+    return archive
+
+
+def cleanup_registered(root, component=None):
+    from subscription_pages import records
+    states = []
+    for name in ('panel', 'node'):
+        path = root / 'registry' / (name + '.json')
+        if path.is_symlink():
+            raise ValueError('UNSAFE_REGISTRY')
+        if path.is_file():
+            states.append(runtime.load(path))
+    states += [{**item, 'component': 'subscription-page'} for item in records(root).values()]
+    containers = inventory()
+    seen = set()
+    for state in states:
+        if state.get('uninstalled') or (component and state['component'] != component):
+            continue
+        directory = str(Path(state['directory']).resolve())
+        if directory in seen:
+            continue
+        archive_configs(root, state, containers)
+        seen.add(directory)
+
+
 def normalize(root, component):
     if component not in ('panel', 'node'):
         raise ValueError('INVALID_COMPONENT')
@@ -102,10 +214,12 @@ def normalize(root, component):
     old, target = Path(state['directory']), root / component
     containers = inventory()
     if old == target:
+        archive_configs(root, state, containers)
         archive_unused(root, component, containers)
         return state
     if old.parent != root or old.is_symlink() or not re.fullmatch(re.escape(component) + r'-\d{14}-\d+', old.name):
         # Explicit external/custom deployments are not silently moved.
+        archive_configs(root, state, containers)
         return state
     if not old.is_dir() or target.is_symlink() or old.stat().st_dev != root.stat().st_dev:
         raise ValueError('UNSAFE_CANONICAL_PATH')
@@ -219,17 +333,23 @@ def normalize(root, component):
             command(base, 'up', '-d', '--force-recreate', '--no-deps', '--no-build', '--pull', 'never', *running)
             wait_services(base, running)
         raise
-    archive_unused(root, component, inventory())
+    current = inventory()
+    archive_configs(root, updated, current)
+    archive_unused(root, component, current)
     return updated
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--component', choices=['panel', 'node'], required=True)
+    parser.add_argument('--component', choices=['panel', 'node', 'subscription-page'])
+    parser.add_argument('--cleanup-backups', action='store_true')
     args = parser.parse_args()
     try:
-        result = normalize(args.root, args.component)
-        print('Рабочий каталог: ' + result['directory'])
+        if args.cleanup_backups:
+            cleanup_registered(args.root, args.component)
+        else:
+            result = normalize(args.root, args.component)
+            print('Рабочий каталог: ' + result['directory'])
     except (ValueError, OSError, KeyError):
-        raise SystemExit('Перенос в постоянный каталог не завершён. Исходные настройки восстановлены; проверьте приватный журнал.')
+        raise SystemExit('Упорядочивание файлов не завершено. Проверьте приватный журнал; используемые файлы не архивируются.')

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='a71586ac137545dc4915e688141beef6d332a3514f7bc4b8b463e08a0a41a519'
+HELPER_BUNDLE_SHA256='259288661299f4fdff4dcd851f631cd640bfb6e59dfdfef10362612cc5441a4b'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -11,6 +11,7 @@ ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
 PAGE_ID='' PAGE_OPERATION='' PAGE_PANEL_URL=''
+DOMAIN_PLAN=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE='' SUBSCRIPTION_IMAGE_VERSION=''
@@ -98,12 +99,16 @@ Remnacust · installer.sh
   sudo bash installer.sh
   sudo bash installer.sh COMMAND [--version latest|1.2.24] [--yes]
 
-  install-panel             Панель с нуля: Docker, БД, кеш, HTTPS
+  install-panel             Установить панель: Docker, БД, кеш, HTTPS
   normalize-layout          Постоянный каталог панели/ноды (--component panel|node)
-  install-subscription-page Страница подписки отдельно от панели
+  cleanup-backups           Убрать старые копии конфигов в backups (все компоненты)
+  install-subscription-page Установить страницу подписки
   upgrade-subscription-page Обновить выбранную страницу подписки
   manage-subscription-page  Список, запуск, остановка или перезапуск страниц
-  install-node              Нода с нашим Xray; TLS/XHTTP по желанию
+  manage-panel | manage-node Меню управления установленной панелью или нодой
+  change-domain             Сменить домен --component panel|node|subscription-page
+  show-config               Показать адреса и пути настроек без секретов
+  install-node              Установить ноду и Xray; TLS/XHTTP по желанию
   upgrade-panel             Все процессы панели; БД и настройки сохраняются
   upgrade-node              Полное обновление ноды и встроенного Xray
   uninstall-panel           Удалить контейнеры панели; сохранить данные и копии
@@ -123,14 +128,14 @@ Remnacust · installer.sh
   --help, -h                Эта справка
 
   --page-id ID              ID зарегистрированной страницы (из списка)
-  --page-operation ACTION   list, start, stop или restart
+  --page-operation ACTION   list, status, logs, start, stop или restart
   --panel-url URL           HTTPS панели; auto для панели на этом сервере
-  --component panel|node    Компонент для команд обслуживания
+  --component COMPONENT    panel, node или subscription-page для управления
   --directory PATH          Каталог существующей установки
   --compose-file PATH       Основной Compose-файл при миграции
   --container NAME          Контейнер приложения при миграции
   --project-name NAME       Имя новой установки Compose
-  --domain DOMAIN           Домен новой панели
+  --domain DOMAIN           Домен установки / новый домен для change-domain
   --net-admin               Добавить NET_ADMIN новой панели или устанавливаемой/обновляемой ноде
   --no-net-admin            Новая панель/нода без NET_ADMIN; при обновлении включённое право сохраняется
   --subscription-urls URLS  Один или два адреса сайта подписки через запятую; первый — основной
@@ -171,32 +176,33 @@ HELP
 show_menu() {
     local panel_note='' node_note='' panel_upgrade='Не установлена' node_upgrade='Не установлена'
     local panel_available=false node_available=false panel_install=true node_install=true service_available=false service_note='Компоненты не установлены'
-    if component_installed panel; then panel_available=true; panel_install=false; panel_note='Уже установлена: обновление 3, удаление 11'; panel_upgrade=''; fi
-    if component_installed node; then node_available=true; node_install=false; node_note='Уже установлена: обновление 4, удаление 12'; node_upgrade=''; fi
+    if component_installed panel; then panel_available=true; panel_install=false; panel_note='Уже установлена. Обновить: пункт 4; удалить: пункт 14.'; panel_upgrade=''; fi
+    if component_installed node; then node_available=true; node_install=false; node_note='Уже установлена. Обновить: пункт 5; удалить: пункт 15.'; node_upgrade=''; fi
     if $panel_available || $node_available; then service_available=true; service_note=''; fi
+    if compgen -G "$ROOT/registry/subscription-pages/*.json" >/dev/null; then service_available=true; service_note=''; fi
     terminal_banner
     terminal_server_card
     terminal_section 'Установка'
-    terminal_action 1 'Панель с нуля' install-panel "$panel_note" "$panel_install"
-    terminal_action 2 'Нода с Xray' install-node "$node_note" "$node_install"
-    terminal_action 13 'Страница подписки отдельно' install-subscription-page
+    terminal_action 1 'Установить панель' install-panel "$panel_note" "$panel_install"
+    terminal_action 2 'Установить ноду и Xray' install-node "$node_note" "$node_install"
+    terminal_action 3 'Установить страницу подписки' install-subscription-page
     terminal_section 'Обновление'
-    terminal_action 3 'Обновить панель' upgrade-panel "$panel_upgrade" "$panel_available"
-    terminal_action 4 'Обновить ноду и Xray' upgrade-node "$node_upgrade" "$node_available"
-    terminal_action 14 'Обновить страницу подписки' upgrade-subscription-page
-    terminal_action 15 'Управление страницами подписки' manage-subscription-page
+    terminal_action 4 'Обновить панель' upgrade-panel "$panel_upgrade" "$panel_available"
+    terminal_action 5 'Обновить ноду и Xray' upgrade-node "$node_upgrade" "$node_available"
+    terminal_action 6 'Обновить страницу подписки' upgrade-subscription-page
     terminal_section 'Перенос'
-    terminal_action 5 'Панель Remnawave' migrate-remnawave-panel
-    terminal_action 6 'Нода Remnawave' migrate-remnawave-node
-    terminal_action 10 'Пользователи Marzban' migrate-marzban-panel
+    terminal_action 7 'Панель из Remnawave' migrate-remnawave-panel
+    terminal_action 8 'Нода из Remnawave' migrate-remnawave-node
+    terminal_action 9 'Пользователи из Marzban' migrate-marzban-panel
     terminal_section 'Обслуживание'
-    terminal_action 7 'Проверить выпуск' --check-release
-    terminal_action 8 'Состояние компонентов' status
-    terminal_action 9 'Журналы, запуск и копии' '' "$service_note" "$service_available"
+    terminal_action 10 'Проверить выпуск' --check-release
+    terminal_action 11 'Состояние компонентов' status
+    terminal_action 12 'Управление компонентами' ''
+    terminal_action 13 'Логи, запуск и резервные копии' '' "$service_note" "$service_available"
     terminal_section 'Удаление'
-    terminal_text 'Данные, тома и конфигурация сохраняются.' '      ' '      ' "$DIM"
-    terminal_action 11 'Удалить панель' uninstall-panel "$panel_upgrade" "$panel_available"
-    terminal_action 12 'Удалить ноду' uninstall-node "$node_upgrade" "$node_available"
+    terminal_text 'Данные, тома, настройки и резервные копии сохраняются.' '      ' '      ' "$DIM"
+    terminal_action 14 'Удалить панель' uninstall-panel "$panel_upgrade" "$panel_available"
+    terminal_action 15 'Удалить ноду' uninstall-node "$node_upgrade" "$node_available"
     terminal_rule
     terminal_action 0 Выход ''
     printf '\n'
@@ -293,7 +299,7 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            install-subscription-page|upgrade-subscription-page|manage-subscription-page|normalize-layout|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            manage-panel|manage-node|change-domain|show-config|install-subscription-page|upgrade-subscription-page|manage-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
             --page-id|--page-operation|--panel-url|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
@@ -320,13 +326,16 @@ parse_args() {
     [[ $REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die 'Некорректный REMNACUST_REPOSITORY'
     [[ $ROOT == /* && $ROOT != / && $ROOT != /opt && $ROOT != /usr ]] || die 'Некорректный корневой каталог'
     [[ -z $VERSION ]] || valid_version "$VERSION" || die 'Версия: latest или SemVer'
-    [[ -z $COMPONENT || $COMPONENT == panel || $COMPONENT == node ]] || die 'Компонент: panel или node'
+    [[ -z $COMPONENT || $COMPONENT == panel || $COMPONENT == node || $COMPONENT == subscription-page ]] || die 'Компонент: panel, node или subscription-page'
+    if [[ $COMPONENT == subscription-page ]]; then
+        case "$ACTION" in status|logs|start|stop|restart|show-config|change-domain|cleanup-backups|*subscription-page) ;; *) die 'Этот компонент доступен только в командах управления страницами';; esac
+    fi
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-subscription-page || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == upgrade-panel || $ACTION == migrate-remnawave-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна для новой панели или миграции Remnawave'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
-    [[ $ACTION == install-* || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Настройка нового TLS доступна только при install; обновление сохраняет ваш proxy и сертификаты'
+    [[ $ACTION == install-* || $ACTION == change-domain || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Параметры TLS доступны при установке и смене домена; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
     if [[ $ACTION != migrate-marzban-panel ]] && { $DRY_RUN || $PRESERVE_SUBHASH || [[ -n $MARZBAN_URL$DESTINATION_URL$INTERNAL_SQUAD ]]; }; then die 'Параметры Marzban предназначены только для migrate-marzban-panel'; fi
 }
@@ -461,6 +470,9 @@ confirm() {
     [[ $answer == yes ]] || { info 'Действие отменено'; exit 0; }
 }
 cleanup() {
+    if [[ -n ${DOMAIN_PLAN:-} && -f $DOMAIN_PLAN && -n ${HELPER_ROOT:-} ]]; then
+        python3 -I "$HELPER_ROOT/management.py" rollback --root "$ROOT" --plan "$DOMAIN_PLAN" || printf '  Не удалось завершить откат. План восстановления: %s\n' "$DOMAIN_PLAN" >&2
+    fi
     if [[ -n $WORK && -f $WORK/.installer-owned ]]; then rm -rf -- "$WORK"; fi
 }
 report_update_progress() {
@@ -985,8 +997,55 @@ configure_panel_updates() {
     [[ ! -f $WORK/container.before.json ]] || options+=(--inspect "$WORK/container.before.json")
     python3 -B "$INSTALLED_HELPER_ROOT/update-agent.py" --root "$ROOT" setup --state "$STATE" --compose "$target" "${options[@]}" >> "$LOG" 2>&1
 }
+management_menu() {
+    local choice
+    terminal_section 'Выберите компонент'
+    terminal_action 1 'Панель' ''
+    terminal_action 2 'Нода' ''
+    terminal_action 3 'Страница подписки' ''
+    terminal_action 0 'Назад' ''
+    choice=$(ask_menu_choice 3) || return $?
+    case "$choice" in
+        1) COMPONENT=panel;; 2) COMPONENT=node;; 3) COMPONENT=subscription-page;; 0) ACTION=''; return 0;;
+    esac
+    component_menu
+}
+component_title() {
+    case "$COMPONENT" in panel) printf 'Панель';; node) printf 'Нода';; subscription-page) printf 'Страница подписки';; esac
+}
+component_menu() {
+    local choice maximum=7
+    terminal_section "Управление · $(component_title)"
+    terminal_action 1 'Состояние' status
+    terminal_action 2 'Адреса и файлы настроек' show-config
+    terminal_action 3 'Журнал приложения' logs
+    terminal_action 4 'Запустить' start
+    terminal_action 5 'Остановить' stop
+    terminal_action 6 'Перезапустить' restart
+    terminal_action 7 'Сменить домен и сертификат' change-domain
+    if [[ $COMPONENT == panel ]]; then
+        terminal_action 8 'Перечитать сертификат' renew-panel-certificate
+        maximum=8
+    elif [[ $COMPONENT == node ]]; then
+        terminal_action 8 'Перечитать сертификат' renew-node-certificate
+        maximum=8
+    fi
+    terminal_action 0 'Назад' ''
+    choice=$(ask_menu_choice "$maximum") || return $?
+    case "$choice" in
+        1) ACTION=status;; 2) ACTION=show-config;; 3) ACTION=logs;; 4) ACTION=start;;
+        5) ACTION=stop;; 6) ACTION=restart;; 7) ACTION=change-domain;;
+        8) ACTION=renew-$COMPONENT-certificate;; 0) ACTION='';;
+    esac
+}
 service_menu() {
-    COMPONENT=$(ask 'Компонент: panel или node' panel) || return $?
+    local selected_component
+    terminal_section 'Компонент для обслуживания'
+    terminal_action 1 'Панель' ''; terminal_action 2 'Нода' ''; terminal_action 3 'Страница подписки' ''; terminal_action 0 'Назад' ''
+    selected_component=$(ask_menu_choice 3) || return $?
+    case "$selected_component" in
+        1) COMPONENT=panel;; 2) COMPONENT=node;; 3) COMPONENT=subscription-page; component_menu; return;; 0) ACTION=''; return 0;;
+    esac
     local panel_available=false node_available=false current_available=false
     local panel_note='Панель не установлена' node_note='Нода не установлена' current_note='Компонент не найден'
     if component_installed panel; then panel_available=true; panel_note=''; fi
@@ -995,7 +1054,7 @@ service_menu() {
         panel) current_available=$panel_available; current_note=$panel_note;;
         node) current_available=$node_available; current_note=$node_note;;
     esac
-    terminal_section "Обслуживание · $COMPONENT"
+    terminal_section "Обслуживание · $(component_title)"
     terminal_action 1 'Проверить состояние' status "$current_note" "$current_available"
     terminal_action 2 'Журнал приложения' logs "$current_note" "$current_available"
     terminal_action 3 'Запустить' start "$current_note" "$current_available"
@@ -1012,6 +1071,101 @@ service_menu() {
     choice=$(ask_menu_choice 10) || return $?
     case "$choice" in 1) ACTION=status;;2) ACTION=logs;;3) ACTION=start;;4) ACTION=stop;;5) ACTION=restart;;6) ACTION=backup-panel;;7) ACTION=restore-panel;;8) ACTION=renew-node-certificate; COMPONENT=node;;9) ACTION=check-panel; COMPONENT=panel;;10) ACTION=renew-panel-certificate; COMPONENT=panel;;0) ACTION='';;esac
 }
+select_managed_page() {
+    [[ -z $PAGE_ID ]] || return 0
+    local count choice
+    python3 -I "$HELPER_ROOT/subscription_pages.py" list --root "$ROOT" > "$WORK/managed-pages.json"
+    count=$(python3 - "$WORK/managed-pages.json" <<'PY'
+import json,sys
+print(len(json.load(open(sys.argv[1]))))
+PY
+    )
+    ((count > 0)) || die 'Зарегистрированных страниц подписки нет'
+    python3 - "$WORK/managed-pages.json" <<'PY'
+import json,sys
+for number,item in enumerate(json.load(open(sys.argv[1])),1):
+ print(f"  {number:2}  {item['name']} · {item['domain']} · {item['status']}")
+print('   0  Назад')
+PY
+    choice=$(ask_menu_choice "$count") || return $?
+    [[ $choice != 0 ]] || return 1
+    PAGE_ID=$(python3 - "$WORK/managed-pages.json" "$choice" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))[int(sys.argv[2])-1]['id'])
+PY
+    )
+}
+domain_plan_value() {
+    python3 - "$DOMAIN_PLAN" "$1" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1])).get(sys.argv[2],'')
+print(value if isinstance(value,str) else json.dumps(value))
+PY
+}
+manage_component_action() {
+    local requested_component=${COMPONENT:-panel} requested_domain=${DOMAIN:-${NODE_DOMAIN:-}} method
+    local -a options=()
+    [[ $requested_component != subscription-page ]] || select_managed_page || return $?
+    [[ -z $PAGE_ID ]] || options=(--page-id "$PAGE_ID")
+    if [[ $ACTION == show-config ]]; then
+        python3 -I "$HELPER_ROOT/management.py" info --root "$ROOT" --component "$requested_component" "${options[@]}"
+        return
+    fi
+    if [[ -z $requested_domain ]]; then
+        while true; do
+            requested_domain=$(ask_required 'Новый домен (без https:// и пути)') || return $?
+            helper validate --domain "$requested_domain" >/dev/null && break
+        done
+    else helper validate --domain "$requested_domain" >/dev/null || return $?; fi
+    confirm "Сменить домен $requested_component на $requested_domain"
+    DOMAIN_PLAN=$(python3 -I "$HELPER_ROOT/management.py" prepare --root "$ROOT" --component "$requested_component" --domain "$requested_domain" "${options[@]}") || return $?
+    info "Копия настроек: ${DOMAIN_PLAN%/plan.json}"
+    method=$(domain_plan_value method)
+    [[ -z $TLS_METHOD || $TLS_METHOD == "$method" ]] || die 'При смене домена сохраняется способ TLS. Для другого способа сначала настройте сертификат отдельно.'
+    TLS_METHOD=$method
+    PROJECT=$(domain_plan_value project); DEPLOY=$(domain_plan_value directory)
+    COMPONENT=$(domain_plan_value tlsComponent); DOMAIN=$(domain_plan_value certificateDomain)
+    PROXY=caddy; NODE_DOMAIN=''; [[ $COMPONENT != node ]] || NODE_DOMAIN=$DOMAIN
+    STATE="$WORK/domain-state.json"; domain_plan_value tlsState > "$STATE"
+    SUBSCRIPTION_URLS=$(domain_plan_value certificateSubscriptions)
+    SUBSCRIPTION_PAGE=false; [[ -z $SUBSCRIPTION_URLS ]] || SUBSCRIPTION_PAGE=true
+    if [[ $TLS_METHOD == auto || $TLS_METHOD == http ]]; then check_dns "$requested_domain" || return 1; fi
+    if [[ $TLS_METHOD == existing ]]; then
+        [[ -n $CERT_FILE ]] || CERT_FILE=$(ask_required 'Сертификат для нового домена: путь к fullchain.pem') || return $?
+        [[ -n $KEY_FILE ]] || KEY_FILE=$(ask_required 'Приватный ключ: путь к privkey.pem') || return $?
+    elif [[ $TLS_METHOD != auto ]]; then
+        if [[ -z $EMAIL ]]; then
+            while true; do
+                EMAIL=$(ask_required "Email для Let's Encrypt") || return $?
+                [[ $EMAIL =~ ^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] && break
+                printf '  Некорректный email, повторите ввод.\n' >&2
+            done
+        fi
+        [[ $EMAIL =~ ^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die 'Некорректный email'
+        if [[ $TLS_METHOD == cloudflare || $TLS_METHOD == gcore ]]; then
+            DNS_CREDENTIALS=${DNS_CREDENTIALS:-$ROOT/acme/$PROJECT/dns.ini}
+            [[ -f $DNS_CREDENTIALS ]] || DNS_CREDENTIALS=$(ask_required 'Путь к INI DNS-провайдера (права 600)') || return $?
+        fi
+        if [[ $TLS_METHOD == http ]]; then
+            python3 -I "$HELPER_ROOT/management.py" stop-proxy --root "$ROOT" --plan "$DOMAIN_PLAN"
+            [[ ! -f /etc/remnacust-node-firewall/state.json ]] || PANEL_IP=managed
+        fi
+        obtain_certificate || return $?
+    fi
+    local -a certificate=()
+    [[ $TLS_METHOD == auto ]] || certificate=(--certificate "$CERT_FILE" --key "$KEY_FILE")
+    info 'Применяем адрес и проверяем готовность приложений.'
+    python3 -I "$HELPER_ROOT/management.py" apply --root "$ROOT" --plan "$DOMAIN_PLAN" "${certificate[@]}" || return $?
+    if [[ $TLS_METHOD != auto ]]; then
+        STATE="$ROOT/registry/$COMPONENT.json"
+        schedule_certificate_renewal
+    fi
+    info 'Проверяем новый HTTPS-адрес (до 2 минут для работающего Caddy).'
+    python3 -I "$HELPER_ROOT/management.py" complete --root "$ROOT" --plan "$DOMAIN_PLAN"
+    info "Новый домен: https://$requested_domain"
+    [[ $requested_component != node ]] || info 'Обновите адрес и SNI этой ноды в хостах панели; существующие ссылки клиента сами домен не меняют.'
+    DOMAIN_PLAN=''
+}
 main() {
     local result
     parse_args "$@" || { result=$?; [[ $result == 10 ]] && return 0; return "$result"; }
@@ -1019,6 +1173,8 @@ main() {
         interactive_menu "$@"
         return
     fi
+    case "$ACTION" in manage-panel) COMPONENT=panel; component_menu;; manage-node) COMPONENT=node; component_menu;; esac
+    [[ -n $ACTION ]] || return 0
     run_action
 }
 interactive_menu() {
@@ -1033,8 +1189,20 @@ interactive_menu() {
         case "$choice" in
             1) ACTION=install-panel;;
             2) ACTION=install-node;;
-            3) ACTION=upgrade-panel;;4) ACTION=upgrade-node;;
-            5) ACTION=migrate-remnawave-panel;;6) ACTION=migrate-remnawave-node;;7) ACTION=--check-release;;8) ACTION=status;;9) service_menu || return $?;;10) ACTION=migrate-marzban-panel;;11) ACTION=uninstall-panel;;12) ACTION=uninstall-node;;13) ACTION=install-subscription-page;;14) ACTION=upgrade-subscription-page;;15) ACTION=manage-subscription-page;;0) return 0;;
+            3) ACTION=install-subscription-page;;
+            4) ACTION=upgrade-panel;;
+            5) ACTION=upgrade-node;;
+            6) ACTION=upgrade-subscription-page;;
+            7) ACTION=migrate-remnawave-panel;;
+            8) ACTION=migrate-remnawave-node;;
+            9) ACTION=migrate-marzban-panel;;
+            10) ACTION=--check-release;;
+            11) ACTION=status;;
+            12) management_menu || return $?;;
+            13) service_menu || return $?;;
+            14) ACTION=uninstall-panel;;
+            15) ACTION=uninstall-node;;
+            0) return 0;;
         esac
         [[ -n $ACTION ]] || { discard_pending_input; continue; }
         selection=("$ACTION")
@@ -1092,7 +1260,17 @@ PY
     mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
     LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     case "$ACTION" in
+        change-domain|show-config) installed_helper; lock_operation; manage_component_action;;
+        status|logs|start|stop|restart)
+            if [[ $COMPONENT == subscription-page ]]; then
+                PAGE_OPERATION=$ACTION; ACTION=manage-subscription-page; subscription_page_action
+            else service_action; fi;;
         normalize-layout) installed_helper; lock_operation; python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "${COMPONENT:-panel}";;
+        cleanup-backups)
+            installed_helper; lock_operation
+            local -a cleanup_options=()
+            [[ -z $COMPONENT ]] || cleanup_options=(--component "$COMPONENT")
+            python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --cleanup-backups "${cleanup_options[@]}";;
         install-subscription-page|upgrade-subscription-page|manage-subscription-page) subscription_page_action;;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
@@ -1491,23 +1669,32 @@ node_net_admin_wizard() {
 
 subscription_page_action() {
     local script choice token_file endpoint
-    prepare_host; lock_operation
     if [[ $ACTION == manage-subscription-page ]]; then
+        command -v python3 >/dev/null || die 'Для управления нужен python3'
+        command -v docker >/dev/null || die 'Docker недоступен'
+        lock_operation
         installed_helper
         script="$HELPER_ROOT/subscription_pages.py"
         [[ -f $script ]] || die 'Обновите установщик: управление страницами недоступно в старом выпуске'
-        case "${PAGE_OPERATION:-list}" in list|start|stop|restart) ;; *) die 'Действие страницы: list, start, stop, restart';; esac
+        case "${PAGE_OPERATION:-list}" in list|status|logs|start|stop|restart) ;; *) die 'Действие страницы: list, status, logs, start, stop, restart';; esac
         if [[ ${PAGE_OPERATION:-list} == list ]]; then
             python3 -I "$script" list --root "$ROOT"
             [[ -t 0 ]] || return 0
-            PAGE_ID=$(ask_required 'ID страницы') || return $?
-            PAGE_OPERATION=$(ask 'Действие: start, stop, restart' restart) || return $?
-            case "$PAGE_OPERATION" in start|stop|restart) ;; *) die 'Выберите start, stop или restart';; esac
+            select_managed_page || return $?
+            COMPONENT=subscription-page
+            component_menu || return $?
+            [[ -n $ACTION ]] || return 0
+            if [[ $ACTION == change-domain || $ACTION == show-config ]]; then manage_component_action; return; fi
+            PAGE_OPERATION=$ACTION
         fi
-        confirm "$PAGE_OPERATION страницы $PAGE_ID"
+        if [[ -z $PAGE_ID ]]; then
+            select_managed_page || return $?
+        fi
+        case "$PAGE_OPERATION" in status|logs) ;; *) confirm "$PAGE_OPERATION страницы $PAGE_ID";; esac
         python3 -I "$script" "$PAGE_OPERATION" --root "$ROOT" --page-id "$PAGE_ID"
         return
     fi
+    prepare_host; lock_operation
     choose_version
     confirm "Выполнить $ACTION ($VERSION)"
     release_source
@@ -1520,6 +1707,7 @@ subscription_page_action() {
             PAGE_ID=$(ask_required 'ID страницы для обновления') || return $?
         fi
         python3 -I "$script" upgrade --root "$ROOT" --page-id "$PAGE_ID" --image "$SUBSCRIPTION_IMAGE" --version "$SUBSCRIPTION_IMAGE_VERSION" --release "$TAG"
+        python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --cleanup-backups --component subscription-page
         info 'Страница подписки обновлена; состояние запуска сохранено.'
         return
     fi
@@ -1976,11 +2164,16 @@ obtain_certificate() {
             python3 -I "$HELPER_ROOT/node_firewall.py" acme-open
             acme_open=true
         fi
-        step 'Сертификат Let’s Encrypt' "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" "${domains[@]}" "${auth[@]}" || cert_status=$?
+        step 'Сертификат Let’s Encrypt' acme_certbot "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" "${domains[@]}" "${auth[@]}" || cert_status=$?
         if $acme_open; then python3 -I "$HELPER_ROOT/node_firewall.py" acme-close || cert_status=1; fi
         ((cert_status == 0)) || return "$cert_status"
         lineage="$ACME_ROOT/config/live/$domain"
         CERT_FILE="$lineage/fullchain.pem"; KEY_FILE="$lineage/privkey.pem"
+}
+acme_certbot() {
+    if [[ $ACTION == change-domain ]]; then
+        python3 -I "$HELPER_ROOT/ufw_guard.py" --root "$ROOT" -- "$@"
+    else "$@"; fi
 }
 configure_certificate() {
     local domain=${NODE_DOMAIN:-$DOMAIN} hook service renew_cli
@@ -1996,6 +2189,14 @@ configure_certificate() {
         helper node-proxy --directory "$DEPLOY" --domain "$domain"
         step 'Проверка Nginx' compose run --rm --no-deps --entrypoint nginx node-nginx -t
     else step 'Проверка Caddy' compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; fi
+    schedule_certificate_renewal
+}
+schedule_certificate_renewal() {
+    local domain=${NODE_DOMAIN:-$DOMAIN} hook service renew_cli
+    [[ $TLS_METHOD != auto ]] || return 0
+    ACME_ROOT=${ACME_ROOT:-$ROOT/acme/$PROJECT}
+    CERTBOT=${CERTBOT:-$ROOT/tools/certbot/bin/certbot}
+    install -d -m 0700 "$ACME_ROOT"
     if [[ $TLS_METHOD != existing ]]; then
         hook="$ACME_ROOT/deploy-hook.sh"; renew_cli="$ACME_ROOT/renew.sh"
         printf '#!/usr/bin/env bash\nset -eu\nexport REMNACUST_ROOT=%q\nexec /usr/local/bin/remnacust renew-%s-certificate --yes\n' "$ROOT" "$COMPONENT" > "$hook"
@@ -2006,7 +2207,8 @@ configure_certificate() {
             chmod 0700 "$ACME_ROOT/acme-open.sh" "$ACME_ROOT/acme-close.sh"
             renewal_hooks=(--pre-hook "$ACME_ROOT/acme-open.sh" --post-hook "$ACME_ROOT/acme-close.sh")
         fi
-        { printf '#!/usr/bin/env bash\nset -eu\nexec %q renew --quiet --config-dir %q --work-dir %q --logs-dir %q --deploy-hook %q' "$CERTBOT" "$ACME_ROOT/config" "$ACME_ROOT/work" "$ACME_ROOT/logs" "$hook"; if ((${#renewal_hooks[@]})); then printf ' %q' "${renewal_hooks[@]}"; fi; printf '\n'; } > "$renew_cli"
+        install -m 0700 "${HELPER%/*}/ufw_guard.py" "$ACME_ROOT/ufw_guard.py"
+        { printf '#!/usr/bin/env bash\nset -eu\nexec /usr/bin/python3 -I %q --root %q -- %q renew --quiet --config-dir %q --work-dir %q --logs-dir %q --deploy-hook %q' "$ACME_ROOT/ufw_guard.py" "$ROOT" "$CERTBOT" "$ACME_ROOT/config" "$ACME_ROOT/work" "$ACME_ROOT/logs" "$hook"; if ((${#renewal_hooks[@]})); then printf ' %q' "${renewal_hooks[@]}"; fi; printf '\n'; } > "$renew_cli"
         chmod 0700 "$hook" "$renew_cli"
         service="remnacust-acme-$PROJECT"
         tls_helper timer --service "$service" --script "$renew_cli"
@@ -2163,6 +2365,9 @@ PY
     load_state
     compose --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.layout.json"
     helper layout --state "$STATE" --source "$WORK/compose.layout.json"
+    if ! python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --cleanup-backups; then
+        info 'Не все старые копии удалось архивировать. Рабочие файлы сохранены; повторите cleanup-backups после проверки журнала.'
+    fi
     if [[ $ACTION == upgrade-* || $ACTION == migrate-remnawave-* ]]; then
         cleanup_old_images
     fi
@@ -2306,6 +2511,8 @@ service_action() {
     if [[ $ACTION == status && -z $COMPONENT ]]; then
         local item found=false
         for item in panel node; do if [[ -f $ROOT/registry/$item.json ]]; then STATE="$ROOT/registry/$item.json"; load_state; compose ps --all; found=true; fi; done
+        python3 -I "$HELPER_ROOT/subscription_pages.py" list --root "$ROOT" > "$WORK/managed-page-status.json"
+        if [[ $(cat "$WORK/managed-page-status.json") != '[]' ]]; then cat "$WORK/managed-page-status.json"; found=true; fi
         $found || info 'Нет зарегистрированных установок'; return 0
     fi
     COMPONENT=${COMPONENT:-panel}; STATE="$ROOT/registry/$COMPONENT.json"

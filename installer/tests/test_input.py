@@ -204,7 +204,7 @@ class InputWorkflowTests(unittest.TestCase):
                 plain = re.sub(r'\x1b\[[0-9;]*m', '', output)
                 self.assertTrue(all(len(line) <= width for line in plain.splitlines()), plain)
                 self.assertEqual([int(number) for number in re.findall(r'^\s+(\d+)  ', plain, re.M)],
-                                 [1, 2, 13, 3, 4, 14, 15, 5, 6, 10, 7, 8, 9, 11, 12, 0])
+                                 [*range(1, 16), 0])
 
     def test_no_color_progress_has_no_terminal_control_codes(self):
         command = 'source "$1"; LOG="$2/progress.log"; step "Проверка" sleep .15'
@@ -291,11 +291,31 @@ class InputWorkflowTests(unittest.TestCase):
             self.assertNotIn('UNEXPECTED-ACTION', output)
 
     def test_maintenance_eof_stops_before_showing_another_prompt(self):
-        code, output = self.terminal('bash "$1"', [('Действие: ', '9\n'), ('Компонент: panel или node [panel]: ', b'\x04')],
+        code, output = self.terminal('bash "$1"', [('Действие: ', '13\n'), ('Действие: ', b'\x04')],
                                      script=self.menu_fixture())
         self.assertNotEqual(code, 0, output)
         self.assertEqual(output.count('Установка и обслуживание'), 1)
         self.assertNotIn('  1 status', output)
+
+    def test_management_menu_selects_component_and_domain_operation(self):
+        for choice, component in [('1', 'panel'), ('2', 'node'), ('3', 'subscription-page')]:
+            command = 'source "$1"; management_menu; printf "ACTION=%s COMPONENT=%s" "$ACTION" "$COMPONENT"'
+            code, output = self.terminal(command, [('Действие: ', choice + '\n'), ('Действие: ', '7\n')])
+            self.assertEqual(code, 0, output)
+            self.assertIn('ACTION=change-domain COMPONENT=' + component, output)
+
+    def test_management_back_and_eof_do_not_run_an_action(self):
+        for reply in ('0\n', b'\x04'):
+            command = 'source "$1"; management_menu || exit 1; [[ -z $ACTION ]] || printf UNEXPECTED-ACTION'
+            code, output = self.terminal(command, [('Действие: ', reply)])
+            self.assertNotIn('UNEXPECTED-ACTION', output)
+            self.assertEqual(code == 0, isinstance(reply, str), output)
+
+    def test_page_management_cli_accepts_registered_component(self):
+        command = 'source "$1"; parse_args change-domain --component subscription-page --page-id abc --domain sub.example.test; printf "ACTION=%s COMPONENT=%s" "$ACTION" "$COMPONENT"'
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('ACTION=change-domain COMPONENT=subscription-page', output)
 
     def menu_fixture(self, action=False):
         script = self.root / 'installer.sh'

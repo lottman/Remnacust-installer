@@ -115,11 +115,59 @@ pass 'all commands always visible, upgrade-core removed'
 (component_installed() { return 0; }; show_menu) > "$fixture/installed-menu"
 for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel; do grep -q "$action" "$fixture/installed-menu"; done
 grep -Eq '^[[:space:]]*1[[:space:]]+.*install-panel' "$fixture/installed-menu"
-grep -Eq '^[[:space:]]*11[[:space:]]+.*uninstall-panel' "$fixture/installed-menu"
+grep -Eq '^[[:space:]]*14[[:space:]]+.*uninstall-panel' "$fixture/installed-menu"
+grep -q 'Обновить: пункт 4; удалить: пункт 14' "$fixture/installed-menu"
+grep -q 'Обновить: пункт 5; удалить: пункт 15' "$fixture/installed-menu"
+diff -u <(printf '%s\n' {1..15} 0) <(awk '/^[[:space:]]*[0-9]+[[:space:]]/ {print $1}' "$fixture/menu")
 pass 'installed components keep installation and deletion commands visible with stable numbers'
 (ask() { printf 0; }; command() { return 1; }; ACTION=''; main) > "$fixture/no-tools-menu"
 cmp <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/menu") <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/no-tools-menu")
 pass 'menu and exit do not need Docker or network'
+
+menu_actions=(install-panel install-node install-subscription-page upgrade-panel upgrade-node \
+    upgrade-subscription-page migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel \
+    --check-release status manage-subscription-page logs uninstall-panel uninstall-node)
+for number in {1..15}; do
+    (
+        ask_menu_choice() { printf '%s' "$number"; }
+        service_menu() { ACTION=logs; COMPONENT=node; }
+        management_menu() { ACTION=manage-subscription-page; COMPONENT=subscription-page; }
+        bash() { printf '%s\n' "${@:2}" > "$fixture/selected-action"; printf 'done\n' >&3; }
+        interactive_menu > "$fixture/selection-menu"
+    )
+    [[ $(head -n 1 "$fixture/selected-action") == "${menu_actions[number-1]}" ]]
+    if [[ $number == 13 ]]; then
+        grep -qx -- '--component' "$fixture/selected-action"
+        grep -qx node "$fixture/selected-action"
+    fi
+done
+pass 'every displayed menu number dispatches its action without running installation'
+for component in '' panel node subscription-page; do
+    (
+        ACTION=''; COMPONENT=''
+        options=(); [[ -z $component ]] || options=(--component "$component")
+        parse_args cleanup-backups "${options[@]}"
+        installed_helper() { HELPER_ROOT="$project"; }
+        lock_operation() { :; }
+        python3() { printf '%s\n' "$@" > "$fixture/cleanup-arguments"; }
+        run_action
+        grep -qx -- '--cleanup-backups' "$fixture/cleanup-arguments"
+        if [[ -n $component ]]; then grep -qx "$component" "$fixture/cleanup-arguments"; fi
+    )
+done
+pass 'cleanup command supports all components without deployment or lifecycle calls'
+(
+    ACTION=''; COMPONENT=''
+    parse_args change-domain --component node --domain node.example.test --email admin@example.test --tls-method http
+    [[ $ACTION == change-domain && $TLS_METHOD == http && $EMAIL == admin@example.test ]]
+)
+(
+    ACTION=''; COMPONENT=''
+    parse_args change-domain --component subscription-page --domain sub.example.test --tls-method existing --cert-file /cert.pem --key-file /key.pem
+    [[ $CERT_FILE == /cert.pem && $KEY_FILE == /key.pem ]]
+)
+pass 'domain change accepts certificate arguments without allowing them during upgrades'
+reject 'upgrade does not replace existing TLS settings' bash "$project/installer.sh" upgrade-node --email admin@example.test
 reject 'upgrade-core cannot run' bash "$project/installer.sh" upgrade-core
 reject 'Marzban-only flags cannot modify a normal install' bash "$project/installer.sh" install-panel --dry-run
 (

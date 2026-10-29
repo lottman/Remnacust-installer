@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "e946fdd45d6f5d6ca39ec5b8b71da03b6d96f2a27be32f7797d9c476e48ae32e",
+  "entry_sha256": "6acce0c6826b285ae437d2bd92f08f011abf5c2b34dd7709d054df332d34faca",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -14,12 +14,12 @@
       "sha256": "69e4b56c33bc83411ddb43be2b5e5174548a16528e6346e97ebf15b41fce8f6c"
     },
     "deployment_layout.py": {
-      "bytes": 11803,
-      "sha256": "d1930c37bee1682f3e693b45553705c6a3931d53e773aa2d8288ef3b44bb402a"
+      "bytes": 17741,
+      "sha256": "6d8501e62bfabd374b6d6e635434f0438d0af02aae391fc02f229ed11337efcc"
     },
     "helper_bundle.py": {
-      "bytes": 11426,
-      "sha256": "063ac5972552c353d0c188207762d9ae993878ccf4361b570e51af51cb0be4b5"
+      "bytes": 11459,
+      "sha256": "a6b7d40a349ab6e6c027e7361c0839299445f7cf28a3815d98941d9da4ecf227"
     },
     "image_cleanup.py": {
       "bytes": 4761,
@@ -28,6 +28,10 @@
     "images.py": {
       "bytes": 9675,
       "sha256": "dce0cb295fcfac38a5c08698078b0076b11ebfc562d00a80804ac077bb7795c5"
+    },
+    "management.py": {
+      "bytes": 26295,
+      "sha256": "759bc27eb8638c8c76c3d73a621275b8d9b4f09daa8ea4ee1d88a2cffb434902"
     },
     "marzban.py": {
       "bytes": 14142,
@@ -38,8 +42,8 @@
       "sha256": "6a0a19d79bc16e96919a5c4f79a95533f9203f3f154e191d6fa1083cd8919a86"
     },
     "runtime.py": {
-      "bytes": 73128,
-      "sha256": "91e00719ace486fcc316d82acadbf9efc25eeebe2f7812ae407729a69b026ece"
+      "bytes": 73385,
+      "sha256": "361e37b11db9f851aca32f554c55d57fdd6c2a4b85fcc18265c5e472b1a52366"
     },
     "stable_entry.py": {
       "bytes": 411,
@@ -54,12 +58,16 @@
       "sha256": "bf1b20f3d07d50bb0ebaa3a91b7d6cca3e9d5351b6bb7bf4b18f162597108e56"
     },
     "subscription_pages.py": {
-      "bytes": 13478,
-      "sha256": "fa3e10599a664ec65873597ddb9410524bfb730738b398b0eae4bf2a9f47fa9d"
+      "bytes": 13832,
+      "sha256": "b3ef0cfe671bd4ea93da639b57f0143eea8f8e0eb771fd01288c984f2605abbc"
     },
     "tls.py": {
       "bytes": 9486,
       "sha256": "d1971f0bfc795b125ab4ccc3edfbba70cf8db6ba3f4d2eab99dc7934acb60730"
+    },
+    "ufw_guard.py": {
+      "bytes": 5490,
+      "sha256": "6f3a137f95c3caa1f58cd3aa61c1b70ff6fc8d9c3e241501c99c5c851464508b"
     },
     "update-agent.py": {
       "bytes": 26637,
@@ -67,5 +75,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.96"
+  "version": "1.2.97"
 }

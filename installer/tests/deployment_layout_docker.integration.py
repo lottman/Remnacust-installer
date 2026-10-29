@@ -26,6 +26,11 @@ with tempfile.TemporaryDirectory(prefix='remnacust-layout-docker-') as temporary
     old.mkdir()
     (old / '.env').write_text('APP_SECRET=fixture-preserved\n')
     (old / 'database').mkdir()
+    stale_name = 'compose.remnacust-20261010T120000Z-1.json'
+    mounted_name = 'compose.remnacust-20261010T120000Z-2.json'
+    (old / stale_name).write_text('unused-original-config')
+    (old / mounted_name).write_text('mounted-config')
+    (old / 'Caddyfile.before-first-vpn').write_text('unused-original-proxy')
     server = "while true; do printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nok' | nc -l -p 3010; done"
     (root / 'Dockerfile').write_text('FROM alpine:3.22\nCMD ' + json.dumps(['sh', '-c', server]) + '\n')
     state = {'schema': 1, 'component': 'panel', 'directory': str(old), 'project': project, 'composeFiles': [str(old / 'compose.json')], 'mainService': 'api', 'applications': ['api'], 'extraServices': ['db'], 'version': '1.1.7.58'}
@@ -34,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='remnacust-layout-docker-') as temporary
     config = {'name': project, 'services': {
         'api': {'image': image, 'env_file': [str(old / '.env')], 'ports': [f'127.0.0.1:{port}:3010'], 'volumes': ['retained:/state']},
         'db': {'image': 'postgres:18.4', 'environment': {'POSTGRES_PASSWORD': 'layout-fixture-only'}, 'volumes': [str(old / 'database') + ':/var/lib/postgresql'], 'healthcheck': {'test': ['CMD-SHELL', 'pg_isready -U postgres'], 'interval': '1s', 'timeout': '2s', 'retries': 30}},
-        'stopped': {'image': image, 'profiles': ['disabled']},
+        'stopped': {'image': image, 'profiles': ['disabled'], 'volumes': [str(old / mounted_name) + ':/fixture:ro']},
     }, 'volumes': {'retained': {}}}
     runtime.write(old / 'compose.json', config)
     runtime.write(root / 'registry/panel.json', state)
@@ -73,13 +78,23 @@ with tempfile.TemporaryDirectory(prefix='remnacust-layout-docker-') as temporary
         assert run(*current, 'exec', '-T', 'api', 'cat', '/state/sentinel').strip() == 'retained'
         stopped = run(*current, 'ps', '--all', '--quiet', 'stopped').strip()
         assert json.loads(run('docker', 'inspect', stopped))[0]['State']['Running'] is False
+        archives = list((root / 'backups/panel').glob('legacy-config-*'))
+        assert len(archives) == 1
+        assert (archives[0] / stale_name).read_text() == 'unused-original-config'
+        assert (archives[0] / 'Caddyfile.before-first-vpn').read_text() == 'unused-original-proxy'
+        assert (root / 'panel' / mounted_name).read_text() == 'mounted-config'
+        before_cleanup = sorted(run(*current, 'ps', '--all', '--quiet').split())
+        layout.cleanup_registered(root)
+        layout.cleanup_registered(root)
+        assert before_cleanup == sorted(run(*current, 'ps', '--all', '--quiet').split())
+        assert len(list((root / 'backups/panel').glob('legacy-config-*'))) == 1
         extra = root / 'panel-20261007125352-343161'; extra.mkdir(); (extra / '.env').write_text('retired-data')
         layout.normalize(root, 'panel')
         assert not extra.exists() and (root / 'backups/retired-layout' / extra.name / '.env').read_text() == 'retired-data'
-        print('PASS real Docker/PostgreSQL: canonical folder, readiness rollback, unchanged credentials, bind data, named volume, stopped service and archived obsolete folder')
+        print('PASS real Docker/PostgreSQL: canonical folder, rollback, credentials, data, stopped service, legacy config archives, protected mounts, idempotent cleanup without restart')
     finally:
         current_state = runtime.load(root / 'registry/panel.json')
-        subprocess.run([*layout.compose_base(current_state), 'down', '--volumes', '--remove-orphans'], capture_output=True, timeout=180)
+        subprocess.run([*layout.compose_base(current_state), '--profile', '*', 'down', '--volumes', '--remove-orphans'], capture_output=True, timeout=180)
         subprocess.run(['docker', 'image', 'rm', image], capture_output=True, timeout=30)
         if os.geteuid() != 0:
             # PostgreSQL owns its bind data as container uid 999. Return only

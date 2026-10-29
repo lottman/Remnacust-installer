@@ -97,7 +97,7 @@ def ready(item, timeout=120):
     while time.monotonic() < deadline:
         current = inspect(item)
         state = (current or {}).get('State', {})
-        if state.get('Running') and state.get('Health', {}).get('Status') in (None, 'healthy'):
+        if state.get('Running') and not state.get('Restarting') and state.get('Status') not in ('restarting', 'dead', 'exited') and state.get('Health', {}).get('Status') in (None, 'healthy'):
             return
         if state.get('Status') in ('dead', 'exited') or state.get('Health', {}).get('Status') == 'unhealthy':
             break
@@ -106,9 +106,12 @@ def ready(item, timeout=120):
 
 
 def service(root, page, operation):
-    if operation not in ('start', 'stop', 'restart'):
+    if operation not in ('start', 'stop', 'restart', 'status', 'logs'):
         raise ValueError('INVALID_PAGE_OPERATION')
     item = selected(root, page)
+    if operation in ('status', 'logs'):
+        print(command(compose_base(item), *(['ps', '--all', item['service']] if operation == 'status' else ['logs', '--tail', '100', '--no-color', item['service']])))
+        return
     command(compose_base(item), operation, item['service'])
     if operation != 'stop':
         ready(item)
@@ -240,7 +243,7 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['install', 'upgrade', 'list', 'start', 'stop', 'restart'])
+    parser.add_argument('operation', choices=['install', 'upgrade', 'list', 'status', 'logs', 'start', 'stop', 'restart'])
     parser.add_argument('--root', type=Path, required=True)
     for name in ('page-id', 'directory', 'project', 'panel-url', 'token-file', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
         parser.add_argument('--' + name)
