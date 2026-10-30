@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='6d2fc3a7c12da47392e09f2e416e479891e5cf79aa682596beae3e131bbe0099'
+HELPER_BUNDLE_SHA256='fd0ebc36c6e5f1acdae0c84b7a0e6743554d588fc6a85f661fddc95d0b7b6621'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -68,17 +68,35 @@ discard_pending_input() {
     fi
 }
 ask_yes_no() {
-    local answer
+    local answer default=${2:-n} display_default=$N_LABEL
+    [[ $default == y || $default == n ]] || die 'Некорректный ответ по умолчанию'
+    [[ $default != y ]] || display_default=$Y_LABEL
     while true; do
-        answer=$(ask "$1 $Y_LABEL/$N_LABEL" n "$N_LABEL") || return $?
+        answer=$(ask "$1 $Y_LABEL/$N_LABEL" "$default" "$display_default") || return $?
         answer=$(trim_answer "$answer")
-        [[ -n $answer ]] || answer=n
+        [[ -n $answer ]] || answer=$default
         # Literal Cyrillic alternatives also work with the byte-oriented C locale.
         case "${answer,,}" in
             y|yes|д|Д|да|Да|дА|ДА) printf yes; return 0;;
             n|no|н|Н|нет|Нет|нЕт|неТ|НЕт|НеТ|нЕТ|НЕТ) printf no; return 0;;
             *) printf '  Введите %s/%s.\n' "$Y_LABEL" "$N_LABEL" >&2; discard_pending_input;;
         esac
+    done
+}
+ask_confirmed_domain() {
+    local title=$1 value=${2:-} answer
+    while true; do
+        [[ -n $value ]] || value=$(ask_required "$title") || return $?
+        value=$(trim_answer "$value")
+        if ! helper validate --domain "$value" >/dev/null; then
+            [[ -t 0 ]] && ! $YES || return 1
+            value=''; continue
+        fi
+        if [[ -t 0 ]] && ! $YES; then
+            answer=$(ask_yes_no "Использовать домен $value?" y) || return $?
+            if [[ $answer != yes ]]; then value=''; continue; fi
+        fi
+        printf '%s' "${value,,}"; return 0
     done
 }
 ask_menu_choice() {
@@ -608,6 +626,17 @@ for family,address in [(socket.AF_INET,'0.0.0.0'),(socket.AF_INET6,'::')]:
     finally:s.close()
 PY
 }
+choose_subscription_port() {
+    local candidate=$1
+    while true; do
+        if helper validate --port "$candidate" >/dev/null && port_free "$candidate"; then
+            printf '%s' "$candidate"; return 0
+        fi
+        [[ -t 0 ]] && ! $YES || return 1
+        printf '  Выберите другой свободный порт; работающие сервисы сохраняются.\n' >&2
+        candidate=$(ask_required 'Свободный порт страницы подписки') || return $?
+    done
+}
 panel_processes_ready() {
     local id=$1 service=$2
     [[ $COMPONENT == panel && " ${APPS[*]} " == *" $service "* ]] || return 0
@@ -1111,12 +1140,7 @@ manage_component_action() {
         python3 -I "$HELPER_ROOT/management.py" info --root "$ROOT" --component "$requested_component" "${options[@]}"
         return
     fi
-    if [[ -z $requested_domain ]]; then
-        while true; do
-            requested_domain=$(ask_required 'Новый домен (без https:// и пути)') || return $?
-            helper validate --domain "$requested_domain" >/dev/null && break
-        done
-    else helper validate --domain "$requested_domain" >/dev/null || return $?; fi
+    requested_domain=$(ask_confirmed_domain 'Новый домен (без https:// и пути)' "$requested_domain") || return $?
     confirm "Сменить домен $requested_component на $requested_domain"
     DOMAIN_PLAN=$(python3 -I "$HELPER_ROOT/management.py" prepare --root "$ROOT" --component "$requested_component" --domain "$requested_domain" "${options[@]}") || return $?
     info "Копия настроек: ${DOMAIN_PLAN%/plan.json}"
@@ -1394,7 +1418,9 @@ choose_version() {
 }
 release_source() {
     choose_version
-    if [[ $ACTION == install-panel && -z $DOMAIN ]]; then DOMAIN=$(ask_required 'Домен панели'); fi
+    installed_helper
+    if [[ $ACTION == install-panel ]]; then DOMAIN=$(ask_confirmed_domain 'Домен панели' "$DOMAIN") || return $?; fi
+    if [[ $ACTION == install-node && -n $NODE_DOMAIN ]]; then NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$NODE_DOMAIN") || return $?; fi
     if [[ $ACTION == install-node && -z ${REMNACUST_NODE_SECRET:-} ]]; then
         ask_node_secret || return 1
     fi
@@ -1696,6 +1722,21 @@ subscription_page_action() {
         python3 -I "$script" "$PAGE_OPERATION" --root "$ROOT" --page-id "$PAGE_ID"
         return
     fi
+    if [[ $ACTION == install-subscription-page ]]; then
+        installed_helper
+        local target_project=${PROJECT:-remnacust-subscription-page} target_directory=${DIRECTORY:-$ROOT/subscription-page} existing
+        if [[ -z $DIRECTORY && $target_project != remnacust-subscription-page ]]; then target_directory="$ROOT/subscription-pages/$target_project"; fi
+        existing=$(python3 -I "$HELPER_ROOT/subscription_pages.py" existing-target --root "$ROOT" --directory "$target_directory" --project "$target_project") || return $?
+        if [[ $existing != null ]]; then
+            PAGE_ID=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["id"])' "$existing")
+            python3 -c 'import json,sys;v=json.loads(sys.argv[1]);print("  Страница уже установлена: "+v["name"]+" · "+v["domain"])' "$existing"
+            [[ -t 0 ]] || die "Повторная установка не нужна. Используйте upgrade-subscription-page --page-id $PAGE_ID или manage-subscription-page --page-id $PAGE_ID."
+            info 'Открываем управление существующей страницей; новая копия и новый токен не создаются.'
+            ACTION=manage-subscription-page; PAGE_OPERATION=list
+            subscription_page_action
+            return
+        fi
+    fi
     prepare_host; lock_operation
     choose_version
     confirm "Выполнить $ACTION ($VERSION)"
@@ -1703,6 +1744,20 @@ subscription_page_action() {
     script="$HELPER_ROOT/subscription_pages.py"
     select_subscription_image
     step 'Готовый образ сайта подписки' prepare_subscription_image
+    if [[ $ACTION == install-subscription-page && -z $PROJECT && -z $DIRECTORY ]]; then
+        local owner
+        owner=$(python3 -I "$script" reuse-port --root "$ROOT" --port "${PORT:-$SUBSCRIPTION_PORT}") || return $?
+        if [[ $owner != null ]]; then
+            PAGE_ID=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["id"])' "$owner")
+            if [[ -n $DOMAIN ]]; then
+                local current_domain
+                current_domain=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["domain"])' "$owner")
+                [[ $DOMAIN == "$current_domain" ]] || die 'На этом порту уже работает ваша страница. Сначала обновите её без --domain; смена адреса доступна в управлении страницей.'
+            fi
+            info "Порт ${PORT:-$SUBSCRIPTION_PORT} занят нашей страницей: обновляем её на месте. Пересоздаётся только контейнер страницы; токен, настройки и остальные сервисы сохраняются."
+            ACTION=upgrade-subscription-page
+        fi
+    fi
     if [[ $ACTION == upgrade-subscription-page ]]; then
         if [[ -z $PAGE_ID ]]; then
             python3 -I "$script" list --root "$ROOT"
@@ -1710,18 +1765,18 @@ subscription_page_action() {
         fi
         python3 -I "$script" upgrade --root "$ROOT" --page-id "$PAGE_ID" --image "$SUBSCRIPTION_IMAGE" --version "$SUBSCRIPTION_IMAGE_VERSION" --release "$TAG"
         python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --cleanup-backups --component subscription-page
-        info 'Страница подписки обновлена; состояние запуска сохранено.'
+        info "Страница подписки обновлена до $SUBSCRIPTION_IMAGE_VERSION; состояние запуска сохранено."
+        if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
         return
     fi
     endpoint=${PAGE_PANEL_URL:-}
     if [[ -z $endpoint && -f $ROOT/registry/panel.json ]]; then endpoint=auto; fi
     [[ -n $endpoint ]] || endpoint=$(ask_required 'HTTPS адрес панели') || return $?
-    DOMAIN=${DOMAIN:-$(ask_required 'Домен страницы подписки')}
+    DOMAIN=$(ask_confirmed_domain 'Домен страницы подписки' "$DOMAIN") || return $?
     PROJECT=${PROJECT:-remnacust-subscription-page}
     DEPLOY=${DIRECTORY:-$ROOT/subscription-page}
     if [[ -z $DIRECTORY && $PROJECT != remnacust-subscription-page ]]; then DEPLOY="$ROOT/subscription-pages/$PROJECT"; fi
-    PORT=${PORT:-$SUBSCRIPTION_PORT}
-    port_free "$PORT"
+    PORT=$(choose_subscription_port "${PORT:-$SUBSCRIPTION_PORT}") || return $?
     if ! $PROXY_SET; then
         PROXY=existing
         if [[ -t 0 ]]; then
@@ -1761,7 +1816,9 @@ PY
     rm -f -- "$token_file"
     install_cli
     info "Страница установлена. ID: $PAGE_ID. Каталог: $DEPLOY"
+    info "Версия страницы подписки: $SUBSCRIPTION_IMAGE_VERSION. Установка страницы не обновляет панель."
     [[ $PROXY != existing ]] || info "Направьте HTTPS домена $DOMAIN на 127.0.0.1:$PORT в вашем reverse proxy."
+    if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
 }
 
 subscription_wizard() {
@@ -1788,6 +1845,10 @@ subscription_wizard() {
             SUBSCRIPTION_URLS=$(ask_required 'Домены сайта подписки') || return $?
         fi
         if normalized=$(helper "$operation" --domain "$DOMAIN" --subscription-urls "$SUBSCRIPTION_URLS"); then
+            if [[ -t 0 ]] && ! $YES; then
+                choice=$(ask_yes_no "Использовать адреса сайта подписки: ${normalized//$'\n'/, }?" y) || return $?
+                if [[ $choice != yes ]]; then preset=false; SUBSCRIPTION_URLS=''; continue; fi
+            fi
             if $SUBSCRIPTION_PAGE; then
                 SUBSCRIPTION_URLS="https://${normalized//$'\n'/,https://}"
             else SUBSCRIPTION_URLS=${normalized//$'\n'/,}; fi
@@ -1813,7 +1874,7 @@ fresh_files() {
     fi
     if [[ $COMPONENT == panel ]]; then
         [[ -z $NODE_DOMAIN$PANEL_IP ]] || die '--node-domain и --panel-ip предназначены для install-node'
-        [[ -n $DOMAIN ]] || DOMAIN=$(ask_required 'Домен панели')
+        [[ -n $DOMAIN ]] || DOMAIN=$(ask_confirmed_domain 'Домен панели') || return $?
         PORT=${PORT:-3000}
     else
         PORT=${PORT:-2222}
@@ -1896,7 +1957,7 @@ tls_helper() {
 certificate_wizard() {
     local choice domain suggested
     if [[ $COMPONENT == panel ]]; then
-        [[ -n $DOMAIN ]] || DOMAIN=$(ask_required 'Домен панели')
+        [[ -n $DOMAIN ]] || DOMAIN=$(ask_confirmed_domain 'Домен панели') || return $?
         if [[ -t 0 ]] && ! $PROXY_SET; then
             printf '\n  HTTPS панели\n  1  Caddy в Docker (новая установка)\n  2  Свой существующий Nginx/Caddy\n'
             choice=$(ask 'Reverse proxy' 1)
@@ -1915,7 +1976,7 @@ certificate_wizard() {
         fi
         if [[ -t 0 && -z $NODE_DOMAIN ]]; then
             choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде?')
-            case "$choice" in yes) NODE_DOMAIN=$(ask_required 'Домен ноды');;no) ;;esac
+            case "$choice" in yes) NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды') || return $?;;no) ;;esac
         fi
         if [[ -z $NODE_DOMAIN ]]; then
             [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]] || die 'Для TLS ноды укажите --node-domain'

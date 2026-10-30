@@ -88,6 +88,50 @@ class InputWorkflowTests(unittest.TestCase):
         self.assertNotEqual(code, 0, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
+    def test_domain_confirmation_defaults_to_yes_and_normalizes_case(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
+                   'value=$(ask_confirmed_domain "Домен сайта"); printf "DOMAIN=%s" "$value"')
+        code, output = self.terminal(command, [('Домен сайта: ', ' Fivp.Top \n'),
+                                              ('Использовать домен Fivp.Top? y/n [y]: ', '\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('DOMAIN=fivp.top', output)
+
+    def test_domain_rejection_reprompts_instead_of_using_the_typo(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
+                   'value=$(ask_confirmed_domain "Домен сайта"); printf "DOMAIN=%s" "$value"')
+        code, output = self.terminal(command, [('Домен сайта: ', 'fivp.tip\n'),
+                                              ('Использовать домен fivp.tip? y/n [y]: ', 'n\n'),
+                                              ('Домен сайта: ', 'fivp.top\n'),
+                                              ('Использовать домен fivp.top? y/n [y]: ', 'y\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('DOMAIN=fivp.top', output)
+        self.assertNotIn('DOMAIN=fivp.tip', output)
+
+    def test_domain_validation_repeats_and_confirmation_eof_cancels(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
+                   'value=$(ask_confirmed_domain "Домен сайта") || exit 1; printf "DOMAIN=%s" "$value"')
+        code, output = self.terminal(command, [('Домен сайта: ', 'https://invalid.example/path\n'),
+                                              ('Домен сайта: ', 'sub.example.com\n'),
+                                              ('Использовать домен sub.example.com? y/n [y]: ', b'\x04')])
+        self.assertNotEqual(code, 0, output)
+        self.assertNotIn('DOMAIN=', output)
+
+    def test_node_domain_confirmation_eof_does_not_continue_without_tls(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; '
+                   'if certificate_wizard; then printf UNEXPECTED-CONTINUATION; fi')
+        code, output = self.terminal(command, [('Настроить TLS/XHTTP на ноде? y/n [n]: ', 'y\n'),
+                                              ('Домен ноды: ', 'node.example.com\n'),
+                                              ('Использовать домен node.example.com? y/n [y]: ', b'\x04')])
+        self.assertNotIn('UNEXPECTED-CONTINUATION', output)
+
+    def test_explicit_automation_domain_does_not_need_a_terminal(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
+                   'ask_confirmed_domain "Домен сайта" "sub.example.com" </dev/null')
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('sub.example.com', output)
+        self.assertNotIn('y/n', output)
+
     def test_required_text_repeats_after_multiple_empty_answers_and_trims_spaces(self):
         prompt = 'Обязательное поле: '
         code, output = self.terminal('source "$1"; value=$(ask_required "Обязательное поле"); printf "RESULT=%s" "$value"',
@@ -234,7 +278,8 @@ class InputWorkflowTests(unittest.TestCase):
                    'subscription_wizard; printf "RESULT=%s" "$SUBSCRIPTION_URLS"')
         code, output = self.terminal(command, [('Установить сайт подписки? y/n [n]: ', 'y\n'),
                                              (prompt, 'http://sub.example.com\n'),
-                                             (prompt, ' Sub.Example.com/, https://other.example.com/ \n')])
+                                             (prompt, ' Sub.Example.com/, https://other.example.com/ \n'),
+                                             ('Использовать адреса сайта подписки: sub.example.com, other.example.com? y/n [y]: ', '\n')])
         self.assertEqual(code, 0, output)
         self.assertIn('RESULT=https://sub.example.com,https://other.example.com', output)
         self.assertIn('Адрес подписки:', output)
@@ -311,6 +356,62 @@ class InputWorkflowTests(unittest.TestCase):
             self.assertNotIn('UNEXPECTED-ACTION', output)
             self.assertEqual(code == 0, isinstance(reply, str), output)
 
+    def test_repeat_page_install_opens_management_before_host_preparation(self):
+        import hashlib
+        import json
+        directory = self.root / 'subscription-page'; directory.mkdir()
+        compose = directory / 'docker-compose.yml'; compose.write_text('{"services":{"subscription-page":{"image":"fixture"}}}')
+        item = {'directory': str(directory), 'project': 'remnacust-subscription-page', 'service': 'subscription-page',
+                'composeFiles': [str(compose)], 'domain': 'fivp.tip'}
+        identity = hashlib.sha256(('\0'.join(str(item[k]) for k in ('directory', 'project', 'service'))).encode()).hexdigest()[:24]
+        registry = self.root / 'registry/subscription-pages'; registry.mkdir(parents=True)
+        (registry / (identity + '.json')).write_text(json.dumps(item))
+        binary = self.root / 'bin'; binary.mkdir()
+        docker = binary / 'docker'; docker.write_text('#!/bin/sh\nexit 0\n'); docker.chmod(0o755)
+        command = ('source "$1"; WORK="$2"; export PATH="$2/bin:$PATH"; '
+                   'HELPER_ROOT="$(dirname "$1")"; installed_helper() { :; }; lock_operation() { :; }; '
+                   'prepare_host() { printf UNEXPECTED-DOWNLOAD; exit 99; }; '
+                   'component_menu() { printf OPENED-MANAGEMENT; ACTION=""; }; '
+                   'ACTION=install-subscription-page; subscription_page_action')
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('OPENED-MANAGEMENT', output)
+        self.assertIn('fivp.tip', output)
+        self.assertNotIn('UNEXPECTED-DOWNLOAD', output)
+
+    def test_new_page_can_use_another_port_without_stopping_the_existing_service(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
+                   'port_free() { [[ $1 == 3011 ]]; }; '
+                   'value=$(choose_subscription_port 3010) || exit 1; printf "PORT=%s" "$value"')
+        code, output = self.terminal(command, [('Свободный порт страницы подписки: ', 'invalid\n'),
+                                              ('Свободный порт страницы подписки: ', '3011\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('PORT=3011', output)
+        self.assertNotIn('PORT=3010', output)
+
+    def test_busy_port_in_automation_fails_without_prompt_or_implicit_replacement(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
+                   'port_free() { return 1; }; '
+                   'choose_subscription_port 3010 </dev/null || exit 1; printf UNEXPECTED-CONTINUATION')
+        code, output = self.terminal(command, [])
+        self.assertNotEqual(code, 0, output)
+        self.assertNotIn('Свободный порт страницы подписки:', output)
+        self.assertNotIn('UNEXPECTED-CONTINUATION', output)
+
+    def test_real_occupied_port_is_reported_and_existing_listener_stays_bound(self):
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
+                       f'choose_subscription_port {port} </dev/null || exit 1; printf UNEXPECTED-CONTINUATION')
+            code, output = self.terminal(command, [])
+            self.assertNotEqual(code, 0, output)
+            self.assertIn('Порт занят: ' + str(port), output)
+            self.assertEqual(listener.getsockname()[1], port)
+            self.assertNotIn('UNEXPECTED-CONTINUATION', output)
+
     def test_page_management_cli_accepts_registered_component(self):
         command = 'source "$1"; parse_args change-domain --component subscription-page --page-id abc --domain sub.example.test; printf "ACTION=%s COMPONENT=%s" "$ACTION" "$COMPONENT"'
         code, output = self.terminal(command, [])
@@ -376,10 +477,11 @@ main "$@"
         self.assertEqual(output.count('Выберите номер от 0 до 10.'), 1, output)
 
     def test_node_tls_prompt_uses_the_same_yes_no_answers(self):
-        command = ('source "$1"; WORK="$2"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; TLS_METHOD=existing; '
+        command = ('source "$1"; WORK="$2"; HELPER="$(dirname "$1")/runtime.py"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; TLS_METHOD=existing; '
                    'CERT_FILE=/test/cert; KEY_FILE=/test/key; certificate_wizard; printf "NODE-DOMAIN=%s" "$NODE_DOMAIN"')
         code, output = self.terminal(command, [('Настроить TLS/XHTTP на ноде? y/n [n]: ', 'д\n'),
-                                              ('Домен ноды: ', 'edge.example.com\n')])
+                                              ('Домен ноды: ', 'edge.example.com\n'),
+                                              ('Использовать домен edge.example.com? y/n [y]: ', '\n')])
         self.assertEqual(code, 0, output)
         self.assertIn('NODE-DOMAIN=edge.example.com', output)
 

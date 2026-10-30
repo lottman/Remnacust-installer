@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "b2f2fd0051ece924736f1133f4a3f80b3211284e3f0d2a82023bc3561a819bd2",
+  "entry_sha256": "16e490fbb8047a8485ae5a6102a506b2e190313358fce47172026d335113a79e",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -58,8 +58,8 @@
       "sha256": "bf1b20f3d07d50bb0ebaa3a91b7d6cca3e9d5351b6bb7bf4b18f162597108e56"
     },
     "subscription_pages.py": {
-      "bytes": 13832,
-      "sha256": "b3ef0cfe671bd4ea93da639b57f0143eea8f8e0eb771fd01288c984f2605abbc"
+      "bytes": 17308,
+      "sha256": "0a7fb92bac63a8a7de5c82710c6d3e4fa34013b6ee9e989c3bb2e14e0f5a7a4d"
     },
     "tls.py": {
       "bytes": 9486,
@@ -75,5 +75,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.98"
+  "version": "1.2.99"
 }

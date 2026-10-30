@@ -15,6 +15,7 @@ import subscription_pages as pages
 suffix = uuid.uuid4().hex[:12]
 project = 'rc-page-test-' + suffix
 good, bad = 'rc-page-fixture:' + suffix, 'rc-page-fixture-bad:' + suffix
+owned = 'ghcr.io/lottman/remnacust-subscription-page:audit-' + suffix
 with tempfile.TemporaryDirectory(prefix='remnacust-pages-docker-') as folder:
     root = Path(folder)
     os.environ['REMNACUST_ROOT'] = str(root)
@@ -43,6 +44,15 @@ with tempfile.TemporaryDirectory(prefix='remnacust-pages-docker-') as folder:
         original_env = (root / 'site/.env').read_bytes()
         assert (root / 'site/.env').stat().st_mode & 0o077 == 0
         assert pages.listing(root)[0]['running']
+        assert pages.reuse_port(root, port)['id'] == page
+        docker('tag', good, owned)
+        pages.upgrade(root, page, owned, '1.1.7.58', 'v1.2.93')
+        (root / 'registry/subscription-pages' / (page + '.json')).unlink()
+        assert pages.reuse_port(root, port)['id'] == page, 'owned listener was not recovered'
+        assert pages.selected(root, page)['domain'] == 'sub.example.test'
+        assert (root / 'site/.env').read_bytes() == original_env
+        pages.upgrade(root, page, good, '1.1.7.58', 'v1.2.93')
+        assert urlopen('http://127.0.0.1:' + str(port) + '/internal/health', timeout=5).read().strip() == b'ok'
         pages.service(root, page, 'stop')
         pages.upgrade(root, page, good, '1.1.7.58', 'v1.2.93')
         assert not pages.listing(root)[0]['running'], 'stopped page was started by update'
@@ -55,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix='remnacust-pages-docker-') as folder:
         pages.ready(pages.selected(root, page))
         assert pages.inspect(pages.selected(root, page))['Config']['Image'] == good
         assert (root / 'site/.env').read_bytes() == original_env
-        print('PASS real Docker: install, loopback HTTP, private env, list, stop, stopped update, start and rollback without credential changes')
+        print('PASS real Docker: occupied owned port reuse, missing registry recovery, private env preservation, install, list, stopped update, start and rollback')
     finally:
         if not page:
             registered = pages.records(root)
@@ -63,5 +73,5 @@ with tempfile.TemporaryDirectory(prefix='remnacust-pages-docker-') as folder:
                 page = next(iter(registered))
         if page:
             subprocess.run([*pages.compose_base(pages.selected(root, page)), 'down', '--remove-orphans'], capture_output=True, timeout=90)
-        for image in (bad, good):
+        for image in (bad, owned, good):
             subprocess.run(['docker', 'image', 'rm', image], capture_output=True, timeout=30)

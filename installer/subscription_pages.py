@@ -14,7 +14,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runtime
-from subscription_migration import compose_base, command
+from subscription_migration import compose_base, command, descriptor
 
 
 def identity(item):
@@ -63,6 +63,68 @@ def selected(root, page):
             raise ValueError('UNSAFE_PAGE_PATH')
     compose_base(item)
     return item
+
+
+def existing_target(root, directory, project):
+    directory = Path(directory).absolute()
+    runtime.project_name(project)
+    matches = [(page, item) for page, item in records(root).items()
+               if Path(item['directory']).absolute() == directory or item['project'] == project]
+    if len(matches) > 1:
+        raise ValueError('AMBIGUOUS_PAGE_TARGET')
+    if not matches:
+        return None
+    page, item = matches[0]
+    selected(root, page)
+    return {'id': page, 'name': item['project'], 'domain': item.get('domain', '')}
+
+
+def reuse_port(root, number):
+    """Recover only an owned page; Compose upgrade performs the bounded recreation."""
+    port = str(runtime.port(number))
+    ids = command(['docker'], 'ps', '--quiet').split()
+    if len(ids) > 256 or any(not re.fullmatch('[a-f0-9]{12,64}', value) for value in ids):
+        raise ValueError('INVALID_CONTAINER_INVENTORY')
+    containers = json.loads(command(['docker'], 'inspect', *ids)) if ids else []
+    matches = [item for item in containers if item.get('State', {}).get('Running') and any(
+        key.endswith('/tcp') and any(str(binding.get('HostPort')) == port for binding in bindings or [])
+        for key, bindings in (item.get('NetworkSettings', {}).get('Ports') or {}).items())]
+    # Different IP bindings may share a port. Never choose an arbitrary listener.
+    if len(matches) != 1:
+        return None
+    container = matches[0]
+    item = descriptor(container)
+    if not item:
+        return None
+    item.pop('tokenUuid', None)
+    page = identity(item)
+    registry = records(root)
+    registered = registry.get(page)
+    if registered:
+        registered = selected(root, page)
+        if {str(Path(value).resolve()) for value in registered['composeFiles']} != {
+                str(runtime.compose_path(Path(item['directory']).resolve(), value)) for value in item['composeFiles']}:
+            raise ValueError('PAGE_OWNER_COMPOSE_MISMATCH')
+        # The registry and exact Compose identity prove ownership even for a migrated image.
+        return {'id': page, 'name': registered['project'], 'domain': registered.get('domain', '')}
+    directory = Path(item['directory'])
+    try:
+        directory.resolve().relative_to(root.resolve())
+    except ValueError:
+        return None
+    image = container.get('Config', {}).get('Image', '')
+    repository = image.split('@', 1)[0].split(':', 1)[0]
+    if (directory.is_symlink() or directory.resolve() == root.resolve() or
+            repository != 'ghcr.io/lottman/remnacust-subscription-page' or
+            item['service'] not in ('subscription-page', 'remnawave-subscription-page')):
+        return None
+    compose_base(item)
+    if len(registry) >= 32:
+        raise ValueError('TOO_MANY_PAGES')
+    domain = (container.get('Config', {}).get('Labels') or {}).get('io.remnacust.subscription-domain', '')
+    item['domain'] = runtime.domain(domain) if domain else ''
+    runtime.write(root / 'registry/subscription-pages' / (page + '.json'), item)
+    return {'id': page, 'name': item['project'], 'domain': item['domain']}
 
 
 def inspect(item):
@@ -222,6 +284,8 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
             'labels': {'io.remnacust.service-role': 'subscription-page'},
             'logging': {'driver': 'json-file', 'options': {'max-size': '10m', 'max-file': '3'}},
             'healthcheck': {'test': ['CMD', 'node', '-e', 'fetch("http://127.0.0.1:3010/internal/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'], 'interval': '5s', 'timeout': '5s', 'retries': 12, 'start_period': '20s'}}
+    if domain:
+        page['labels']['io.remnacust.subscription-domain'] = domain
     config = {'name': project, 'services': {'subscription-page': page}}
     if network:
         page['networks'] = ['default', 'panel']
@@ -243,13 +307,17 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['install', 'upgrade', 'list', 'status', 'logs', 'start', 'stop', 'restart'])
+    parser.add_argument('operation', choices=['install', 'upgrade', 'list', 'existing-target', 'reuse-port', 'status', 'logs', 'start', 'stop', 'restart'])
     parser.add_argument('--root', type=Path, required=True)
     for name in ('page-id', 'directory', 'project', 'panel-url', 'token-file', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
         parser.add_argument('--' + name)
     args = parser.parse_args()
     if args.operation == 'list':
         print(json.dumps(listing(args.root), ensure_ascii=False))
+    elif args.operation == 'existing-target':
+        print(json.dumps(existing_target(args.root, args.directory, args.project), ensure_ascii=False))
+    elif args.operation == 'reuse-port':
+        print(json.dumps(reuse_port(args.root, args.port), ensure_ascii=False))
     elif args.operation == 'install':
         print(install(args.root, args.directory, args.project, args.panel_url, Path(args.token_file).read_text().strip(), args.port or '3010', args.image, args.domain or '', args.proxy or 'existing'))
     elif args.operation == 'upgrade':
