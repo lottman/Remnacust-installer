@@ -296,6 +296,48 @@ class InputWorkflowTests(unittest.TestCase):
         self.assertNotEqual(code, 0, output)
         self.assertNotIn('RESULT=', output)
 
+    def test_yes_mode_never_prompts_for_optional_subscription_site(self):
+        command = ('source "$1"; DOMAIN=panel.example.com; YES=true; HELPER="$(dirname "$1")/runtime.py"; '
+                   'subscription_wizard; printf "RESULT=%s|%s" "$SUBSCRIPTION_PAGE" "$SUBSCRIPTION_URLS"')
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('RESULT=false|https://panel.example.com/api/sub', output)
+        self.assertNotIn('y/n', output)
+
+    def test_yes_mode_requires_a_domain_when_subscription_site_is_selected(self):
+        command = ('source "$1"; DOMAIN=panel.example.com; YES=true; SUBSCRIPTION_PAGE=true; SUBSCRIPTION_PAGE_SET=true; '
+                   'HELPER="$(dirname "$1")/runtime.py"; subscription_wizard')
+        code, output = self.terminal(command, [])
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('Исправьте --subscription-urls', output)
+        self.assertNotIn('Домены сайта подписки:', output)
+
+    def test_subscription_port_retries_reserved_panel_and_https_ports(self):
+        command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; port_free() { return 0; }; '
+                   'value=$(choose_subscription_port 3000 3000); printf "PORT=%s" "$value"')
+        code, output = self.terminal(command, [('Свободный порт страницы подписки: ', '443\n'),
+                                             ('Свободный порт страницы подписки: ', '3011\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('PORT=3011', output)
+
+    def test_yes_mode_optional_panel_features_use_explicit_or_safe_defaults(self):
+        command = ('source "$1"; YES=true; COMPONENT=panel; DOMAIN=panel.example.com; EMAIL=test@example.com; '
+                   'HELPER="$(dirname "$1")/runtime.py"; certificate_wizard; panel_net_admin_wizard; '
+                   'printf "RESULT=%s|%s|%s" "$PROXY" "$TLS_METHOD" "$PANEL_NET_ADMIN"')
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('RESULT=caddy|auto|false', output)
+        self.assertNotIn('y/n', output)
+        self.assertNotIn('Reverse proxy [', output)
+
+    def test_yes_mode_optional_node_features_do_not_wait_for_terminal_input(self):
+        command = ('source "$1"; YES=true; COMPONENT=node; HELPER="$(dirname "$1")/runtime.py"; '
+                   'certificate_wizard; node_net_admin_wizard; printf "RESULT=%s|%s" "$NODE_DOMAIN" "$NODE_NET_ADMIN"')
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('RESULT=|false', output)
+        self.assertNotIn('y/n', output)
+
     def test_both_prompts_show_only_bold_green_y_and_bold_red_n(self):
         commands = [('source "$1"; confirm "Тест"; printf ACTION-CONFIRMED', 'Продолжить? ', 'ACTION-CONFIRMED'),
                     ('source "$1"; WORK="$2"; COMPONENT=node; PORT=2222; PANEL_IP=1.1.1.1; '

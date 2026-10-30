@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='7fffcdf051bc3ba82c6c73aebc81a6fa44e33eb992ec395844eb4f4727bd7c82'
+HELPER_BUNDLE_SHA256='e5ac78d4a2bef637b0ddaddbd29d5dc606ee0b0256a2dd688a77fe173da99012'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -629,9 +629,11 @@ for family,address in [(socket.AF_INET,'0.0.0.0'),(socket.AF_INET6,'::')]:
 PY
 }
 choose_subscription_port() {
-    local candidate=$1
+    local candidate=$1 reserved=${2:-}
     while true; do
-        if helper validate --port "$candidate" >/dev/null && port_free "$candidate"; then
+        if [[ $candidate == 80 || $candidate == 443 || -n $reserved && $candidate == "$reserved" ]]; then
+            printf '  Порт сайта подписки должен отличаться от портов панели и HTTPS.\n' >&2
+        elif helper validate --port "$candidate" >/dev/null && port_free "$candidate"; then
             printf '%s' "$candidate"; return 0
         fi
         [[ -t 0 ]] && ! $YES || return 1
@@ -1647,7 +1649,7 @@ JS
 
 panel_net_admin_wizard() {
     [[ $COMPONENT == panel ]] || return 0
-    if [[ -t 0 ]] && ! $PANEL_NET_ADMIN_SET; then
+    if [[ -t 0 ]] && ! $YES && ! $PANEL_NET_ADMIN_SET; then
         info 'NET_ADMIN разрешает управление сетью внутри контейнера панели.'
         info 'Для закрытия соединений и nftables это право требуется на нодах; при установке ноды можно выбрать его отдельно.'
         local choice
@@ -1690,7 +1692,7 @@ node_net_admin_wizard() {
     fi
     if $PANEL_NET_ADMIN_SET; then
         NODE_NET_ADMIN=$PANEL_NET_ADMIN
-    elif [[ -t 0 ]]; then
+    elif [[ -t 0 ]] && ! $YES; then
         info 'NET_ADMIN нужен для сетевых ограничений и принудительного закрытия соединений. Без него эти возможности ограничены.'
         choice=$(ask_yes_no 'Добавить NET_ADMIN контейнеру ноды?') || return $?
         NODE_NET_ADMIN=false; [[ $choice != yes ]] || NODE_NET_ADMIN=true
@@ -1800,7 +1802,7 @@ subscription_page_action() {
     PORT=$(choose_subscription_port "${PORT:-$SUBSCRIPTION_PORT}") || return $?
     if ! $PROXY_SET; then
         PROXY=existing
-        if [[ -t 0 ]]; then
+        if [[ -t 0 ]] && ! $YES; then
             choice=$(ask_yes_no 'Установить отдельный Caddy для HTTPS? Только если порты 80/443 свободны') || return $?
             [[ $choice != yes ]] || PROXY=caddy
         fi
@@ -1818,7 +1820,10 @@ if not c or not c.get('State',{}).get('Running'):raise SystemExit('Локаль�
 print(c['Id'])
 PY
         )
-        docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$(python3 -c 'import uuid;print(uuid.uuid4())')" "$panel_id" node - < "$HELPER_ROOT/subscription.cjs" > "$token_file"
+        local reuse_env="$WORK/subscription-reuse.env"
+        python3 -I "$script" reuse-token-env --root "$ROOT" --directory "$DEPLOY" --project "$PROJECT" --token-file "$reuse_env"
+        docker exec -i --env-file "$reuse_env" --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$(python3 -c 'import uuid;print(uuid.uuid4())')" "$panel_id" node - < "$HELPER_ROOT/subscription.cjs" > "$token_file"
+        rm -f -- "$reuse_env"
     else
         if [[ -n ${REMNACUST_SUBSCRIPTION_TOKEN:-} ]]; then printf '%s' "$REMNACUST_SUBSCRIPTION_TOKEN" > "$token_file"
         elif [[ -t 0 ]]; then
@@ -1846,10 +1851,11 @@ subscription_wizard() {
     local normalized preset=false choice operation=subscription-urls
     [[ -z $SUBSCRIPTION_URLS && $SUBSCRIPTION_SET == false ]] || preset=true
     if ! python3 "$HELPER" --help | grep -q -- '--subscription-urls'; then
-        $preset && die 'Этот выпуск не поддерживает адреса сайта подписки. Выберите latest.'
+        if $preset || $SUBSCRIPTION_PAGE; then die 'Этот выпуск не поддерживает адреса сайта подписки. Выберите latest.'; fi
         return 0
     fi
-    if [[ -t 0 ]] && ! $SUBSCRIPTION_PAGE_SET; then
+    if [[ -t 0 ]] && ! $YES && ! $SUBSCRIPTION_PAGE_SET; then
+        info 'Сайт подписки — отдельная страница для пользователей; нужен отдельный домен.'
         choice=$(ask_yes_no 'Установить сайт подписки?') || return $?
         [[ $choice != yes ]] || SUBSCRIPTION_PAGE=true
     fi
@@ -1857,10 +1863,12 @@ subscription_wizard() {
         [[ -f ${HELPER%/*}/subscription.cjs ]] && python3 "$HELPER" --help | grep -q -- '--subscription-image' || die 'Для установки сайта подписки выберите latest.'
         operation=subscription-domains
     elif ! $preset; then
-        SUBSCRIPTION_URLS="https://$DOMAIN/api/sub"; return 0
+        SUBSCRIPTION_URLS="https://$DOMAIN/api/sub"
+        info 'Сайт подписки не устанавливается; ссылки выдаёт панель. Позже: remnacust install-subscription-page.'
+        return 0
     fi
     while true; do
-        if [[ -t 0 ]] && ! $preset; then
+        if [[ -t 0 ]] && ! $YES && ! $preset; then
             info 'Укажите один или два отдельных домена через запятую; первый — основной.'
             info "HTTPS сайта: тот же способ, что у панели ($PROXY / ${TLS_METHOD:-ваш proxy})."
             SUBSCRIPTION_URLS=$(ask_required 'Домены сайта подписки') || return $?
@@ -1873,9 +1881,11 @@ subscription_wizard() {
             if $SUBSCRIPTION_PAGE; then
                 SUBSCRIPTION_URLS="https://${normalized//$'\n'/,https://}"
             else SUBSCRIPTION_URLS=${normalized//$'\n'/,}; fi
+            if $SUBSCRIPTION_PAGE; then info "Будет установлен сайт подписки: $SUBSCRIPTION_URLS"
+            else info "Используем существующий сайт: $SUBSCRIPTION_URLS; новый контейнер сайта не создаётся."; fi
             return 0
         fi
-        [[ -t 0 ]] && ! $preset || die 'Исправьте --subscription-urls: один или два адреса сайта подписки'
+        [[ -t 0 ]] && ! $YES && ! $preset || die 'Исправьте --subscription-urls: один или два адреса сайта подписки'
     done
 }
 fresh_files() {
@@ -1979,7 +1989,7 @@ certificate_wizard() {
     local choice domain suggested
     if [[ $COMPONENT == panel ]]; then
         [[ -n $DOMAIN ]] || DOMAIN=$(ask_confirmed_domain 'Домен панели') || return $?
-        if [[ -t 0 ]] && ! $PROXY_SET; then
+        if [[ -t 0 ]] && ! $YES && ! $PROXY_SET; then
             printf '\n  HTTPS панели\n  1  Caddy в Docker (новая установка)\n  2  Свой существующий Nginx/Caddy\n'
             choice=$(ask 'Reverse proxy' 1)
             case "$choice" in 1) PROXY=caddy;;2) PROXY=existing;;*) die 'Выберите 1 или 2';;esac
@@ -1991,11 +2001,11 @@ certificate_wizard() {
         fi
         domain=$DOMAIN; suggested=auto
     else
-        if [[ -t 0 ]]; then
+        if [[ -t 0 ]] && ! $YES; then
             [[ -n $PORT ]] || PORT=$(ask 'Порт API ноды' 2222)
             [[ -n $PANEL_IP ]] || PANEL_IP=$(ask 'IP/CIDR главного сервера: все входящие порты кроме SSH только от него (Enter — свой firewall)')
         fi
-        if [[ -t 0 && -z $NODE_DOMAIN ]]; then
+        if [[ -t 0 && -z $NODE_DOMAIN ]] && ! $YES; then
             choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде?')
             case "$choice" in yes) NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды') || return $?;;no) ;;esac
         fi
@@ -2006,7 +2016,7 @@ certificate_wizard() {
         domain=$NODE_DOMAIN; suggested=http
     fi
     if [[ -z $TLS_METHOD ]]; then
-        if [[ -t 0 ]]; then
+        if [[ -t 0 ]] && ! $YES; then
             printf '\n  Сертификат для %s\n  1  Автоматически · %s\n  2  Cloudflare DNS · API token\n  3  Gcore DNS · API token\n  4  Уже есть сертификат и приватный ключ\n' "$domain" "$suggested"
             case "$(ask 'Способ получения сертификата' 1)" in
                 1) TLS_METHOD=$suggested;;2) TLS_METHOD=cloudflare;;3) TLS_METHOD=gcore;;4) TLS_METHOD=existing;;*) die 'Выберите 1–4';;
@@ -2330,9 +2340,7 @@ deploy() {
         helper validate "${installation_validation[@]}"
         port_free "$PORT"
         if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then
-            helper validate --port "$SUBSCRIPTION_PORT"
-            [[ $SUBSCRIPTION_PORT != "$PORT" && $SUBSCRIPTION_PORT != 80 && $SUBSCRIPTION_PORT != 443 ]] || die 'Порт сайта подписки должен отличаться от портов панели и HTTPS'
-            port_free "$SUBSCRIPTION_PORT"
+            SUBSCRIPTION_PORT=$(choose_subscription_port "$SUBSCRIPTION_PORT" "$PORT") || return $?
         fi
         if [[ $COMPONENT == panel && $PROXY == caddy ]]; then port_free 80; port_free 443; fi
         certificate_preflight

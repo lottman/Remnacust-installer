@@ -278,6 +278,23 @@ def retired_target(root, directory, project):
     return previous if previous.get('uninstalled') and not previous.get('companion') else None
 
 
+def reuse_token_environment(root, directory, project, target):
+    """Pass only a retired local page credential for verification inside the panel."""
+    directory = Path(directory)
+    if directory.is_symlink() or (root / 'registry/subscription-pages').is_symlink():
+        raise ValueError('UNSAFE_PAGE_PATH')
+    token = ''
+    previous = retired_target(root, directory, project)
+    env = directory / '.env'
+    if previous and env.is_file():
+        if env.is_symlink() or env.stat().st_size > 65536:
+            raise ValueError('UNSAFE_PAGE_ENV')
+        matches = re.findall(r'^REMNAWAVE_API_TOKEN=([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$', env.read_text(encoding='utf-8'), re.M)
+        if len(matches) == 1:
+            token = matches[0]
+    runtime.write(Path(target), 'REMNACUST_SUBSCRIPTION_REUSE_TOKEN=' + token + '\n')
+
+
 def upgrade(root, page, image, version, release):
     item = selected(root, page)
     base = compose_base(item)
@@ -418,7 +435,7 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['install', 'upgrade', 'uninstall', 'list', 'existing-target', 'reuse-port', 'status', 'logs', 'start', 'stop', 'restart'])
+    parser.add_argument('operation', choices=['install', 'upgrade', 'uninstall', 'list', 'existing-target', 'reuse-port', 'reuse-token-env', 'status', 'logs', 'start', 'stop', 'restart'])
     parser.add_argument('--root', type=Path, required=True)
     for name in ('page-id', 'directory', 'project', 'panel-url', 'token-file', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
         parser.add_argument('--' + name)
@@ -429,6 +446,8 @@ def main():
         print(json.dumps(existing_target(args.root, args.directory, args.project), ensure_ascii=False))
     elif args.operation == 'reuse-port':
         print(json.dumps(reuse_port(args.root, args.port), ensure_ascii=False))
+    elif args.operation == 'reuse-token-env':
+        reuse_token_environment(args.root, args.directory, args.project, args.token_file)
     elif args.operation == 'install':
         print(install(args.root, args.directory, args.project, args.panel_url, Path(args.token_file).read_text().strip(), args.port or '3010', args.image, args.domain or '', args.proxy or 'existing'))
     elif args.operation == 'upgrade':

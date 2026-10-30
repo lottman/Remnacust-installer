@@ -243,6 +243,23 @@ class PagesTests(unittest.TestCase):
         self.assertIn('REMNAWAVE_API_TOKEN=a.b.c', (target / '.env').read_text())
         self.assertIn(page, pages.records(self.root))
 
+    def test_reinstall_credential_stays_private_and_requires_retired_ownership(self):
+        output = self.root / 'reuse.env'
+        env = self.directory / '.env'
+        env.write_text('REMNAWAVE_API_TOKEN=fixture.secret.jwt\nOTHER=private\n')
+        pages.reuse_token_environment(self.root, self.directory, self.item['project'], output)
+        self.assertEqual(output.read_text(), 'REMNACUST_SUBSCRIPTION_REUSE_TOKEN=\n')
+        item = {**self.item, 'service': 'subscription-page', 'uninstalled': True}
+        pages.runtime.write(self.root / 'registry/subscription-pages' / (pages.identity(item) + '.json'), item)
+        pages.reuse_token_environment(self.root, self.directory, self.item['project'], output)
+        self.assertEqual(output.read_text(), 'REMNACUST_SUBSCRIPTION_REUSE_TOKEN=fixture.secret.jwt\n')
+        self.assertNotIn('OTHER', output.read_text())
+        if os.name != 'nt': self.assertEqual(output.stat().st_mode & 0o077, 0)
+        env.unlink()
+        env.symlink_to(self.compose)
+        with self.assertRaisesRegex(ValueError, 'UNSAFE_PAGE_ENV'):
+            pages.reuse_token_environment(self.root, self.directory, self.item['project'], output)
+
     def test_install_does_not_reuse_an_existing_compose_project(self):
         target = self.root / 'new-page'
         with patch.object(pages, 'command', return_value='existing-container'):
