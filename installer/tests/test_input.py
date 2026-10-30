@@ -233,7 +233,7 @@ class InputWorkflowTests(unittest.TestCase):
         self.assertNotIn('\x1b', output)
         for action in ['install-panel', 'install-node', 'upgrade-panel', 'upgrade-node',
                        'migrate-remnawave-panel', 'migrate-remnawave-node', '--check-release',
-                       'status', 'migrate-marzban-panel', 'uninstall-panel', 'uninstall-node']:
+                       'status', 'migrate-marzban-panel', 'uninstall-panel', 'uninstall-node', 'uninstall-subscription-page']:
             self.assertIn(action, output)
         self.assertIn('Обслуживание', output)
 
@@ -248,7 +248,7 @@ class InputWorkflowTests(unittest.TestCase):
                 plain = re.sub(r'\x1b\[[0-9;]*m', '', output)
                 self.assertTrue(all(len(line) <= width for line in plain.splitlines()), plain)
                 self.assertEqual([int(number) for number in re.findall(r'^\s+(\d+)  ', plain, re.M)],
-                                 [*range(1, 16), 0])
+                                 [*range(1, 17), 0])
 
     def test_no_color_progress_has_no_terminal_control_codes(self):
         command = 'source "$1"; LOG="$2/progress.log"; step "Проверка" sleep .15'
@@ -412,6 +412,22 @@ class InputWorkflowTests(unittest.TestCase):
             self.assertEqual(listener.getsockname()[1], port)
             self.assertNotIn('UNEXPECTED-CONTINUATION', output)
 
+    def test_subscription_management_has_separate_uninstall_action(self):
+        command = 'source "$1"; COMPONENT=subscription-page; component_menu; printf "ACTION=%s" "$ACTION"'
+        code, output = self.terminal(command, [('Действие: ', '8\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('ACTION=uninstall-subscription-page', output)
+
+    def test_subscription_uninstall_defaults_to_cancel_before_mutation(self):
+        command = ('source "$1"; ACTION=uninstall-subscription-page; '
+                   'lock_operation() { :; }; installed_helper() { :; }; '
+                   'select_managed_page() { PAGE_ID=aaaaaaaaaaaaaaaaaaaaaaaa; }; '
+                   'subscription_page_action; printf UNEXPECTED-CONTINUATION')
+        code, output = self.terminal(command, [(CONFIRM_PROMPT, '\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('Действие отменено', output)
+        self.assertNotIn('UNEXPECTED-CONTINUATION', output)
+
     def test_page_management_cli_accepts_registered_component(self):
         command = 'source "$1"; parse_args change-domain --component subscription-page --page-id abc --domain sub.example.test; printf "ACTION=%s COMPONENT=%s" "$ACTION" "$COMPONENT"'
         code, output = self.terminal(command, [])
@@ -435,7 +451,7 @@ main "$@"
         code, output = self.terminal('bash "$1"', [('Действие: ', paste), ('Действие: ', '0\n')], script=self.menu_fixture())
         self.assertEqual(code, 0, output)
         self.assertEqual(output.count('Установка и обслуживание'), 1, output)
-        self.assertEqual(output.count('Выберите номер от 0 до 15.'), 1, output)
+        self.assertEqual(output.count('Выберите номер от 0 до 16.'), 1, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
     def test_return_from_action_does_not_execute_leftover_paste(self):

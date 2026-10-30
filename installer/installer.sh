@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='fc106622885cd15eb134949a3b8cae3c5fee76463331902eb879799bdaf2d6fa'
+HELPER_BUNDLE_SHA256='7fffcdf051bc3ba82c6c73aebc81a6fa44e33eb992ec395844eb4f4727bd7c82'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -131,6 +131,7 @@ Remnacust · installer.sh
   upgrade-node              Полное обновление ноды и встроенного Xray
   uninstall-panel           Удалить контейнеры панели; сохранить данные и копии
   uninstall-node            Удалить контейнеры ноды; сохранить конфигурацию
+  uninstall-subscription-page Удалить выбранную страницу; сохранить настройки и данные
   migrate-remnawave-panel    Переход существующей панели на Remnacust
   migrate-remnawave-node     Переход существующей ноды на Remnacust
   migrate-marzban-panel      Перенос пользователей Marzban через API
@@ -221,6 +222,7 @@ show_menu() {
     terminal_text 'Данные, тома, настройки и резервные копии сохраняются.' '      ' '      ' "$DIM"
     terminal_action 14 'Удалить панель' uninstall-panel "$panel_upgrade" "$panel_available"
     terminal_action 15 'Удалить ноду' uninstall-node "$node_upgrade" "$node_available"
+    terminal_action 16 'Удалить страницу подписки' uninstall-subscription-page
     terminal_rule
     terminal_action 0 Выход ''
     printf '\n'
@@ -317,7 +319,7 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            manage-panel|manage-node|change-domain|show-config|install-subscription-page|upgrade-subscription-page|manage-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            manage-panel|manage-node|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
             --page-id|--page-operation|--panel-url|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
@@ -1058,13 +1060,16 @@ component_menu() {
     elif [[ $COMPONENT == node ]]; then
         terminal_action 8 'Перечитать сертификат' renew-node-certificate
         maximum=8
+    elif [[ $COMPONENT == subscription-page ]]; then
+        terminal_action 8 'Удалить страницу; сохранить настройки и данные' uninstall-subscription-page
+        maximum=8
     fi
     terminal_action 0 'Назад' ''
     choice=$(ask_menu_choice "$maximum") || return $?
     case "$choice" in
         1) ACTION=status;; 2) ACTION=show-config;; 3) ACTION=logs;; 4) ACTION=start;;
         5) ACTION=stop;; 6) ACTION=restart;; 7) ACTION=change-domain;;
-        8) ACTION=renew-$COMPONENT-certificate;; 0) ACTION='';;
+        8) if [[ $COMPONENT == subscription-page ]]; then ACTION=uninstall-subscription-page; else ACTION=renew-$COMPONENT-certificate; fi;; 0) ACTION='';;
     esac
 }
 service_menu() {
@@ -1112,8 +1117,9 @@ PY
     ((count > 0)) || die 'Зарегистрированных страниц подписки нет'
     python3 - "$WORK/managed-pages.json" <<'PY'
 import json,sys
+states={'running':'работает','healthy':'работает, исправна','exited':'остановлена','created':'создана, не запущена','missing':'контейнер отсутствует, сохранены только настройки','unavailable':'состояние Docker недоступно','unhealthy':'неисправна','restarting':'перезапускается','starting':'запускается','dead':'аварийно остановлена','paused':'приостановлена'}
 for number,item in enumerate(json.load(open(sys.argv[1])),1):
- print(f"  {number:2}  {item['name']} · {item['domain']} · {item['status']}")
+ print(f"  {number:2}  {item['name']} · {item['domain']} · {states.get(item['status'],item['status'])}")
 print('   0  Назад')
 PY
     choice=$(ask_menu_choice "$count") || return $?
@@ -1209,7 +1215,7 @@ interactive_menu() {
     while true; do
         ACTION=''; COMPONENT=''
         show_menu
-        choice=$(ask_menu_choice 15) || return $?
+        choice=$(ask_menu_choice 16) || return $?
         case "$choice" in
             1) ACTION=install-panel;;
             2) ACTION=install-node;;
@@ -1226,6 +1232,7 @@ interactive_menu() {
             13) service_menu || return $?;;
             14) ACTION=uninstall-panel;;
             15) ACTION=uninstall-node;;
+            16) ACTION=uninstall-subscription-page;;
             0) return 0;;
         esac
         [[ -n $ACTION ]] || { discard_pending_input; continue; }
@@ -1297,7 +1304,7 @@ PY
             else service_action; fi;;
         normalize-layout) installed_helper; lock_operation; python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "${COMPONENT:-panel}";;
         cleanup-backups) cleanup_backups_action;;
-        install-subscription-page|upgrade-subscription-page|manage-subscription-page) subscription_page_action;;
+        install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page) subscription_page_action;;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
         *) service_action;;
@@ -1697,6 +1704,19 @@ node_net_admin_wizard() {
 
 subscription_page_action() {
     local script choice token_file endpoint
+    if [[ $ACTION == uninstall-subscription-page ]]; then
+        command -v python3 >/dev/null || die 'Для удаления нужен python3'
+        command -v docker >/dev/null || die 'Docker недоступен'
+        lock_operation
+        installed_helper
+        select_managed_page || return $?
+        info 'Удаляется только выбранная страница и её отдельный proxy, если он принадлежит этой странице. Панель, БД, настройки и тома сохраняются.'
+        confirm "Удалить страницу подписки $PAGE_ID"
+        local archive
+        archive=$(python3 -I "$HELPER_ROOT/subscription_pages.py" uninstall --root "$ROOT" --page-id "$PAGE_ID") || return $?
+        info "Страница подписки удалена. Настройки сохранены на месте; копия Compose: $archive"
+        return
+    fi
     if [[ $ACTION == manage-subscription-page ]]; then
         command -v python3 >/dev/null || die 'Для управления нужен python3'
         command -v docker >/dev/null || die 'Docker недоступен'
@@ -1713,6 +1733,7 @@ subscription_page_action() {
             component_menu || return $?
             [[ -n $ACTION ]] || return 0
             if [[ $ACTION == change-domain || $ACTION == show-config ]]; then manage_component_action; return; fi
+            if [[ $ACTION == uninstall-subscription-page ]]; then subscription_page_action; return; fi
             PAGE_OPERATION=$ACTION
         fi
         if [[ -z $PAGE_ID ]]; then

@@ -118,7 +118,7 @@ grep -Eq '^[[:space:]]*1[[:space:]]+.*install-panel' "$fixture/installed-menu"
 grep -Eq '^[[:space:]]*14[[:space:]]+.*uninstall-panel' "$fixture/installed-menu"
 grep -q 'Обновить: пункт 4; удалить: пункт 14' "$fixture/installed-menu"
 grep -q 'Обновить: пункт 5; удалить: пункт 15' "$fixture/installed-menu"
-diff -u <(printf '%s\n' {1..15} 0) <(awk '/^[[:space:]]*[0-9]+[[:space:]]/ {print $1}' "$fixture/menu")
+diff -u <(printf '%s\n' {1..16} 0) <(awk '/^[[:space:]]*[0-9]+[[:space:]]/ {print $1}' "$fixture/menu")
 pass 'installed components keep installation and deletion commands visible with stable numbers'
 (ask() { printf 0; }; command() { return 1; }; ACTION=''; main) > "$fixture/no-tools-menu"
 cmp <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/menu") <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/no-tools-menu")
@@ -126,8 +126,8 @@ pass 'menu and exit do not need Docker or network'
 
 menu_actions=(install-panel install-node install-subscription-page upgrade-panel upgrade-node \
     upgrade-subscription-page migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel \
-    --check-release status manage-subscription-page logs uninstall-panel uninstall-node)
-for number in {1..15}; do
+    --check-release status manage-subscription-page logs uninstall-panel uninstall-node uninstall-subscription-page)
+for number in {1..16}; do
     (
         ask_menu_choice() { printf '%s' "$number"; }
         service_menu() { ACTION=logs; COMPONENT=node; }

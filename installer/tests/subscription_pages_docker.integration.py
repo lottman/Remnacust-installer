@@ -14,6 +14,7 @@ import subscription_pages as pages
 
 suffix = uuid.uuid4().hex[:12]
 project = 'rc-page-test-' + suffix
+retired_project = project + '-retired'
 good, bad = 'rc-page-fixture:' + suffix, 'rc-page-fixture-bad:' + suffix
 owned = 'ghcr.io/lottman/remnacust-subscription-page:audit-' + suffix
 with tempfile.TemporaryDirectory(prefix='remnacust-pages-docker-') as folder:
@@ -65,13 +66,50 @@ with tempfile.TemporaryDirectory(prefix='remnacust-pages-docker-') as folder:
         pages.ready(pages.selected(root, page))
         assert pages.inspect(pages.selected(root, page))['Config']['Image'] == good
         assert (root / 'site/.env').read_bytes() == original_env
-        print('PASS real Docker: occupied owned port reuse, missing registry recovery, private env preservation, install, list, stopped update, start and rollback')
+        # An unrelated container in the same project must retain its identity.
+        config = pages.runtime.load(root / 'site/docker-compose.yml')
+        config['services']['database'] = {'image': good, 'command': ['sleep', '3600']}
+        pages.runtime.write(root / 'site/docker-compose.yml', config)
+        docker('compose', '--project-name', project, '-f', str(root / 'site/docker-compose.yml'), 'up', '-d', '--no-deps', 'database')
+        database_id = docker('compose', '--project-name', project, '-f', str(root / 'site/docker-compose.yml'), 'ps', '-q', 'database').stdout.strip()
+        before_delete = pages.selected(root, page)
+        backup = pages.uninstall(root, page)
+        assert Path(backup, 'compose-files.before.json').is_file()
+        assert pages.inspect(before_delete) is None
+        assert not pages.listing(root)
+        assert (root / 'site/.env').read_bytes() == original_env
+        docker('compose', '--project-name', project, '-f', str(root / 'site/docker-compose.yml'), 'up', '-d', '--no-build', '--pull', 'never')
+        assert pages.inspect(before_delete) is None, 'normal compose up resurrected removed page'
+        assert docker('inspect', '--format', '{{.State.Running}}', database_id).stdout.strip() == 'true'
+        # The standalone proxy is owned explicitly; its volume must survive.
+        retired_dir = root / 'retired'
+        retired_page = pages.install(root, retired_dir, retired_project, 'https://panel.example.test', 'fixture.token.value', port, good, 'sub.example.test')
+        retired_item = pages.selected(root, retired_page)
+        cfg = pages.runtime.load(retired_dir / 'docker-compose.yml')
+        cfg['services']['caddy'] = {'image': good, 'command': ['sleep', '3600'], 'volumes': ['certificate-data:/data']}
+        cfg['volumes'] = {'certificate-data': {}}
+        pages.runtime.write(retired_dir / 'docker-compose.yml', cfg)
+        retired_item['ownedServices'] = ['subscription-page', 'caddy']
+        pages.runtime.write(root / 'registry/subscription-pages' / (retired_page + '.json'), retired_item)
+        docker('compose', '--project-name', retired_project, '-f', str(retired_dir / 'docker-compose.yml'), 'up', '-d', 'caddy')
+        pages.uninstall(root, retired_page)
+        assert pages.inspect(retired_item) is None
+        assert pages.inspect({**retired_item, 'service': 'caddy'}) is None
+        docker('volume', 'inspect', retired_project + '_certificate-data')
+        pages.install(root, retired_dir, retired_project, 'https://panel.example.test', 'new.fixture.token', port, good, 'new.example.test')
+        archives = list((root / 'backups').glob('reinstalled-subscription-page-*/configuration/.env'))
+        assert len(archives) == 1 and b'fixture.token.value' in archives[0].read_bytes()
+        assert b'new.fixture.token' in (retired_dir / '.env').read_bytes()
+        print('PASS real Docker: owned-port recovery, install/update/rollback, isolated uninstall, retained env/database/volume, no resurrection, dedicated proxy removal and reinstall')
     finally:
         if not page:
             registered = pages.records(root)
             if len(registered) == 1:
                 page = next(iter(registered))
         if page:
-            subprocess.run([*pages.compose_base(pages.selected(root, page)), 'down', '--remove-orphans'], capture_output=True, timeout=90)
+            subprocess.run(['docker', 'compose', '--project-name', project, '-f', str(root / 'site/docker-compose.yml'), '--profile', '*', 'down', '--remove-orphans'], capture_output=True, timeout=90)
+        if (root / 'retired/docker-compose.yml').is_file():
+            subprocess.run(['docker', 'compose', '--project-name', retired_project, '-f', str(root / 'retired/docker-compose.yml'), '--profile', '*', 'down', '--remove-orphans'], capture_output=True, timeout=90)
+        subprocess.run(['docker', 'volume', 'rm', retired_project + '_certificate-data'], capture_output=True, timeout=30)
         for image in (bad, owned, good):
             subprocess.run(['docker', 'image', 'rm', image], capture_output=True, timeout=30)

@@ -153,6 +153,86 @@ class PagesTests(unittest.TestCase):
             pages.install(self.root, self.directory, 'page', 'https://panel.example.test', 'a.b.c', '3010', 'page:new')
         self.assertIn('fixture', self.compose.read_text())
 
+    def test_uninstall_retires_only_selected_page_and_hides_it_from_inventory(self):
+        config = runtime.load(self.compose)
+        config['services']['database'] = {'image': 'postgres:18'}
+        runtime.write(self.compose, config)
+        calls = []
+        def command(base, *args):
+            calls.append(args)
+            return json.dumps(config) if '--format' in args else ''
+        with patch.object(pages, 'command', side_effect=command), patch.object(pages, 'inspect', return_value=None):
+            backup = pages.uninstall(self.root, self.id)
+        self.assertTrue(Path(backup).is_dir())
+        self.assertEqual(pages.records(self.root), {})
+        self.assertIsNone(pages.existing_target(self.root, self.directory, self.item['project']))
+        after = runtime.load(self.compose)
+        self.assertEqual(after['services']['database'], config['services']['database'])
+        self.assertEqual(after['services']['page']['restart'], 'no')
+        self.assertTrue(after['services']['page']['profiles'])
+        self.assertIn(('--profile', '*', 'rm', '--force', 'page'), calls)
+        self.assertFalse(any('down' in call or '--volumes' in call for call in calls))
+
+    def test_uninstall_companion_does_not_remove_panel_or_shared_proxy(self):
+        config = runtime.load(self.compose)
+        config['services'].update(api={'image': 'api'}, caddy={'image': 'caddy'})
+        runtime.write(self.compose, config)
+        companion = {**self.item, 'component': 'panel', 'mainService': 'api', 'subscriptionPage': True,
+                     'applications': ['api', 'page'], 'ownedServices': ['api', 'page', 'caddy']}
+        runtime.write(self.root / 'registry/panel.json', companion)
+        runtime.write(self.root / 'registry/subscription-pages' / (self.id + '.json'), {**self.item, 'companion': True})
+        def command(base, *args):
+            return json.dumps(config) if '--format' in args else ''
+        with patch.object(pages, 'command', side_effect=command), patch.object(pages, 'inspect', return_value=None):
+            pages.uninstall(self.root, self.id)
+        panel = runtime.load(self.root / 'registry/panel.json')
+        self.assertFalse(panel['subscriptionPage'])
+        self.assertEqual(panel['applications'], ['api'])
+        self.assertEqual(panel['ownedServices'], ['api', 'caddy'])
+        self.assertEqual(runtime.load(self.compose)['services']['caddy'], {'image': 'caddy'})
+
+    def test_uninstall_failure_restores_compose_registry_and_running_state(self):
+        before = self.compose.read_text()
+        calls = []
+        def command(base, *args):
+            calls.append(args)
+            if '--format' in args:
+                return before
+            if 'rm' in args:
+                raise ValueError('DOCKER_FAILED')
+            return ''
+        with patch.object(pages, 'command', side_effect=command), patch.object(pages, 'inspect', return_value={'State': {'Running': True}}):
+            with self.assertRaisesRegex(ValueError, 'DOCKER_FAILED'):
+                pages.uninstall(self.root, self.id)
+        self.assertEqual(self.compose.read_text(), before)
+        self.assertEqual(pages.selected(self.root, self.id), self.item)
+        self.assertTrue(any('--no-deps' in call and '-d' in call and call[-1] == 'page' for call in calls))
+
+    def test_uninstall_refuses_dependency_and_unconfirmed_removal(self):
+        config = runtime.load(self.compose)
+        config['services']['api'] = {'image': 'api', 'depends_on': {'page': {'condition': 'service_started'}}}
+        with patch.object(pages, 'command', return_value=json.dumps(config)):
+            with self.assertRaisesRegex(ValueError, 'PAGE_HAS_DEPENDENT_SERVICES'):
+                pages.uninstall(self.root, self.id)
+        self.assertIn(self.id, pages.records(self.root))
+        config['services'].pop('api')
+        with patch.object(pages, 'command', side_effect=lambda base, *args: json.dumps(config) if '--format' in args else ''), patch.object(pages, 'inspect', return_value={'State': {'Running': False}}):
+            with self.assertRaisesRegex(ValueError, 'PAGE_REMOVAL_NOT_CONFIRMED'):
+                pages.uninstall(self.root, self.id)
+        self.assertIn(self.id, pages.records(self.root))
+
+    def test_shared_or_unowned_proxy_is_never_included_in_removal(self):
+        config = runtime.load(self.compose)
+        config['services']['caddy'] = {'image': 'caddy:2-alpine'}
+        calls = []
+        def command(base, *args):
+            calls.append(args)
+            return json.dumps(config) if '--format' in args else ''
+        with patch.object(pages, 'command', side_effect=command), patch.object(pages, 'inspect', return_value=None):
+            pages.uninstall(self.root, self.id)
+        self.assertEqual(runtime.load(self.compose)['services']['caddy'], {'image': 'caddy:2-alpine'})
+        self.assertIn(('--profile', '*', 'rm', '--force', 'page'), calls)
+
     def test_install_uses_loopback_private_env_and_recoverable_registry(self):
         target = self.root / 'new-page'
         with patch.object(pages, 'command', return_value=''), patch.object(pages, 'ready'):

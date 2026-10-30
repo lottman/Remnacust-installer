@@ -2,6 +2,7 @@
 """Registered subscription-page deployments; never accepts arbitrary Docker commands."""
 import argparse
 import copy
+from contextlib import redirect_stdout
 import hashlib
 import json
 from pathlib import Path
@@ -32,7 +33,8 @@ def records(root):
         item = runtime.load(path)
         if path.stem != identity(item):
             raise ValueError('INVALID_PAGE_RECORD')
-        items.append(item)
+        if not item.get('uninstalled'):
+            items.append(item)
     panel = root / 'registry/panel.json'
     if panel.is_file() and not panel.is_symlink():
         state = runtime.load(panel)
@@ -179,6 +181,103 @@ def service(root, page, operation):
         ready(item)
 
 
+def uninstall(root, page):
+    """Retire only the selected service and its explicitly owned proxy, keeping data."""
+    item = selected(root, page)
+    base = compose_base(item)
+    config = json.loads(command(base, '--profile', '*', 'config', '--no-interpolate', '--no-env-resolution', '--format', 'json'))
+    services = config.get('services', {})
+    if item['service'] not in services:
+        raise ValueError('PAGE_SERVICE_MISSING')
+    targets = [item['service']]
+    # Older standalone records predate ownedServices. Recover that ownership only
+    # from the exact generated two-service deployment, never a shared proxy.
+    caddyfile = Path(item['directory']) / 'Caddyfile'
+    own_proxy = 'caddy' in item.get('ownedServices', [])
+    if (not item.get('companion') and set(services) == {item['service'], 'caddy'}
+            and caddyfile.is_file() and not caddyfile.is_symlink() and item.get('domain')):
+        expected = item['domain'] + ' {\n    reverse_proxy subscription-page:3010\n}\n'
+        mounts = services['caddy'].get('volumes', [])
+        bound = any(isinstance(v, dict) and v.get('type') == 'bind'
+                    and v.get('source') == str(caddyfile) and v.get('target') == '/etc/caddy/Caddyfile' for v in mounts)
+        own_proxy = own_proxy or (bound and caddyfile.read_text(encoding='utf-8') == expected)
+    if own_proxy and not item.get('companion') and set(services) == {item['service'], 'caddy'}:
+        targets.append('caddy')
+    if any(name not in targets and set(value.get('depends_on', {})).intersection(targets)
+           for name, value in services.items()):
+        raise ValueError('PAGE_HAS_DEPENDENT_SERVICES')
+    before = copy.deepcopy(config)
+    backup = root / 'backups' / ('uninstalled-subscription-page-' + uuid.uuid4().hex)
+    backup.mkdir(mode=0o700, parents=True)
+    state = {**item, 'component': 'subscription-page', 'applications': []}
+    for name in targets:
+        # Explicit manual restoration stays possible; normal compose up and
+        # Docker daemon restart must not resurrect an uninstalled page.
+        services[name]['profiles'] = ['remnacust-uninstalled-' + page]
+        services[name]['restart'] = 'no'
+    runtime.write(backup / 'state.before.json', state)
+    runtime.write(backup / 'state.json', state)
+    runtime.write(backup / 'compose.before.json', before)
+    runtime.write(backup / 'candidate.json', config)
+    record_path = root / 'registry/subscription-pages' / (page + '.json')
+    panel_path = root / 'registry/panel.json'
+    original_record = runtime.load(record_path) if record_path.exists() else None
+    original_panel = runtime.load(panel_path) if panel_path.exists() else None
+    current = {name: inspect({**item, 'service': name}) for name in targets}
+    changed = False
+    try:
+        command(['docker', 'compose', '--project-name', item['project'], '--project-directory', item['directory'], '-f', str(backup / 'candidate.json')], '--profile', '*', 'config', '--quiet')
+        with redirect_stdout(sys.stderr):
+            runtime.commit_compose(backup / 'state.json', backup / 'candidate.json', backup, '', '', preserve_release=True)
+        changed = True
+        updated = runtime.load(backup / 'state.json')
+        item = {**item, 'composeFiles': updated['composeFiles']}
+        command(compose_base(item), '--profile', '*', 'stop', *targets)
+        command(compose_base(item), '--profile', '*', 'rm', '--force', *targets)
+        if any(inspect({**item, 'service': name}) is not None for name in targets):
+            raise ValueError('PAGE_REMOVAL_NOT_CONFIRMED')
+        if original_panel:
+            panel = copy.deepcopy(original_panel)
+            if item.get('companion'):
+                panel['subscriptionPage'] = False
+            migrated = panel.get('subscriptionMigration')
+            if migrated and identity(migrated) == page:
+                panel.pop('subscriptionMigration')
+            if panel.get('directory') == item['directory'] and panel.get('project') == item['project']:
+                panel['composeFiles'] = updated['composeFiles']
+                for key in ('applications', 'ownedServices', 'extraServices'):
+                    if key in panel:
+                        panel[key] = [name for name in panel[key] if name not in targets]
+            if panel != original_panel:
+                runtime.write(panel_path, panel)
+        runtime.write(record_path, {**item, 'uninstalled': True, 'backup': str(backup)})
+    except Exception:
+        if changed:
+            runtime.restore_compose(backup)
+            if original_panel is not None:
+                runtime.write(panel_path, original_panel)
+            if original_record is not None:
+                runtime.write(record_path, original_record)
+            elif record_path.exists():
+                record_path.unlink()
+            for name, container in current.items():
+                if container is not None:
+                    running = bool(container.get('State', {}).get('Running'))
+                    command(base, '--profile', '*', 'up', '--no-deps', '--no-build', '--pull', 'never',
+                            *(['-d'] if running else ['--no-start']), name)
+        raise
+    return str(backup)
+
+
+def retired_target(root, directory, project):
+    item = {'directory': str(directory), 'project': project, 'service': 'subscription-page'}
+    record = root / 'registry/subscription-pages' / (identity(item) + '.json')
+    if record.is_symlink():
+        raise ValueError('UNSAFE_REGISTRY')
+    previous = runtime.load(record) if record.is_file() else {}
+    return previous if previous.get('uninstalled') and not previous.get('companion') else None
+
+
 def upgrade(root, page, image, version, release):
     item = selected(root, page)
     base = compose_base(item)
@@ -265,7 +364,10 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
     if url.scheme != 'https' and not network:
         raise ValueError('HTTPS_PANEL_REQUIRED')
     runtime.subscription_env(token)
-    if not directory.is_absolute() or directory.is_symlink() or directory == Path(directory.anchor) or (directory.exists() and any(directory.iterdir())):
+    if not directory.is_absolute() or directory.is_symlink() or directory == Path(directory.anchor):
+        raise ValueError('PAGE_DIRECTORY_NOT_EMPTY')
+    retired = retired_target(root, directory, project)
+    if directory.exists() and any(directory.iterdir()) and not retired:
         raise ValueError('PAGE_DIRECTORY_NOT_EMPTY')
     if proxy not in ('existing', 'caddy'):
         raise ValueError('INVALID_PROXY')
@@ -273,8 +375,16 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
         domain = runtime.domain(domain)
     if proxy == 'caddy' and not domain:
         raise ValueError('PAGE_DOMAIN_REQUIRED')
-    if command(['docker'], 'ps', '--all', '--quiet', '--filter', 'label=com.docker.compose.project=' + project).strip() or command(['docker', 'volume'], 'ls', '--quiet', '--filter', 'label=com.docker.compose.project=' + project).strip():
+    if command(['docker'], 'ps', '--all', '--quiet', '--filter', 'label=com.docker.compose.project=' + project).strip() or (not retired and command(['docker', 'volume'], 'ls', '--quiet', '--filter', 'label=com.docker.compose.project=' + project).strip()):
         raise ValueError('COMPOSE_PROJECT_EXISTS')
+    if retired and directory.exists():
+        # A selected reinstall archives the retired files once; active or
+        # unrelated directories can never enter this branch.
+        archive = root / 'backups' / ('reinstalled-subscription-page-' + uuid.uuid4().hex)
+        archive.mkdir(mode=0o700, parents=True)
+        if directory.resolve() == root.resolve() or root.resolve().is_relative_to(directory.resolve()):
+            raise ValueError('UNSAFE_PAGE_PATH')
+        directory.rename(archive / 'configuration')
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     environment = runtime.subscription_env(token).replace('REMNAWAVE_PANEL_URL=http://remnawave:3000', 'REMNAWAVE_PANEL_URL=' + endpoint.rstrip('/'))
@@ -296,6 +406,7 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
         config['volumes'] = {'caddy-data': {}, 'caddy-config': {}}
     runtime.write(directory / 'docker-compose.yml', config)
     item = {'directory': str(directory), 'project': project, 'service': 'subscription-page',
+            'ownedServices': list(config['services']),
             'composeFiles': [str(directory / 'docker-compose.yml')], 'domain': domain}
     runtime.write(root / 'registry/subscription-pages' / (identity(item) + '.json'), item)
     command(compose_base(item), 'config', '--quiet')
@@ -307,7 +418,7 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['install', 'upgrade', 'list', 'existing-target', 'reuse-port', 'status', 'logs', 'start', 'stop', 'restart'])
+    parser.add_argument('operation', choices=['install', 'upgrade', 'uninstall', 'list', 'existing-target', 'reuse-port', 'status', 'logs', 'start', 'stop', 'restart'])
     parser.add_argument('--root', type=Path, required=True)
     for name in ('page-id', 'directory', 'project', 'panel-url', 'token-file', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
         parser.add_argument('--' + name)
@@ -322,6 +433,8 @@ def main():
         print(install(args.root, args.directory, args.project, args.panel_url, Path(args.token_file).read_text().strip(), args.port or '3010', args.image, args.domain or '', args.proxy or 'existing'))
     elif args.operation == 'upgrade':
         upgrade(args.root, args.page_id, args.image, args.version, args.release)
+    elif args.operation == 'uninstall':
+        print(uninstall(args.root, args.page_id))
     else:
         service(args.root, args.page_id, args.operation)
 

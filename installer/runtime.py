@@ -1109,6 +1109,8 @@ def write_layout(state, config):
         if record.is_symlink():
             continue
         page = load(record)
+        if page.get('uninstalled'):
+            continue
         index += ['subscription-page: ' + page['directory'],
                   '  Окружение: ' + str(Path(page['directory']) / '.env'),
                   *['  Compose: ' + value for value in page.get('composeFiles', [])]]
