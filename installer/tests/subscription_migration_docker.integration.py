@@ -12,6 +12,10 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import runtime
 import subscription_migration as migration
+import subscription_connection
+# This fixture tests replacement/rollback without a panel endpoint. The real
+# authentication probe has its own disposable Docker integration.
+subscription_connection.probe = lambda *args: None
 
 
 def run(*args):

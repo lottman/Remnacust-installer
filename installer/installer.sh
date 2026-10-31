@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='cbf3132be8765442c1624f127751b5060761f57d483474ed351b42837017e09b'
+HELPER_BUNDLE_SHA256='3ee979c9c871a061999f63390d1df724ddc12c23b6425e861d4d3c0720bee17a'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -10,7 +10,7 @@ REPO=${REMNACUST_REPOSITORY:-lottman/Remnacust-installer}
 ROOT=${REMNACUST_ROOT:-/opt/remnacust}
 export REMNACUST_ROOT="$ROOT"
 ACTION='' VERSION='' COMPONENT='' DIRECTORY='' COMPOSE_FILE='' CONTAINER=''
-PAGE_ID='' PAGE_OPERATION='' PAGE_PANEL_URL=''
+PAGE_ID='' PAGE_OPERATION='' PAGE_PANEL_URL='' PAGE_TOKEN_FILE=''
 DOMAIN_PLAN=''
 PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP=''
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
@@ -123,6 +123,7 @@ Remnacust · installer.sh
   install-subscription-page Установить страницу подписки
   upgrade-subscription-page Обновить выбранную страницу подписки
   manage-subscription-page  Список, запуск, остановка или перезапуск страниц
+  configure-subscription-page Сменить панель и API-токен выбранной страницы
   manage-panel | manage-node Меню управления установленной панелью или нодой
   change-domain             Сменить домен --component panel|node|subscription-page
   show-config               Показать адреса и пути настроек без секретов
@@ -149,6 +150,7 @@ Remnacust · installer.sh
   --page-id ID              ID зарегистрированной страницы (из списка)
   --page-operation ACTION   list, status, logs, start, stop или restart
   --panel-url URL           HTTPS панели; auto для панели на этом сервере
+  --panel-token-file FILE   Файл API-токена страницы с правами 0600
   --component COMPONENT    panel, node или subscription-page для управления
   --directory PATH          Каталог существующей установки
   --compose-file PATH       Основной Compose-файл при миграции
@@ -319,12 +321,12 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            manage-panel|manage-node|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            manage-panel|manage-node|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --page-id|--page-operation|--panel-url|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --page-id|--page-operation|--panel-url|--panel-token-file|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
-                    --page-id) PAGE_ID=$2;; --page-operation) PAGE_OPERATION=$2;; --panel-url) PAGE_PANEL_URL=$2;;
+                    --page-id) PAGE_ID=$2;; --page-operation) PAGE_OPERATION=$2;; --panel-url) PAGE_PANEL_URL=$2;; --panel-token-file) PAGE_TOKEN_FILE=$2;;
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
                     --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2; PROXY_SET=true;;
                     --subscription-urls) SUBSCRIPTION_URLS=$2; SUBSCRIPTION_SET=true;;
@@ -798,16 +800,26 @@ PY
         done
     fi
     python3 -I "$script" select --source "$WORK/subscription-candidates.json" --index "$((index-1))" --state "$STATE"
+    if [[ -z $PAGE_PANEL_URL && -t 0 ]] && ! $YES; then
+        choice=$(ask_yes_no 'Использовать эту панель для переносимой страницы подписки?' y) || return $?
+        if [[ $choice != yes ]]; then PAGE_PANEL_URL=$(ask_required 'HTTPS адрес другой панели') || return $?; fi
+    fi
 }
 subscription_migration_apply() {
     local script="$HELPER_ROOT/subscription_migration.py" token_uuid id
     [[ -n $SUBSCRIPTION_IMAGE && -f $script ]] || return 1
     token_uuid=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["subscriptionMigration"]["tokenUuid"])' "$STATE")
     id=$(compose ps --quiet "$(get mainService)")
-    docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$token_uuid" "$id" node - < "$HELPER_ROOT/subscription.cjs" > "$WORK/migration-subscription-token.txt"
+    local -a connection_options=()
+    if [[ -n $PAGE_PANEL_URL && $PAGE_PANEL_URL != auto ]]; then
+        subscription_page_token "$PAGE_PANEL_URL" "$WORK/migration-subscription-token.txt" || return $?
+        connection_options=(--panel-url "$PAGE_PANEL_URL")
+    else
+        docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$token_uuid" "$id" node - < "$HELPER_ROOT/subscription.cjs" > "$WORK/migration-subscription-token.txt"
+    fi
     chmod 600 "$WORK/migration-subscription-token.txt"
     local result=0
-    python3 -I "$script" upgrade --state "$STATE" --image "$SUBSCRIPTION_IMAGE" --token "$WORK/migration-subscription-token.txt" --backup-root "$ROOT/backups" --version "${COMPONENT_VERSION:-${TAG#v}}" --release "$TAG" || result=$?
+    python3 -I "$script" upgrade --state "$STATE" --image "$SUBSCRIPTION_IMAGE" --token "$WORK/migration-subscription-token.txt" --backup-root "$ROOT/backups" --version "${COMPONENT_VERSION:-${TAG#v}}" --release "$TAG" "${connection_options[@]}" || result=$?
     rm -f -- "$WORK/migration-subscription-token.txt"
     if ((result != 0)); then info 'Панель обновлена. Перенос сайта не завершён; предыдущая конфигурация сайта восстановлена.'; return "$result"; fi
 }
@@ -1064,14 +1076,16 @@ component_menu() {
         maximum=8
     elif [[ $COMPONENT == subscription-page ]]; then
         terminal_action 8 'Удалить страницу; сохранить настройки и данные' uninstall-subscription-page
-        maximum=8
+        terminal_action 9 'Сменить панель и API-токен' configure-subscription-page
+        maximum=9
     fi
     terminal_action 0 'Назад' ''
     choice=$(ask_menu_choice "$maximum") || return $?
     case "$choice" in
         1) ACTION=status;; 2) ACTION=show-config;; 3) ACTION=logs;; 4) ACTION=start;;
         5) ACTION=stop;; 6) ACTION=restart;; 7) ACTION=change-domain;;
-        8) if [[ $COMPONENT == subscription-page ]]; then ACTION=uninstall-subscription-page; else ACTION=renew-$COMPONENT-certificate; fi;; 0) ACTION='';;
+        8) if [[ $COMPONENT == subscription-page ]]; then ACTION=uninstall-subscription-page; else ACTION=renew-$COMPONENT-certificate; fi;;
+        9) ACTION=configure-subscription-page;; 0) ACTION='';;
     esac
 }
 service_menu() {
@@ -1306,7 +1320,7 @@ PY
             else service_action; fi;;
         normalize-layout) installed_helper; lock_operation; python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "${COMPONENT:-panel}";;
         cleanup-backups) cleanup_backups_action;;
-        install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page) subscription_page_action;;
+        install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page) subscription_page_action;;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
         *) service_action;;
@@ -1704,6 +1718,66 @@ node_net_admin_wizard() {
 }
 
 
+subscription_panel_endpoint() {
+    local endpoint=${PAGE_PANEL_URL:-} choice
+    if [[ -z $endpoint && -f $ROOT/registry/panel.json ]]; then
+        endpoint=auto
+        if [[ -t 0 ]] && ! $YES; then
+            choice=$(ask_yes_no 'Использовать локальную панель для страницы подписки?' y) || return $?
+            [[ $choice == yes ]] || endpoint=''
+        fi
+    fi
+    while true; do
+        [[ -n $endpoint ]] || endpoint=$(ask_required 'HTTPS адрес панели') || return $?
+        if [[ $endpoint == auto ]]; then printf auto; return; fi
+        if ! endpoint=$(python3 -I "$HELPER_ROOT/subscription_pages.py" panel-url --root "$ROOT" --panel-url "$endpoint"); then
+            [[ -t 0 ]] && ! $YES || return 1
+            printf '  Укажите HTTPS адрес панели без пути, пароля и параметров.\n' >&2
+            endpoint=''; continue
+        fi
+        if [[ -t 0 ]] && ! $YES; then
+            choice=$(ask_yes_no "Использовать панель $endpoint?" y) || return $?
+            if [[ $choice != yes ]]; then endpoint=''; continue; fi
+        fi
+        printf '%s' "$endpoint"; return
+    done
+}
+subscription_page_token() {
+    local endpoint=$1 token_file=$2
+    if [[ -n $PAGE_TOKEN_FILE ]]; then
+        python3 -I "$HELPER_ROOT/subscription_pages.py" token-file --root "$ROOT" --token-file "$PAGE_TOKEN_FILE" --target "$token_file" || return $?
+    elif [[ -n ${REMNACUST_SUBSCRIPTION_TOKEN:-} ]]; then
+        printf '%s' "$REMNACUST_SUBSCRIPTION_TOKEN" > "$token_file"
+    elif [[ $endpoint == auto ]]; then
+        local panel_id
+        panel_id=$(python3 -I - "$ROOT/registry/panel.json" "$HELPER_ROOT" <<'PY'
+import json,sys
+sys.path.insert(0,sys.argv[2])
+from subscription_pages import inspect
+s=json.load(open(sys.argv[1]));c=inspect({**s,'service':s['mainService']})
+if not c or not c.get('State',{}).get('Running'):raise SystemExit('Локальная панель не запущена')
+print(c['Id'])
+PY
+        )
+        local reuse_env="$WORK/subscription-reuse.env"
+        python3 -I "$HELPER_ROOT/subscription_pages.py" reuse-token-env --root "$ROOT" --directory "$DEPLOY" --project "$PROJECT" --token-file "$reuse_env"
+        docker exec -i --env-file "$reuse_env" --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$(python3 -c 'import uuid;print(uuid.uuid4())')" "$panel_id" node - < "$HELPER_ROOT/subscription.cjs" > "$token_file"
+        rm -f -- "$reuse_env"
+    else
+        if [[ -t 0 ]]; then
+            local token
+            while true; do
+                read -r -s -p 'API-токен с правами страницы подписки: ' token || return 1
+                printf '\n' >&2
+                [[ -z $token ]] || break
+                info 'Пустой токен: повторите ввод.'
+            done
+            printf '%s' "$token" > "$token_file"; unset token
+        else die 'Нужен REMNACUST_SUBSCRIPTION_TOKEN или локальная панель (--panel-url auto)'; fi
+    fi
+    chmod 600 "$token_file"
+}
+
 subscription_page_action() {
     local script choice token_file endpoint
     if [[ $ACTION == uninstall-subscription-page ]]; then
@@ -1717,6 +1791,24 @@ subscription_page_action() {
         local archive
         archive=$(python3 -I "$HELPER_ROOT/subscription_pages.py" uninstall --root "$ROOT" --page-id "$PAGE_ID") || return $?
         info "Страница подписки удалена. Настройки сохранены на месте; копия Compose: $archive"
+        return
+    fi
+    if [[ $ACTION == configure-subscription-page ]]; then
+        command -v python3 >/dev/null || die 'Для настройки нужен python3'
+        command -v docker >/dev/null || die 'Docker недоступен'
+        lock_operation; installed_helper
+        select_managed_page || return $?
+        local info_file="$WORK/page-connection-info.json"
+        python3 -I "$HELPER_ROOT/subscription_pages.py" connection-info --root "$ROOT" --page-id "$PAGE_ID" > "$info_file" || return $?
+        DEPLOY=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["directory"])' "$info_file")
+        PROJECT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["project"])' "$info_file")
+        endpoint=$(subscription_panel_endpoint) || return $?
+        confirm 'Сменить панель и API-токен страницы подписки; при ошибке сохранить прежнее подключение'
+        token_file="$WORK/subscription-token.txt"
+        subscription_page_token "$endpoint" "$token_file" || return $?
+        python3 -I "$HELPER_ROOT/subscription_pages.py" configure --root "$ROOT" --page-id "$PAGE_ID" --panel-url "$endpoint" --token-file "$token_file" || return $?
+        rm -f -- "$token_file"
+        info 'Панель и токен страницы обновлены. Прежняя конфигурация сохранена в backups; состояние запуска страницы сохранено.'
         return
     fi
     if [[ $ACTION == manage-subscription-page ]]; then
@@ -1735,7 +1827,7 @@ subscription_page_action() {
             component_menu || return $?
             [[ -n $ACTION ]] || return 0
             if [[ $ACTION == change-domain || $ACTION == show-config ]]; then manage_component_action; return; fi
-            if [[ $ACTION == uninstall-subscription-page ]]; then subscription_page_action; return; fi
+            if [[ $ACTION == uninstall-subscription-page || $ACTION == configure-subscription-page ]]; then subscription_page_action; return; fi
             PAGE_OPERATION=$ACTION
         fi
         if [[ -z $PAGE_ID ]]; then
@@ -1792,9 +1884,7 @@ subscription_page_action() {
         if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
         return
     fi
-    endpoint=${PAGE_PANEL_URL:-}
-    if [[ -z $endpoint && -f $ROOT/registry/panel.json ]]; then endpoint=auto; fi
-    [[ -n $endpoint ]] || endpoint=$(ask_required 'HTTPS адрес панели') || return $?
+    endpoint=$(subscription_panel_endpoint) || return $?
     DOMAIN=$(ask_confirmed_domain 'Домен страницы подписки' "$DOMAIN") || return $?
     PROJECT=${PROJECT:-remnacust-subscription-page}
     DEPLOY=${DIRECTORY:-$ROOT/subscription-page}
@@ -1809,34 +1899,7 @@ subscription_page_action() {
     fi
     if [[ $PROXY == caddy ]]; then port_free 80; port_free 443; docker pull caddy:2-alpine; fi
     token_file="$WORK/subscription-token.txt"
-    if [[ $endpoint == auto ]]; then
-        local panel_id
-        panel_id=$(python3 -I - "$ROOT/registry/panel.json" "$HELPER_ROOT" <<'PY'
-import json,sys
-sys.path.insert(0,sys.argv[2])
-from subscription_pages import inspect
-s=json.load(open(sys.argv[1]));c=inspect({**s,'service':s['mainService']})
-if not c or not c.get('State',{}).get('Running'):raise SystemExit('Локальная панель не запущена')
-print(c['Id'])
-PY
-        )
-        local reuse_env="$WORK/subscription-reuse.env"
-        python3 -I "$script" reuse-token-env --root "$ROOT" --directory "$DEPLOY" --project "$PROJECT" --token-file "$reuse_env"
-        docker exec -i --env-file "$reuse_env" --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$(python3 -c 'import uuid;print(uuid.uuid4())')" "$panel_id" node - < "$HELPER_ROOT/subscription.cjs" > "$token_file"
-        rm -f -- "$reuse_env"
-    else
-        if [[ -n ${REMNACUST_SUBSCRIPTION_TOKEN:-} ]]; then printf '%s' "$REMNACUST_SUBSCRIPTION_TOKEN" > "$token_file"
-        elif [[ -t 0 ]]; then
-            local token
-            while true; do
-                read -r -s -p 'API-токен с правами страницы подписки: ' token || return 1
-                printf '\n' >&2
-                [[ -z $token ]] || break
-                info 'Пустой токен: повторите ввод.'
-            done
-            printf '%s' "$token" > "$token_file"; unset token
-        else die 'Нужен REMNACUST_SUBSCRIPTION_TOKEN или локальная панель (--panel-url auto)'; fi
-    fi
+    subscription_page_token "$endpoint" "$token_file" || return $?
     chmod 600 "$token_file"
     PAGE_ID=$(python3 -I "$script" install --root "$ROOT" --directory "$DEPLOY" --project "$PROJECT" --panel-url "$endpoint" --token-file "$token_file" --port "$PORT" --image "$SUBSCRIPTION_IMAGE" --domain "$DOMAIN" --proxy "$PROXY")
     rm -f -- "$token_file"

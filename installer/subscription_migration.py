@@ -80,11 +80,15 @@ def bound_to_panel(panel, container, inventory):
     return False
 
 
-def candidates(panel, containers, inventory=None):
+def candidates(panel, containers, inventory=None, legacy_only=False):
     result = []
     seen = set()
     for container in containers:
-        repository = container.get('Config', {}).get('Image', '').split('@')[0].rsplit('/', 1)[-1].split(':')[0]
+        image = container.get('Config', {}).get('Image', '').split('@')[0]
+        owned = image.rsplit(':', 1)[0] == 'ghcr.io/lottman/remnacust-subscription-page'
+        if legacy_only and owned:
+            continue
+        repository = image.rsplit('/', 1)[-1].split(':')[0]
         if repository not in {'subscription-page', 'remnacust-subscription-page'}:
             continue
         if not bound_to_panel(panel, container, inventory if inventory is not None else containers):
@@ -115,7 +119,8 @@ def compose_base(item, files=None):
             '--project-directory', str(directory), *[arg for file in files for arg in ['-f', str(file)]]]
 
 
-def upgrade(state_path, image, token_path, backup_root, version, release, run=subprocess.run, sleep=time.sleep):
+def upgrade(state_path, image, token_path, backup_root, version, release, run=subprocess.run, sleep=time.sleep, endpoint=None):
+    import subscription_connection as connection
     state = runtime.load(state_path)
     item = state['subscriptionMigration']
     if state['directory'] == item['directory'] and state['project'] == item['project']:
@@ -143,13 +148,26 @@ def upgrade(state_path, image, token_path, backup_root, version, release, run=su
     candidate = backup / 'candidate.json'
     runtime.write(candidate, config)
     was_running = False
+    current = None
     container_id = command(base, 'ps', '--all', '--quiet', service, run=run).strip()
     if container_id:
         current = json.loads(command(['docker'], 'inspect', container_id, run=run))[0]
         was_running = current.get('State', {}).get('Running', False)
+    env_edits = {}
+    if endpoint:
+        normalized, network = connection.resolve(Path(backup_root).parent, endpoint, lambda _: None)
+        env_edits = connection.edit(config, item, normalized, token, network)
+        runtime.write(candidate, config)
+    else:
+        normalized = runtime.environment(current or {}).get('REMNAWAVE_PANEL_URL')
+    if normalized:
+        connection.probe(image, normalized, token, None, current, lambda base, *args: command(base, *args, run=run))
+    if env_edits:
+        runtime.write(backup / 'environment.before.json', env_edits)
     try:
         command(['docker', 'compose', '--project-name', item['project'], '--project-directory', item['directory'], '-f', str(candidate)], '--profile', '*', 'config', '--quiet', run=run)
         runtime.commit_compose(local, candidate, backup, version, release)
+        connection.write_edits(env_edits)
         active = compose_base(item, runtime.load(local)['composeFiles'])
         # Stopped pages stay stopped. A running page is recreated without touching its proxy or DB.
         command(active, 'up', '--no-deps', '--no-build', '--pull', 'never', *(['-d'] if was_running else ['--no-start']), service, run=run)
@@ -170,8 +188,9 @@ def upgrade(state_path, image, token_path, backup_root, version, release, run=su
         item['composeFiles'] = runtime.load(local)['composeFiles']
         runtime.write_layout(state if state['directory'] == item['directory'] and state['project'] == item['project'] else {**snapshot, 'composeFiles': item['composeFiles']}, config)
         runtime.write(state_path, state)
-    except Exception:
+    except BaseException:
         runtime.restore_compose(backup)
+        connection.write_edits(env_edits, restore=True)
         command(base, 'up', '--no-deps', '--no-build', '--pull', 'never', *(['-d'] if was_running else ['--no-start']), service, run=run)
         raise
 
@@ -179,12 +198,12 @@ def upgrade(state_path, image, token_path, backup_root, version, release, run=su
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=['discover', 'select', 'upgrade'])
-    for field in ['panel', 'containers', 'output', 'state', 'source', 'image', 'token', 'backup-root', 'version', 'release']:
+    for field in ['panel', 'containers', 'output', 'state', 'source', 'image', 'token', 'backup-root', 'version', 'release', 'panel-url']:
         parser.add_argument('--' + field)
     parser.add_argument('--index', type=int)
     args = parser.parse_args()
     if args.operation == 'discover':
-        runtime.write(args.output, candidates(runtime.load(args.panel)[0], runtime.load(args.containers)))
+        runtime.write(args.output, candidates(runtime.load(args.panel)[0], runtime.load(args.containers), legacy_only=True))
     elif args.operation == 'select':
         choices = runtime.load(args.source)
         if args.index is None or not 0 <= args.index < len(choices):
@@ -193,7 +212,7 @@ def main():
         state['subscriptionMigration'] = choices[args.index]
         runtime.write(args.state, state)
     else:
-        upgrade(args.state, args.image, args.token, args.backup_root, args.version, args.release)
+        upgrade(args.state, args.image, args.token, args.backup_root, args.version, args.release, endpoint=args.panel_url)
 
 
 if __name__ == '__main__':

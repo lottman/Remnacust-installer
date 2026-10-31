@@ -20,11 +20,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_page.
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_migration.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_pages.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_legacy_subscription_pages.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_connection.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_layout.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_deployment_layout.py"
 if [[ ${REMNACUST_TEST_REAL_COMPOSE:-} == 1 ]]; then
     PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/subscription_migration_docker.integration.py"
     PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/subscription_pages_docker.integration.py"
+    PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/subscription_connection_docker.integration.py"
     PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/deployment_layout_docker.integration.py"
 fi
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_input.py"

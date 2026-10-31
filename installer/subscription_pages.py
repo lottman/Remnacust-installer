@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runtime
+import subscription_connection as connection
 from subscription_migration import compose_base, command, descriptor, candidates
 
 
@@ -359,15 +361,22 @@ def reuse_token_environment(root, directory, project, target):
     runtime.write(Path(target), 'REMNACUST_SUBSCRIPTION_REUSE_TOKEN=' + token + '\n')
 
 
-def upgrade(root, page, image, version, release):
+def upgrade(root, page, image, version, release, panel_connection=None):
     item = selected(root, page)
     base = compose_base(item)
     config = json.loads(command(base, '--profile', '*', 'config', '--no-interpolate', '--no-env-resolution', '--format', 'json'))
     before = copy.deepcopy(config)
     target = config['services'][item['service']]
-    target['image'] = image
-    target.pop('build', None)
     current = inspect(item)
+    env_edits = {}
+    if panel_connection is None:
+        target['image'] = image
+        target.pop('build', None)
+    else:
+        endpoint, token = panel_connection
+        endpoint, network = connection.resolve(root, endpoint, inspect)
+        connection.probe((current or {}).get('Config', {}).get('Image') or target.get('image'), endpoint, token, network, current, command)
+        env_edits = connection.edit(config, item, endpoint, token, network)
     current_version = ((current or {}).get('Config', {}).get('Labels') or {}).get('org.opencontainers.image.version', '')
     if re.fullmatch(r'\d+(?:\.\d+){2,3}', current_version) and re.fullmatch(r'\d+(?:\.\d+){2,3}', version):
         if tuple(map(int, current_version.split('.'))) > tuple(map(int, version.split('.'))):
@@ -380,6 +389,8 @@ def upgrade(root, page, image, version, release):
     runtime.write(backup / 'compose.before.json', before)
     runtime.write(backup / 'state.json', state)
     runtime.write(backup / 'candidate.json', config)
+    if env_edits:
+        runtime.write(backup / 'environment.before.json', env_edits)
     # Validate separately; the registered Compose set is the rollback source.
     command(['docker', 'compose', '--project-name', item['project'], '--project-directory', item['directory'], '-f', str(backup / 'candidate.json')], '--profile', '*', 'config', '--quiet')
     changed = False
@@ -388,8 +399,9 @@ def upgrade(root, page, image, version, release):
     panel_path = root / 'registry/panel.json'
     original_panel = runtime.load(panel_path) if panel_path.exists() else None
     try:
-        runtime.commit_compose(backup / 'state.json', backup / 'candidate.json', backup, version, release)
+        runtime.commit_compose(backup / 'state.json', backup / 'candidate.json', backup, version, release, **({'preserve_release': True} if panel_connection is not None else {}))
         changed = True
+        connection.write_edits(env_edits)
         updated = runtime.load(backup / 'state.json')
         item['composeFiles'] = updated['composeFiles']
         command(compose_base(item), 'up', '--no-deps', '--no-build', '--pull', 'never', *(['-d'] if was_running else ['--no-start']), item['service'])
@@ -406,9 +418,10 @@ def upgrade(root, page, image, version, release):
                 panel['subscriptionMigration']['composeFiles'] = updated['composeFiles']
                 runtime.write(panel_path, panel)
         runtime.write_layout(updated, config)
-    except Exception:
+    except BaseException:
         if changed:
             runtime.restore_compose(backup)
+            connection.write_edits(env_edits, restore=True)
             if original_panel is not None:
                 runtime.write(panel_path, original_panel)
             if original_record is not None:
@@ -419,32 +432,17 @@ def upgrade(root, page, image, version, release):
         raise
 
 
+def configure(root, page, endpoint, token):
+    connection.validate_token(token)
+    upgrade(root, page, None, '', '', panel_connection=(endpoint, token))
+
+
 def install(root, directory, project, endpoint, token, number, image, domain='', proxy='existing'):
     directory = Path(directory)
     runtime.project_name(project)
     port = runtime.port(number)
-    if not isinstance(endpoint, str) or len(endpoint) > 2048 or '\\' in endpoint or any(ord(c) < 33 or ord(c) == 127 for c in endpoint):
-        raise ValueError('INVALID_PANEL_URL')
-    if len(token) > 16384:
-        raise ValueError('INVALID_TOKEN')
-    network = None
-    if endpoint == 'auto':
-        state = runtime.load(root / 'registry/panel.json')
-        container = inspect({**state, 'service': state['mainService']})
-        if not container or not container.get('State', {}).get('Running'):
-            raise ValueError('LOCAL_PANEL_UNAVAILABLE')
-        networks = container.get('NetworkSettings', {}).get('Networks', {})
-        network = next((name for name in networks if name not in ('host', 'bridge', 'none')), None)
-        name = container['Name'].lstrip('/')
-        if not network or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', name):
-            raise ValueError('LOCAL_PANEL_NETWORK_UNAVAILABLE')
-        endpoint = 'http://' + name + ':' + str(runtime.port(runtime.environment(container).get('APP_PORT', '3000')))
-    url = urlsplit(endpoint)
-    if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ('', '/'):
-        raise ValueError('INVALID_PANEL_URL')
-    if url.scheme != 'https' and not network:
-        raise ValueError('HTTPS_PANEL_REQUIRED')
-    runtime.subscription_env(token)
+    endpoint, network = connection.resolve(root, endpoint, inspect)
+    connection.validate_token(token)
     if not directory.is_absolute() or directory.is_symlink() or directory == Path(directory.anchor):
         raise ValueError('PAGE_DIRECTORY_NOT_EMPTY')
     retired = retired_target(root, directory, project)
@@ -458,6 +456,7 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
         raise ValueError('PAGE_DOMAIN_REQUIRED')
     if command(['docker'], 'ps', '--all', '--quiet', '--filter', 'label=com.docker.compose.project=' + project).strip() or (not retired and command(['docker', 'volume'], 'ls', '--quiet', '--filter', 'label=com.docker.compose.project=' + project).strip()):
         raise ValueError('COMPOSE_PROJECT_EXISTS')
+    connection.probe(image, endpoint, token, network, None, command)
     if retired and directory.exists():
         # A selected reinstall archives the retired files once; active or
         # unrelated directories can never enter this branch.
@@ -499,9 +498,9 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['install', 'upgrade', 'uninstall', 'list', 'existing-target', 'reuse-port', 'reuse-token-env', 'status', 'logs', 'start', 'stop', 'restart'])
+    parser.add_argument('operation', choices=['install', 'upgrade', 'configure', 'panel-url', 'connection-info', 'token-file', 'uninstall', 'list', 'existing-target', 'reuse-port', 'reuse-token-env', 'status', 'logs', 'start', 'stop', 'restart'])
     parser.add_argument('--root', type=Path, required=True)
-    for name in ('page-id', 'directory', 'project', 'panel-url', 'token-file', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
+    for name in ('page-id', 'directory', 'project', 'panel-url', 'token-file', 'target', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
         parser.add_argument('--' + name)
     args = parser.parse_args()
     if args.operation == 'list':
@@ -516,6 +515,15 @@ def main():
         print(install(args.root, args.directory, args.project, args.panel_url, Path(args.token_file).read_text().strip(), args.port or '3010', args.image, args.domain or '', args.proxy or 'existing'))
     elif args.operation == 'upgrade':
         upgrade(args.root, args.page_id, args.image, args.version, args.release)
+    elif args.operation == 'configure':
+        configure(args.root, args.page_id, args.panel_url, connection.read_token(args.token_file))
+    elif args.operation == 'connection-info':
+        item = selected(args.root, args.page_id)
+        print(json.dumps({key: item[key] for key in ('directory', 'project')}, ensure_ascii=False))
+    elif args.operation == 'panel-url':
+        print(connection.resolve(args.root, args.panel_url, inspect)[0])
+    elif args.operation == 'token-file':
+        runtime.write(Path(args.target), connection.read_token(args.token_file))
     elif args.operation == 'uninstall':
         print(uninstall(args.root, args.page_id))
     else:
@@ -523,7 +531,16 @@ def main():
 
 
 if __name__ == '__main__':
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, lambda *_: sys.exit(1))
     try:
         main()
-    except (ValueError, OSError, KeyError, subprocess.SubprocessError):
-        raise SystemExit('Операция страницы подписки не завершена. Проверьте её журнал и конфигурацию; секретный вывод скрыт.')
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
+        messages = {
+            'PANEL_ACCESS_FAILED': 'Проверка подключения к панели не пройдена. Проверьте HTTPS-адрес, доступность, версию панели и права токена страницы подписки. Настройки не изменены.',
+            'TOKEN_FILE_MUST_BE_PRIVATE': 'Файл API-токена должен принадлежать root и иметь права 0600. Токен не показан.',
+            'INVALID_TOKEN_FILE': 'Укажите обычный приватный файл API-токена размером не более 16 KiB.',
+            'INVALID_PANEL_URL': 'Укажите адрес панели без пути, пароля и параметров: https://panel.example.com.',
+            'HTTPS_PANEL_REQUIRED': 'Для другой панели требуется HTTPS. Для локальной панели используйте auto.',
+        }
+        raise SystemExit(messages.get(str(error), 'Операция страницы подписки не завершена. Проверьте её журнал и конфигурацию; секретный вывод скрыт.'))

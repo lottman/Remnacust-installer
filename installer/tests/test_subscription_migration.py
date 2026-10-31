@@ -22,6 +22,15 @@ def container(image='remnawave/subscription-page:old', panel='http://remnawave:3
 
 
 class MigrationTests(unittest.TestCase):
+    def test_already_custom_page_is_not_offered_for_repeat_migration(self):
+        panel = container(project='panel')
+        panel['Config']['Labels']['com.docker.compose.service'] = 'remnawave'
+        page = container(image='ghcr.io/lottman/remnacust-subscription-page:1.1.7.71')
+        self.assertEqual(len(migration.candidates(panel, [page])), 1)
+        self.assertEqual(migration.candidates(panel, [page], legacy_only=True), [])
+        page['Config']['Image'] = 'remnawave/subscription-page:old'
+        page['Config']['Labels']['com.docker.compose.project'] = 'remnacust-subscription-page'
+        self.assertEqual(len(migration.candidates(panel, [page], legacy_only=True)), 1)
     def test_internal_alias_requires_this_panels_network_and_no_competing_owner(self):
         panel = container(project='panel')
         panel['Id'] = 'current-panel'
@@ -73,7 +82,7 @@ class MigrationTests(unittest.TestCase):
         token = directory / 'token'; token.write_text('abc.def.ghi')
         return directory, primary, config, state, token
 
-    def execute(self, fail=False, running=True):
+    def execute(self, fail=False, running=True, endpoint=None):
         directory, primary, config, state, token = self.fixture()
         commands = []; attempts = 0
         def run(args, **kwargs):
@@ -93,15 +102,17 @@ class MigrationTests(unittest.TestCase):
         with patch.dict(os.environ, REMNACUST_ROOT=str(directory)):
             if fail:
                 with self.assertRaisesRegex(runtime.ConfigurationError, 'Docker') as error:
-                    migration.upgrade(state, 'new', token, directory / 'backups', '1.1.7.56', 'v1.2.90', run, lambda _: None)
+                    migration.upgrade(state, 'new', token, directory / 'backups', '1.1.7.56', 'v1.2.90', run, lambda _: None, endpoint=endpoint)
                 self.assertNotIn('PRIVATE_TOKEN', str(error.exception))
                 self.assertEqual(runtime.load(primary), config)
                 self.assertEqual(attempts, 2)
             else:
-                migration.upgrade(state, 'new', token, directory / 'backups', '1.1.7.56', 'v1.2.90', run, lambda _: None)
+                migration.upgrade(state, 'new', token, directory / 'backups', '1.1.7.56', 'v1.2.90', run, lambda _: None, endpoint=endpoint)
                 result = runtime.load(primary)
                 expected = copy.deepcopy(config); expected['services']['page']['image'] = 'new'
                 expected['services']['page']['environment']['REMNAWAVE_API_TOKEN'] = 'abc.def.ghi'
+                if endpoint:
+                    expected['services']['page']['environment']['REMNAWAVE_PANEL_URL'] = 'https://' + endpoint
                 expected['services']['page']['labels'] = {'io.remnacust.service-role': 'subscription-page'}
                 result.pop('x-remnacust-release')
                 self.assertEqual(result, expected)
@@ -112,6 +123,8 @@ class MigrationTests(unittest.TestCase):
     def test_external_page_keeps_ports_volumes_proxy_network_and_panel_address(self): self.execute()
     def test_failed_update_restores_byte_content_and_previous_service(self): self.execute(fail=True)
     def test_stopped_page_is_updated_without_being_started(self): self.execute(running=False)
+    def test_migration_can_select_another_panel_without_changing_proxy_or_port(self): self.execute(endpoint='other.example.test:8443')
+    def test_migration_to_another_panel_restores_old_connection_on_failure(self): self.execute(fail=True, endpoint='other.example.test:8443')
 
 
 if __name__ == '__main__': unittest.main()

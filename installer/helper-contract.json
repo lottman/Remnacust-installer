@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "0f2b42fac6c5f0592af6c94f9cef26a2f80a73d8d9ea4de99773a3e97b38d6f7",
+  "entry_sha256": "4fa9738df6a1276a034f6f02b03050e53ca9f935c75bafda05aa11bf3fc1db67",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -18,8 +18,8 @@
       "sha256": "6d8501e62bfabd374b6d6e635434f0438d0af02aae391fc02f229ed11337efcc"
     },
     "helper_bundle.py": {
-      "bytes": 11459,
-      "sha256": "a6b7d40a349ab6e6c027e7361c0839299445f7cf28a3815d98941d9da4ecf227"
+      "bytes": 11489,
+      "sha256": "9093e1eed3b7afd024c2a8e7009c37be896be3a07109f3322571bcd7831097e7"
     },
     "image_cleanup.py": {
       "bytes": 4761,
@@ -53,13 +53,17 @@
       "bytes": 3356,
       "sha256": "c00662ea23aa1c63b933aec487a04b17edff4a304262dd50a1ed869bc368ffe2"
     },
+    "subscription_connection.py": {
+      "bytes": 7075,
+      "sha256": "901a0ea881ab44128dce1d5188195bc1f0e406b810f17cacf06c6ba32048d0d0"
+    },
     "subscription_migration.py": {
-      "bytes": 11060,
-      "sha256": "3308219e20f2e8fc72e75cd708fd3a4316143a6db7373c6af5a51c24b37a6ac0"
+      "bytes": 12058,
+      "sha256": "c1680cb30fafa6e4ac1a390ccd1b39526793d086d312011f00ab61ab25eac5df"
     },
     "subscription_pages.py": {
-      "bytes": 27977,
-      "sha256": "e039376fd061814624bd241ce5561b73dad8f4595db2d00e1d76fa6902b7019e"
+      "bytes": 29417,
+      "sha256": "ca1e89865f10c49faaa059649a03a27d8ad8de923bcad7fee8b850b64d584073"
     },
     "tls.py": {
       "bytes": 9486,
@@ -75,5 +79,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.107"
+  "version": "1.2.108"
 }

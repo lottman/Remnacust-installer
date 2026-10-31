@@ -11,6 +11,9 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import subscription_pages as pages
+# This fixture contains a minimal HTTP daemon, not a panel. Authentication is
+# exercised by subscription_connection_docker.integration.py instead.
+pages.connection.probe = lambda *args: None
 
 suffix = uuid.uuid4().hex[:12]
 project = 'rc-page-test-' + suffix

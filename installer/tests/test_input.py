@@ -460,6 +460,38 @@ class InputWorkflowTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn('ACTION=uninstall-subscription-page', output)
 
+    def test_subscription_management_can_change_panel_connection(self):
+        command = 'source "$1"; COMPONENT=subscription-page; component_menu; printf "ACTION=%s" "$ACTION"'
+        code, output = self.terminal(command, [('Действие: ', '9\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('ACTION=configure-subscription-page', output)
+
+    def test_external_panel_address_retries_invalid_input_and_confirms_normalized_url(self):
+        command = ('source "$1"; HELPER_ROOT="$(dirname "$1")"; '
+                   'value=$(subscription_panel_endpoint); printf "ENDPOINT=%s" "$value"')
+        code, output = self.terminal(command, [('HTTPS адрес панели: ', 'http://panel.example.test\n'),
+                                              ('HTTPS адрес панели: ', 'panel.example.test:8443\n'),
+                                              ('Использовать панель https://panel.example.test:8443? y/n [y]: ', '\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('ENDPOINT=https://panel.example.test:8443', output)
+
+    def test_external_panel_token_is_hidden_and_empty_input_retries(self):
+        command = ('source "$1"; WORK="$2"; subscription_page_token https://panel.example.test "$WORK/token"; '
+                   '[[ $(cat "$WORK/token") == new.valid.token ]] && printf TOKEN-ACCEPTED')
+        prompt = 'API-токен с правами страницы подписки: '
+        code, output = self.terminal(command, [(prompt, '\n'), (prompt, 'new.valid.token\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('TOKEN-ACCEPTED', output)
+        self.assertNotIn('new.valid.token', output)
+        self.assertEqual((self.root / 'token').stat().st_mode & 0o077, 0)
+
+    def test_connection_cli_accepts_private_token_file_without_exposing_token(self):
+        command = ('source "$1"; parse_args configure-subscription-page --page-id abc --panel-url panel.example.test '
+                   '--panel-token-file /root/page-token; printf "%s|%s|%s" "$ACTION" "$PAGE_PANEL_URL" "$PAGE_TOKEN_FILE"')
+        code, output = self.terminal(command, [])
+        self.assertEqual(code, 0, output)
+        self.assertIn('configure-subscription-page|panel.example.test|/root/page-token', output)
+
     def test_subscription_uninstall_defaults_to_cancel_before_mutation(self):
         command = ('source "$1"; ACTION=uninstall-subscription-page; '
                    'lock_operation() { :; }; installed_helper() { :; }; '
