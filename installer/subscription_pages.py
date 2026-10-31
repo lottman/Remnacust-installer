@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Registered subscription-page deployments; never accepts arbitrary Docker commands."""
+"""Registered and verified local subscription pages; no arbitrary Docker commands."""
 import argparse
 import copy
 from contextlib import redirect_stdout
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -15,7 +16,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runtime
-from subscription_migration import compose_base, command, descriptor
+from subscription_migration import compose_base, command, descriptor, candidates
 
 
 def identity(item):
@@ -50,10 +51,66 @@ def records(root):
     return unique
 
 
-def selected(root, page):
+def discovered(root):
+    """Read-only inventory of known page images connected to this exact panel."""
+    panel_path = root / 'registry/panel.json'
+    if not panel_path.is_file() or panel_path.is_symlink():
+        return {}
+    panel_state = runtime.load(panel_path)
+    if panel_state.get('uninstalled') or panel_state.get('component') != 'panel':
+        return {}
+    try:
+        panel = inspect({**panel_state, 'service': panel_state.get('mainService', 'remnawave')})
+        if not panel:
+            return {}
+        ids = command(['docker'], 'ps', '--all', '--quiet').split()
+        if len(ids) > 256 or any(not re.fullmatch('[a-f0-9]{12,64}', value) for value in ids):
+            raise ValueError('INVALID_CONTAINER_INVENTORY')
+        inventory = json.loads(command(['docker'], 'inspect', *ids)) if ids else []
+        allowed = {'remnawave/subscription-page', 'docker.io/remnawave/subscription-page',
+                   'ghcr.io/remnawave/subscription-page', 'ghcr.io/lottman/remnacust-subscription-page'}
+        containers = [item for item in inventory if
+                      item.get('Config', {}).get('Image', '').split('@')[0].rsplit(':', 1)[0] in allowed]
+        result = {}
+        choices = []
+        for container in containers:
+            try:
+                choices.extend(candidates(panel, [container], inventory))
+            except (ValueError, KeyError):
+                continue
+        for item in choices:
+            item.pop('tokenUuid', None)
+            try:
+                base = Path(item['directory'])
+                paths = {base, *base.parents}
+                for value in item['composeFiles']:
+                    path = Path(value)
+                    if not path.is_absolute():
+                        path = base / path
+                    paths.update([path, *path.parents])
+                    runtime.compose_path(base, value)
+                for path in paths:
+                    if path.is_symlink() or not path.exists():
+                        raise ValueError('UNSAFE_PAGE_PATH')
+                    if os.name != 'nt':
+                        info = path.stat()
+                        if info.st_uid not in {0, os.geteuid()} or (info.st_mode & 0o022 and not (path.is_dir() and info.st_mode & 0o1000)):
+                            raise ValueError('UNSAFE_PAGE_OWNER')
+                compose_base(item)
+            except (OSError, ValueError):
+                continue
+            result[identity(item)] = {**item, 'managed': False}
+        return result
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return {}
+
+
+def selected(root, page, allow_discovered=False):
     if not isinstance(page, str) or not re.fullmatch('[a-f0-9]{24}', page):
         raise ValueError('INVALID_PAGE_ID')
     item = records(root).get(page)
+    if item is None and allow_discovered:
+        item = discovered(root).get(page)
     if item is None:
         raise ValueError('PAGE_NOT_REGISTERED')
     if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', item['service']):
@@ -140,8 +197,14 @@ def inspect(item):
 
 def listing(root):
     result = []
-    for page in records(root):
-        item = selected(root, page)
+    items = records(root)
+    for page, item in discovered(root).items():
+        if len(items) >= 32:
+            break
+        items.setdefault(page, item)
+    for page, item in items.items():
+        if item.get('managed', True):
+            item = selected(root, page)
         state = {}
         try:
             current = inspect(item)
@@ -152,7 +215,8 @@ def listing(root):
             status, image = 'unavailable', ''
         result.append({'id': page, 'name': item['project'], 'domain': item.get('domain', ''),
                        'status': status, 'running': bool(state.get('Running')),
-                       'image': image[:256], 'companion': bool(item.get('companion'))})
+                       'image': image[:256], 'companion': bool(item.get('companion')),
+                       'managed': item.get('managed', True)})
     return result
 
 
@@ -172,11 +236,11 @@ def ready(item, timeout=120):
 def service(root, page, operation):
     if operation not in ('start', 'stop', 'restart', 'status', 'logs'):
         raise ValueError('INVALID_PAGE_OPERATION')
-    item = selected(root, page)
+    item = selected(root, page, allow_discovered=True)
     if operation in ('status', 'logs'):
         print(command(compose_base(item), *(['ps', '--all', item['service']] if operation == 'status' else ['logs', '--tail', '100', '--no-color', item['service']])))
         return
-    command(compose_base(item), operation, item['service'])
+    command(compose_base(item), operation, *(['--no-deps'] if operation == 'restart' else []), item['service'])
     if operation != 'stop':
         ready(item)
 

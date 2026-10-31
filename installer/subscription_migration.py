@@ -34,24 +34,60 @@ def descriptor(container):
                 composeFiles=files, tokenUuid=str(uuid.uuid4()))
 
 
-def candidates(panel, containers):
-    env = runtime.environment(panel)
-    names = {'remnawave', 'remnacust', (panel.get('Config', {}).get('Labels') or {}).get('com.docker.compose.service')}
-    for key in ['PANEL_DOMAIN', 'FRONT_END_DOMAIN']:
-        if env.get(key):
-            names.add(urlsplit(env[key] if '://' in env[key] else 'https://' + env[key]).hostname)
-    networks = set(panel.get('NetworkSettings', {}).get('Networks') or {})
+def network_aliases(container, network):
+    settings = (container.get('NetworkSettings', {}).get('Networks') or {}).get(network, {})
+    labels = container.get('Config', {}).get('Labels') or {}
+    return {str(value).lower() for value in [
+        *(settings.get('Aliases') or []), *(settings.get('DNSNames') or []),
+        container.get('Name', '').lstrip('/'), container.get('Config', {}).get('Hostname', ''),
+        labels.get('com.docker.compose.service', ''),
+    ] if value}
+
+
+def panel_origin(value):
+    try:
+        url = urlsplit(value if '://' in value else 'https://' + value)
+        if url.scheme not in {'http', 'https'} or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ('', '/'):
+            return None
+        return (url.scheme, url.hostname.lower(), url.port or (443 if url.scheme == 'https' else 80))
+    except (ValueError, TypeError):
+        return None
+
+
+def bound_to_panel(panel, container, inventory):
+    settings, env = runtime.environment(container), runtime.environment(panel)
+    origin = panel_origin(settings.get('REMNAWAVE_PANEL_URL', ''))
+    if origin is None:
+        return False
+    public = {panel_origin(env[key]) for key in ('PANEL_DOMAIN', 'FRONT_END_DOMAIN') if env.get(key)}
+    if origin in public:
+        return True
+    page_networks = set(container.get('NetworkSettings', {}).get('Networks') or {})
+    networks = set(panel.get('NetworkSettings', {}).get('Networks') or {}).intersection(page_networks)
+    # Docker resolves names across every network attached to the caller, not
+    # just the network shared with the panel being managed.
+    ambiguous = any(other is not panel and not (panel.get('Id') and other.get('Id') == panel['Id'])
+                    and any(network in (other.get('NetworkSettings', {}).get('Networks') or {})
+                            and origin[1] in network_aliases(other, network) for network in page_networks)
+                    for other in inventory)
+    if ambiguous:
+        return False
+    for network in networks:
+        if origin[1] not in network_aliases(panel, network):
+            continue
+        if origin == ('http', origin[1], int(env.get('APP_PORT', '3000'))):
+            return True
+    return False
+
+
+def candidates(panel, containers, inventory=None):
     result = []
     seen = set()
     for container in containers:
-        settings = runtime.environment(container)
         repository = container.get('Config', {}).get('Image', '').split('@')[0].rsplit('/', 1)[-1].split(':')[0]
         if repository not in {'subscription-page', 'remnacust-subscription-page'}:
             continue
-        endpoint = urlsplit(settings.get('REMNAWAVE_PANEL_URL', ''))
-        if endpoint.scheme not in {'http', 'https'} or endpoint.hostname not in names:
-            continue
-        if endpoint.hostname in {'remnawave', 'remnacust'} and not networks.intersection(container.get('NetworkSettings', {}).get('Networks') or {}):
+        if not bound_to_panel(panel, container, inventory if inventory is not None else containers):
             continue
         item = descriptor(container)
         key = (item['directory'], item['project'], item['service']) if item else None

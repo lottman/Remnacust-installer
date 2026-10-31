@@ -237,7 +237,9 @@ class Agent:
         request = job_id(request)
         if operation not in ('start', 'stop', 'restart', 'upgrade'):
             raise UpdateError('INVALID_REQUEST')
-        subscription_pages.selected(self.root, page)
+        item = subscription_pages.selected(self.root, page, allow_discovered=True)
+        if operation == 'upgrade' and item.get('managed') is False:
+            raise UpdateError('PAGE_MIGRATION_REQUIRED')
         with self.lock(False) as locked:
             if not locked or self.state().get('active'):
                 raise UpdateError('UPDATE_BUSY')
@@ -266,25 +268,29 @@ class Agent:
 
     def page_work(self, page, request):
         request = job_id(request)
-        subscription_pages.selected(self.root, page)
+        if not isinstance(page, str) or not re.fullmatch('[a-f0-9]{24}', page):
+            raise UpdateError('INVALID_REQUEST')
         path = self.control / ('page-' + page + '.json')
         with self.lock():
             state = read_json(path)
             if state.get('requestId') != request or state.get('phase') != 'queued':
                 return
-            operation = state['operation']
-            if operation not in ('start', 'stop', 'restart', 'upgrade'):
-                raise UpdateError('INVALID_REQUEST')
-            state.update(phase='running')
-            runtime.write(path, state)
             try:
+                item = subscription_pages.selected(self.root, page, allow_discovered=True)
+                operation = state['operation']
+                if operation == 'upgrade' and item.get('managed') is False:
+                    raise UpdateError('PAGE_MIGRATION_REQUIRED')
+                if operation not in ('start', 'stop', 'restart', 'upgrade'):
+                    raise UpdateError('INVALID_REQUEST')
+                state.update(phase='running')
+                runtime.write(path, state)
                 log = self.root / 'logs' / ('page-' + request + '.log')
                 fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, 'wb') as output:
                     args = [CLI, 'upgrade-subscription-page', '--version', 'latest'] if operation == 'upgrade' else [CLI, 'manage-subscription-page', '--page-operation', operation]
                     subprocess.run([*args, '--page-id', page, '--yes'], stdin=subprocess.DEVNULL, stdout=output, stderr=output, check=True, timeout=7100)
                 state.update(phase='completed', error=None)
-            except (OSError, ValueError, subprocess.SubprocessError):
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
                 state.update(phase='failed', error='PAGE_OPERATION_FAILED')
             runtime.write(path, state)
 

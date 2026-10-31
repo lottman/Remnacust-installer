@@ -72,6 +72,13 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.agent.page_start('../panel', 'restart', self.request)
 
+    def test_discovered_page_upgrade_requires_migration_before_spawning_worker(self):
+        with patch.object(agent.subscription_pages, 'selected', return_value={'managed': False}), patch.object(agent.subprocess, 'run') as run:
+            with self.assertRaisesRegex(agent.UpdateError, 'PAGE_MIGRATION_REQUIRED'):
+                self.agent.page_start('a' * 24, 'upgrade', self.request)
+            run.assert_not_called()
+        self.assertFalse((self.root / 'control' / ('page-' + 'a' * 24 + '.json')).exists())
+
     def test_failed_page_operation_is_reported_without_private_output(self):
         page = 'a' * 24
         (self.root / 'logs').mkdir()
@@ -86,6 +93,35 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(job['phase'], 'failed')
         self.assertEqual(job['error'], 'PAGE_OPERATION_FAILED')
         self.assertNotIn('private-credential', json.dumps(job))
+
+    def test_page_discovery_failure_finishes_job_and_permits_a_new_request(self):
+        page = 'a' * 24
+        with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run'):
+            self.agent.page_start(page, 'restart', self.request)
+        with patch.object(agent.subscription_pages, 'selected', side_effect=ValueError('private Docker details')), patch.object(agent.subprocess, 'run') as run:
+            self.agent.page_work(page, self.request)
+            run.assert_not_called()
+        saved = runtime.load(self.root / 'control' / ('page-' + page + '.json'))
+        self.assertEqual((saved['phase'], saved['error']), ('failed', 'PAGE_OPERATION_FAILED'))
+        self.assertNotIn('private Docker details', json.dumps(saved))
+        with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run'):
+            retry = self.agent.page_start(page, 'restart', str(uuid.uuid4()))
+        self.assertEqual(retry['phase'], 'queued')
+
+    def test_page_worker_records_changed_ownership_and_ignores_stale_requests(self):
+        page = 'b' * 24
+        with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run'):
+            self.agent.page_start(page, 'upgrade', self.request)
+        with patch.object(agent.subscription_pages, 'selected', return_value={'managed': False}), patch.object(agent.subprocess, 'run') as run:
+            self.agent.page_work(page, self.request)
+            run.assert_not_called()
+        path = self.root / 'control' / ('page-' + page + '.json')
+        self.assertEqual(runtime.load(path)['phase'], 'failed')
+        before = path.read_bytes()
+        with patch.object(agent.subscription_pages, 'selected') as selected:
+            self.agent.page_work(page, str(uuid.uuid4()))
+            selected.assert_not_called()
+        self.assertEqual(path.read_bytes(), before)
 
     def test_progress_is_bounded_monotonic_and_estimate_requires_a_successful_baseline(self):
         self.start()

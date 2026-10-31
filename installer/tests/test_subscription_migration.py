@@ -22,9 +22,36 @@ def container(image='remnawave/subscription-page:old', panel='http://remnawave:3
 
 
 class MigrationTests(unittest.TestCase):
+    def test_internal_alias_requires_this_panels_network_and_no_competing_owner(self):
+        panel = container(project='panel')
+        panel['Id'] = 'current-panel'
+        panel['Config']['Labels']['com.docker.compose.service'] = 'api'
+        page = container(panel='http://api:3000')
+        self.assertEqual(len(migration.candidates(panel, [page])), 1)
+        foreign = container(panel='http://api:3000', network='foreign')
+        self.assertEqual(migration.candidates(panel, [foreign]), [])
+        other = copy.deepcopy(panel)
+        other['Id'] = 'other-panel'
+        other['Config']['Image'] = 'other/panel:old'
+        self.assertEqual(migration.candidates(panel, [page], [panel, other, page]), [])
+        other['NetworkSettings']['Networks'] = {'foreign': {}}
+        self.assertEqual(len(migration.candidates(panel, [page], [panel, other, page])), 1)
+        page['NetworkSettings']['Networks']['foreign'] = {}
+        self.assertEqual(migration.candidates(panel, [page], [panel, other, page]), [])
+
+    def test_public_panel_origin_includes_scheme_and_port(self):
+        panel = container(project='panel')
+        panel['Config']['Env'] = ['FRONT_END_DOMAIN=https://panel.example.com']
+        for endpoint, allowed in [('https://panel.example.com', True), ('https://panel.example.com:443/', True),
+                                  ('https://panel.example.com:9443', False), ('http://panel.example.com', False),
+                                  ('https://panel.example.com/api', False), ('https://user:pass@panel.example.com', False)]:
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(bool(migration.candidates(panel, [container(panel=endpoint, network='external')])), allowed)
+
     def test_only_pages_bound_to_this_panel_are_offered(self):
         panel = container(project='panel')
         panel['Config']['Env'] = ['FRONT_END_DOMAIN=https://panel.example.com']
+        panel['Config']['Labels']['com.docker.compose.service'] = 'remnawave'
         choices = migration.candidates(panel, [container(), container(network='foreign'),
             container(panel='https://foreign.example.com'), container(image='postgres:18'),
             container(panel='https://panel.example.com', network='external', project='external')])
