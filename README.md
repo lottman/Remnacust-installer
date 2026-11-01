@@ -30,12 +30,12 @@ docker compose up -d --no-build --pull never
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.121) | **1.2.121** |
-| [Панель и страница подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.85) | **1.1.7.85** |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.122) | **1.2.122** |
+| [Панель и страница подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.86) | **1.1.7.86** |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.20) | **1.1.20**, Remnawave Node 3.4.3 |
 | [Core / WASM](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.12) | **1.1.12**, стабильный Xray v26.10.31 |
 
-Версия `1.2.121` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.121.md). Новые теги/выпуски создаются отдельно от коммитов README.
+Версия `1.2.122` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.122.md). Новые теги/выпуски создаются отдельно от коммитов README.
 
 ## Быстрый запуск
 
@@ -49,9 +49,9 @@ sudo bash installer.sh
 Либо выберите действие сразу:
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.121
-sudo bash installer.sh install-node --version 1.2.121
-sudo bash installer.sh install-subscription-page --version 1.2.121
+sudo bash installer.sh install-panel --version 1.2.122
+sudo bash installer.sh install-node --version 1.2.122
+sudo bash installer.sh install-subscription-page --version 1.2.122
 ```
 
 Образы опубликованы для amd64/arm64; скачивание релиза и GHCR открыто без персонального токена. Установщик проверяет выпуск, архитектуру и целостность. Docker добавляется при отсутствии; существующий daemon не переустанавливается ради обновления приложения.
@@ -170,6 +170,12 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 Подробные параметры и смена адреса: [installer/README.md](installer/README.md). Публикация согласованного комплекта: [docs/PUBLISHING.md](docs/PUBLISHING.md). Новые выпуски и Docker-образы создаются отдельными ручными Actions; README-коммит не обновляет production.
 
 Проверки: `bash tests/installer.test.sh`, `python3 tests/package-release.test.py`, `python3 tests/core-catalog-package.test.py`. Docker-сценарии CI используют собственные проекты, сети и тестовые БД; запускайте их на выделенном стенде. Точные команды — в [Source checks](.github/workflows/check.yml).
+
+## MPTCP и ядро Linux
+
+Xray v26.10.31 выключает MPTCP по умолчанию и сохраняет явный `streamSettings.sockopt.tcpMptcp`. Новые отдельные Caddy-службы панели и страницы подписки получают `GODEBUG=multipathtcp=0`. Существующий общий proxy при обновлении приложения не перенастраивается и не перезапускается. Для других Go-служб проверьте эту настройку отдельно.
+
+CVE-2026-98432 исправляется обновлением ядра хоста и загрузкой исправленного ядра; обновление Docker-образа этого не делает. Проверяйте статус конкретного пакета по бюллетеню дистрибутива. До подтверждения исправления MPTCP должен оставаться выключенным. После исправления его можно включить явно. Проверка слушателей: `sudo ss -Mlnp`; `uname -r` показывает запущенное ядро, но сам по себе не доказывает наличие исправления. [Xray](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31) · [Go Security Team](https://groups.google.com/g/golang-announce/c/PCoQcdxoScw/m/aD-MgXEvAAAJ).
 
 ## Лицензия
 

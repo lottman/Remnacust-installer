@@ -37,6 +37,17 @@ class PagesTests(unittest.TestCase):
             self.assertEqual(pages.existing_target(self.root, self.root / 'other', self.item['project'])['id'], self.id)
             self.assertIsNone(pages.existing_target(self.root, self.root / 'other', 'other-project'))
 
+    def test_new_standalone_caddy_disables_implicit_mptcp_and_leaves_other_projects_unchanged(self):
+        before = self.compose.read_bytes()
+        destination = self.root / 'new-subscription-page'
+        with patch.object(pages.connection, 'resolve', return_value=('https://panel.example.test', None)), patch.object(pages.connection, 'probe'), patch.object(pages, 'command', return_value=''), patch.object(pages, 'ready'):
+            pages.install(self.root, destination, 'fresh-page', 'https://panel.example.test', 'fixture.valid.token', '3012', 'page:fixture', domain='sub.example.test', proxy='caddy')
+        service = runtime.load(destination / 'docker-compose.yml')['services']['caddy']
+        self.assertEqual(service['environment'], {'GODEBUG': 'multipathtcp=0'})
+        self.assertNotIn('sysctls', service)
+        self.assertNotIn('privileged', service)
+        self.assertEqual(self.compose.read_bytes(), before)
+
     def test_ambiguous_repeat_install_does_not_pick_an_arbitrary_page(self):
         other = {**self.item, 'directory': str(self.root / 'other'), 'project': 'other-project'}
         runtime.write(self.root / 'registry/subscription-pages' / (pages.identity(other) + '.json'), other)

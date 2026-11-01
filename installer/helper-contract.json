@@ -46,8 +46,8 @@
       "sha256": "d9d1d35c135c65446c44e54afe65705e1ded4f915e7dcdd218e940183721e9d0"
     },
     "runtime.py": {
-      "bytes": 73442,
-      "sha256": "68caa61e7576a57827d8de5ea240a360710cdb732dd00fca2e338b58a3dac9bb"
+      "bytes": 73485,
+      "sha256": "d66f72beff1c535f758efb56645792a7d49c24421924467b2f64df1953596e04"
     },
     "stable_entry.py": {
       "bytes": 411,
@@ -70,8 +70,8 @@
       "sha256": "c1680cb30fafa6e4ac1a390ccd1b39526793d086d312011f00ab61ab25eac5df"
     },
     "subscription_pages.py": {
-      "bytes": 29417,
-      "sha256": "ca1e89865f10c49faaa059649a03a27d8ad8de923bcad7fee8b850b64d584073"
+      "bytes": 29463,
+      "sha256": "32cb3884964f7fd62763df930866f2f426cbc772516fb1b960506b4f003c7f2b"
     },
     "tls.py": {
       "bytes": 9486,
@@ -87,5 +87,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.121"
+  "version": "1.2.122"
 }

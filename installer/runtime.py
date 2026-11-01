@@ -797,7 +797,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
                     'interval': '5s', 'timeout': '5s', 'retries': 12, 'start_period': '20s'})
         volumes = {name: {} for name in ['database', 'valkey-socket', 'backups']}
         if proxy == 'caddy':
-            services['caddy'] = dict(common, image='caddy:2-alpine', ports=['80:80', '443:443', '443:443/udp'],
+            services['caddy'] = dict(common, image='caddy:2-alpine', environment={'GODEBUG': 'multipathtcp=0'}, ports=['80:80', '443:443', '443:443/udp'],
                                      volumes=[str(directory / 'Caddyfile') + ':/etc/caddy/Caddyfile:ro', 'caddy-data:/data', 'caddy-config:/config'])
             volumes.update({'caddy-data': {}, 'caddy-config': {}})
         result = {'name': project, 'services': services, 'volumes': volumes}

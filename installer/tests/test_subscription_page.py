@@ -13,6 +13,13 @@ import tls
 
 
 class SubscriptionPageTests(unittest.TestCase):
+    def test_fresh_caddy_uses_plain_tcp_without_modifying_host_kernel_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config, state = runtime.fresh('panel', directory, 'fixture-panel', 'panel:fixture', 'panel.example.com', proxy='caddy')
+            self.assertEqual(config['services']['caddy']['environment']['GODEBUG'], 'multipathtcp=0')
+            self.assertNotIn('sysctls', config['services']['caddy'])
+            self.assertNotIn('privileged', config['services']['caddy'])
+
     def test_domains_require_a_distinct_host_without_a_path(self):
         self.assertEqual(runtime.subscription_domains(' Sub.Example.com/,https://alias.example.com ', 'panel.example.com'),
                          ['sub.example.com', 'alias.example.com'])

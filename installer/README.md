@@ -1,6 +1,6 @@
 # Установщик Remnacust — справочник
 
-**Установщик 1.2.121**: панель/страница 1.1.7.85, Node 1.1.20, Core 1.1.12 на стабильном Xray v26.10.31. Поддерживаются Ubuntu 22.04/24.04/26.04 LTS и Linux amd64/arm64. Версии, быстрый запуск и пути: [основной README](../README.md).
+**Установщик 1.2.122**: панель/страница 1.1.7.86, Node 1.1.20, Core 1.1.12 на стабильном Xray v26.10.31. Поддерживаются Ubuntu 22.04/24.04/26.04 LTS и Linux amd64/arm64. Версии, быстрый запуск и пути: [основной README](../README.md).
 
 ## Основной домен подписки и .env
 
@@ -23,16 +23,16 @@ CDN хранится в реестре панели и привязываетс�
 ## Установка
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.121
-sudo bash installer.sh install-node --version 1.2.121
-sudo bash installer.sh install-subscription-page --version 1.2.121
+sudo bash installer.sh install-panel --version 1.2.122
+sudo bash installer.sh install-node --version 1.2.122
+sudo bash installer.sh install-subscription-page --version 1.2.122
 ```
 
 Обязательные пустые поля запрашиваются повторно; y/n следует своему показанному default. Домен подтверждается отдельно с default `y`. При автоматизации используйте `--yes` вместе со всеми необходимыми параметрами и явным выбором `--subscription-page` / `--no-subscription-page`.
 
 | Параметр | Назначение |
 | --- | --- |
-| `--version latest|1.2.121` | Выпуск комплекта установщика. |
+| `--version latest|1.2.122` | Выпуск комплекта установщика. |
 | `--domain DOMAIN` | Домен компонента без протокола, порта и пути. |
 | `--port PORT` | Loopback-порт панели или API-порт ноды. |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Явное определение существующей установки. |
@@ -134,3 +134,10 @@ sudo remnacust uninstall-subscription-page --page-id ID
 `Source checks` проверяет скрипт, Docker-сценарии, права, proxy и пакетирование на отдельных тестовых ресурсах. `Publish Docker release` запускается вручную по тегу; проверяет версии/архитектуры, шесть образов и совместную работу панели со страницей, затем создаёт черновик с контрольными суммами. После проверки публичного скачивания выпуск публикуется отдельно.
 
 Изменение README не требует новых версий, перепаковки helper-bundle или изменения закреплённых коммитов компонентов. [Порядок выпуска](../docs/PUBLISHING.md) · [Лицензии](../NOTICE.md).
+
+## MPTCP и ядро Linux
+
+Xray v26.10.31 выключает MPTCP по умолчанию и сохраняет явный `streamSettings.sockopt.tcpMptcp`. Новые отдельные Caddy-службы панели и страницы подписки получают `GODEBUG=multipathtcp=0`. Существующий общий proxy при обновлении приложения не перенастраивается и не перезапускается. Для других Go-служб проверьте эту настройку отдельно.
+
+CVE-2026-98432 исправляется обновлением ядра хоста и загрузкой исправленного ядра; обновление Docker-образа этого не делает. Проверяйте статус конкретного пакета по бюллетеню дистрибутива. До подтверждения исправления MPTCP должен оставаться выключенным. После исправления его можно включить явно. Проверка слушателей: `sudo ss -Mlnp`; `uname -r` показывает запущенное ядро, но сам по себе не доказывает наличие исправления. [Xray](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31) · [Go Security Team](https://groups.google.com/g/golang-announce/c/PCoQcdxoScw/m/aD-MgXEvAAAJ).
+
