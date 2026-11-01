@@ -219,6 +219,17 @@ jobs:
               sources=[x['registry'] for x in entry['architectures'].values()]
               subprocess.run(['docker','buildx','imagetools','create','--tag',f'ghcr.io/lottman/remnacust-{component}:{entry["version"]}-{tag}',*sources],check=True)
           PY
+      - name: Verify panel and subscription page gateway together
+        env:
+          REMNACUST_TEST_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-alpine
+          REMNACUST_TEST_VALKEY_IMAGE: mirror.gcr.io/valkey/valkey:9-alpine
+        run: |
+          version=$(python3 -c 'import json;print(json.load(open("source/images.json"))["components"]["panel"]["version"])')
+          panel="ghcr.io/lottman/remnacust-panel:$version-$RELEASE_TAG-amd64"
+          page="ghcr.io/lottman/remnacust-subscription-page:$version-$RELEASE_TAG-amd64"
+          docker pull "$panel"
+          docker pull "$page"
+          bash scripts/check-panel-runtime.sh "$panel" "$version" "$page"
       - name: Create draft release with verified images
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

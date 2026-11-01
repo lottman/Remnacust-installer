@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 image=${1:?Pass panel image}
 version=${2:?Pass expected version}
+page_image=${3:-}
 project_root=$(cd "$(dirname "$0")/.." && pwd)
 postgres_image=${REMNACUST_TEST_POSTGRES_IMAGE:-postgres:17-alpine}
 valkey_image=${REMNACUST_TEST_VALKEY_IMAGE:-valkey/valkey:9-alpine}
@@ -25,6 +26,7 @@ containers+=("$(docker run -d --name "$name-redis" --network "$network" --networ
 for attempt in $(seq 1 30);do docker exec "$name-db" pg_isready -U postgres >/dev/null 2>&1 && break;sleep 1;done
 secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 containers+=("$(docker run -d --name "$name" --network "$network" \
+    --network-alias gateway-panel \
     -e APP_SECRET="$secret" -e DATABASE_URL=postgresql://postgres@audit-db:5432/postgres \
     -e HWID_ENABLED_DEFAULT=true -e XERA_PERSONAL_SUBSCRIPTIONS=true \
     -e REDIS_HOST=audit-redis -e REDIS_PORT=6379 -e API_INSTANCES=1 -e WORKER_INSTANCES=1 \
@@ -56,6 +58,29 @@ done
 check_roles
 printf 'PASS fresh panel database and all three application roles without restarts\n'
 docker exec -i "$name" node < "$project_root/scripts/check-panel-hwid.cjs"
+
+if [[ -n $page_image ]];then
+    docker exec -i "$name" sh -c 'cat > /tmp/subscription-gateway-fixture.cjs' < "$project_root/scripts/check-subscription-gateway.cjs"
+    docker exec "$name" node /tmp/subscription-gateway-fixture.cjs prepare > "$fixture/gateway-state.json"
+    docker cp "$fixture/gateway-state.json" "$name:/tmp/subscription-gateway-state.json"
+    python3 - "$fixture/gateway-state.json" "$fixture/page.env" <<'PY'
+import json,secrets,sys
+state=json.load(open(sys.argv[1]))
+with open(sys.argv[2],'w') as output:
+    output.write('REMNAWAVE_PANEL_URL=http://gateway-panel:3000\n')
+    output.write('REMNAWAVE_API_TOKEN='+state['token']['token']+'\n')
+    output.write('APP_PORT=3010\nINTERNAL_JWT_SECRET='+secrets.token_hex(64)+'\n')
+PY
+    chmod 600 "$fixture/gateway-state.json" "$fixture/page.env"
+    containers+=("$(docker run -d --name "$name-page" --network "$network" --network-alias gateway-page --env-file "$fixture/page.env" "$page_image")")
+    ready=false
+    for attempt in $(seq 1 60);do
+        if docker exec "$name-page" node -e 'fetch("http://127.0.0.1:3010/internal/health").then(r=>{if(r.status!==200)process.exitCode=1}).catch(()=>process.exitCode=1)' >/dev/null 2>&1;then ready=true;break;fi
+        sleep 2
+    done
+    [[ $ready == true ]] || { echo 'Paired subscription page did not become ready';exit 1; }
+    docker exec "$name" node /tmp/subscription-gateway-fixture.cjs verify
+fi
 
 # Reproduce the historical comment-only checksum conflict in this disposable DB.
 # The installer preflight must accept the known source variants without changing
