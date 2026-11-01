@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='7228ca01f60b32c15f9f322d975a9d25ffc53a533780fc93a0fcc39f9f06b7ce'
+HELPER_BUNDLE_SHA256='e76a779111835e8f714b4cc6c8374888b12aae618e4a1a36c62c000a35f24749'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -18,6 +18,7 @@ SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSC
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
 NODE_NET_ADMIN=false
 NODE_NET_ADMIN_ADDED=false
+ALLOW_DISRUPTION=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
 DB_CHANGED=false MARZBAN_URL='' DESTINATION_URL='' INTERNAL_SQUAD='' DRY_RUN=false
@@ -175,6 +176,7 @@ Remnacust · installer.sh
   --panel-ip IP[/CIDR]      Все входящие порты и ping только от панели, кроме SSH
   --backup PATH             Каталог копии для restore-panel
   --yes                     Пропустить подтверждение выбранного действия
+  --allow-disruption        upgrade-panel: разрешить обновление без гарантии работы нод
   --source-url URL          Адрес Marzban для переноса
   --destination-url URL     Адрес уже установленной панели Remnacust
   --internal-squad UUID     Внутренний сквад для перенесённых пользователей
@@ -341,6 +343,7 @@ parse_args() {
             --net-admin|--no-net-admin)
                 $PANEL_NET_ADMIN_SET && die 'Выберите один вариант NET_ADMIN для панели'
                 PANEL_NET_ADMIN_SET=true; [[ $1 != --net-admin ]] || PANEL_NET_ADMIN=true;;
+            --allow-disruption) ALLOW_DISRUPTION=true;;
             --yes) YES=true;; --dry-run) DRY_RUN=true;; --preserve-subhash) PRESERVE_SUBHASH=true;;
             --help|-h) usage; return 10;; *) die "Неизвестная команда или параметр: $1";;
         esac; shift
@@ -359,6 +362,7 @@ parse_args() {
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
     [[ $ACTION == install-* || $ACTION == change-domain || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Параметры TLS доступны при установке и смене домена; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
+    [[ $ALLOW_DISRUPTION == false || $ACTION == upgrade-panel ]] || die '--allow-disruption доступен только для upgrade-panel'
     if [[ $ACTION != migrate-marzban-panel ]] && { $DRY_RUN || $PRESERVE_SUBHASH || [[ -n $MARZBAN_URL$DESTINATION_URL$INTERNAL_SQUAD ]]; }; then die 'Параметры Marzban предназначены только для migrate-marzban-panel'; fi
 }
 component_installed() {
@@ -2373,6 +2377,53 @@ schedule_certificate_renewal() {
         systemctl enable --now "$service.timer"
     else info "Готовый сертификат подключён. После продления выполните remnacust renew-$COMPONENT-certificate."; fi
 }
+panel_continuity_preflight() {
+    [[ $ACTION == upgrade-panel && $COMPONENT == panel ]] || return 0
+    if $ALLOW_DISRUPTION; then
+        info 'ВНИМАНИЕ: --allow-disruption: работа нод во время обновления панели не гарантируется.'
+        return 0
+    fi
+    local id count
+    # Discovery captured the current container before any Compose changes.
+    if ! id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[0]["Id"])' "$WORK/container.before.json" 2>/dev/null) ||
+       [[ ! $id =~ ^[a-f0-9]{12,64}$ ]]; then
+        die 'Не удалось проверить непрерывность работы нод; приложения не остановлены. Для обновления с возможным перерывом явно укажите --allow-disruption.'
+    fi
+    # Inspect the entry without executing it: an old CLI may open an interactive menu.
+    if ! timeout --kill-after=5s 10s docker exec "$id" node -e '
+try {
+    const fs = require("node:fs"), file = "/opt/app/dist/cli.js";
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > 16 * 1024 * 1024 ||
+        !fs.readFileSync(file, "utf8").includes("check-node-continuity")) process.exit(1);
+} catch { process.exit(1); }
+' >/dev/null 2>&1; then
+        # Use the already verified candidate image to check older panels without
+        # executing their interactive CLI or stopping their applications.
+        if ! count=$(python3 -I "$HELPER_ROOT/panel_continuity.py" --inspect "$WORK/container.before.json" --image "$IMAGE" 2>/dev/null) ||
+           [[ ! $count =~ ^[0-9]{1,5}$ ]]; then
+            die 'Автономность нод не подтверждена; приложения не остановлены. Проверьте ноды или явно укажите --allow-disruption для обслуживания с возможным перерывом.'
+        fi
+        info "Непрерывность работы нод подтверждена: $count."
+        return 0
+    fi
+    # Bound both runtime and output inside the container. Only a validated count
+    # crosses into installer output; CLI diagnostics may contain private details.
+    if ! count=$(timeout --kill-after=5s 130s docker exec "$id" node -e '
+try {
+    const result = require("node:child_process").spawnSync(process.execPath,
+        ["/opt/app/dist/cli.js", "check-node-continuity"],
+        { timeout: 120000, maxBuffer: 16384, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "ignore"] });
+    if (result.error || result.signal || result.status !== 0) process.exit(1);
+    const value = JSON.parse(result.stdout.toString("utf8"));
+    if (value?.ready !== true || !Number.isSafeInteger(value.nodeCount) || value.nodeCount < 0) process.exit(1);
+    process.stdout.write(String(value.nodeCount));
+} catch { process.exit(1); }
+' 2>/dev/null) || [[ ! $count =~ ^[0-9]{1,16}$ ]]; then
+        die 'Непрерывность работы нод не подтверждена; приложения не остановлены. Проверьте готовность нод или явно укажите --allow-disruption для обновления с возможным перерывом.'
+    fi
+    info "Непрерывность работы нод подтверждена: $count."
+}
 node_acl() {
     [[ -n $PANEL_IP ]] || { info "Ограничьте TCP $PORT адресом панели в firewall провайдера"; return; }
     command -v nft >/dev/null || apt-get install -y --no-install-recommends nftables
@@ -2458,6 +2509,7 @@ deploy() {
         docker compose --project-name "$PROJECT" --project-directory "$DEPLOY" -f "$WORK/compose.after.json" \
             --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.validated.json"
         report_update_progress applying 'Применение Compose и обновление приложений' running
+        panel_continuity_preflight
         CHANGED=true
         helper commit-compose --source "$WORK/compose.after.json" --state "$STATE" --directory "$BACKUP" \
             --version "${COMPONENT_VERSION:-${TAG#v}}" --key "$TAG"

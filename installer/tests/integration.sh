@@ -76,7 +76,10 @@ await p.$executeRawUnsafe('UPDATE users SET trojan_password=$1, ss_password=$1 W
 await p.$executeRawUnsafe('ALTER TABLE admin RENAME TO xera_admin');await p.$executeRawUnsafe('ALTER TABLE remnawave_settings RENAME TO xera_remnawave_settings');})().finally(()=>p.$disconnect()).catch(()=>process.exitCode=1);
 JS
 ACTION=upgrade-panel; CONTAINER=$new_id; CHANGED=false; DB_CHANGED=false
+# This historical image predates the private continuity command; bootstrap is explicit.
+ALLOW_DISRUPTION=true
 deploy
+ALLOW_DISRUPTION=false
 # Verify with a protected helper instead of printing test secrets.
 docker inspect "$(compose ps --quiet remnawave)" > "$WORK/container.before.json"; database_environment
 database_run snapshot > "$WORK/verified.json"
