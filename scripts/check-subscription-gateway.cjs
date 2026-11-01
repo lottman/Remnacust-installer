@@ -27,6 +27,7 @@ async function prepare() {
     const alias = await api('subscription-domains', 'POST', { name: 'Gateway CDN fixture', domain: 'gateway-cdn.example.test', kind: 'CDN', parentUuid: main.uuid, isDefault: false, path: '' }, admin);
     assert.equal(alias.status, 201);
     const cdn = alias.body.response;
+    assert.match(cdn.requestHeaderName, /^X-[a-f0-9]{24}$/);
     const created = await api('users', 'POST', { username: 'gateway_fixture_user', hwidDeviceLimit: 0, expireAt: new Date(Date.now() + 3600000).toISOString(), subscriptionDomainUuid: cdn.uuid }, admin);
     assert.equal(created.status, 201);
     const user = created.body.response;
@@ -43,12 +44,12 @@ async function prepare() {
     const state = { admin, cdn, user, token: token.body.response, file };
     process.stdout.write(JSON.stringify(state));
 }
-function page(route, agent = 'INCY/2.6.2/iOS', cdnId) {
+function page(route, agent = 'INCY/2.6.2/iOS', cdnId, headerName = 'X-Remnacust-CDN') {
     return new Promise((resolve, reject) => {
         const request = http.get({ hostname: 'gateway-page', port: 3010, path: route,
             headers: { ...headers, host: 'sub.example.com', 'User-Agent': agent,
                 Accept: agent.startsWith('Mozilla/') ? 'text/html' : '*/*',
-                ...(cdnId ? { 'X-Remnacust-CDN': cdnId } : {}),
+                ...(cdnId ? { [headerName]: cdnId } : {}),
                 'X-Forwarded-Host': 'forged.example.test', 'X-Remnacust-Subscription-Domain': crypto.randomUUID() }, timeout: 15000 }, response => {
             const chunks = []; let size = 0;
             response.on('data', chunk => { size += chunk.length; if (size > 2 * 1024 * 1024) request.destroy(Error('Fixture response too large')); else chunks.push(chunk); });
@@ -70,6 +71,10 @@ async function verify() {
     const header = await page('/' + state.user.shortUuid + '/json', undefined, state.cdn.uuid);
     assert.equal(header.status, 200, 'A configured CDN request header accepts an unchanged client URL');
     assert.ok(Array.isArray(JSON.parse(header.body)));
+    const neutral = await page('/' + state.user.shortUuid + '/json', undefined, state.cdn.uuid, state.cdn.requestHeaderName);
+    assert.equal(neutral.status, 200, 'The individual neutral header resolves an unchanged subscription URL');
+    assert.ok(Array.isArray(JSON.parse(neutral.body)));
+    assert.equal((await page('/' + state.user.shortUuid + '/json', undefined, state.cdn.uuid, 'X-000000000000000000000000')).status, 404, 'A neutral header name must match its domain ID');
     assert.equal((await page('/' + state.user.shortUuid + '/json', undefined, crypto.randomUUID())).status, 404, 'Unknown CDN headers cannot silently fall back to the main domain');
     assert.equal((await page(prefix + '/' + state.user.shortUuid + '/json', undefined, crypto.randomUUID())).status, 404, 'Conflicting path and header IDs are rejected');
     const html = await page(prefix + '/' + state.user.shortUuid, 'Mozilla/5.0');
@@ -88,7 +93,7 @@ async function verify() {
     assert.equal((await api('geofiles/' + state.file.id, 'DELETE', undefined, state.admin)).status, 200);
     assert.ok([200, 204].includes((await api('tokens/' + state.token.uuid, 'DELETE', undefined, state.admin)).status));
     await db.admin.deleteMany({ where: { username: 'gateway_fixture_admin' } });
-    console.log('PASS paired release images: CDN request header with unchanged client URL, conflicting selectors, rewritten origin Host, scoped page token, JSON, HTML/QR, geofiles and legacy URLs');
+    console.log('PASS paired release images: individual neutral CDN name, legacy compatibility, invalid name rejection, unchanged URL, scoped token, JSON, HTML/QR and geofiles');
 }
 (process.argv[2] === 'prepare' ? prepare() : verify())
     .catch(error => { console.error(error.stack ?? error.message); process.exitCode = 1; })
