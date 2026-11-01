@@ -1,4 +1,4 @@
-"""Exercise the installer gate with a real Node CLI and no Docker daemon."""
+"""Exercise the nonblocking installer diagnostics with a real Node CLI and no Docker daemon."""
 import json
 import os
 from pathlib import Path
@@ -104,7 +104,7 @@ class PanelContinuityTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_failure_invalid_json_and_invalid_counts_fail_closed_without_leaks(self):
+    def test_failure_invalid_json_and_invalid_counts_warn_without_leaks(self):
         cases = [
             'console.log(JSON.stringify({ready:true,nodeCount:1}));process.exit(1);',
             'console.log(JSON.stringify({ready:false,nodeCount:1}));',
@@ -119,36 +119,38 @@ class PanelContinuityTests(unittest.TestCase):
         for body in cases:
             with self.subTest(body=body):
                 result, _ = self.run_gate(body)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn('--allow-disruption', result.stderr)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn('Обновление продолжается', result.stdout)
 
     def test_legacy_marker_is_checked_without_executing_an_interactive_cli(self):
         result, trace = self.run_gate(
             'require("node:fs").writeFileSync(__dirname+"/interactive", "bad");', marker=False,
         )
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 0)
         self.assertEqual(trace, ['timeout --kill-after=5s 10s', 'detect'])
         self.assertFalse((self.root / 'interactive').exists())
-        self.assertIn('--allow-disruption', result.stderr)
+        self.assertIn('Обновление продолжается', result.stdout)
 
     def test_actual_child_timeout_and_docker_failures_are_generic(self):
         result, _ = self.run_gate('setInterval(()=>{},1000);', TEST_FAST_TIMEOUT='true')
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Обновление продолжается', result.stdout)
         for phase in ['detect', 'check']:
             with self.subTest(phase=phase):
                 result, _ = self.run_gate('console.log("{}");', TEST_DOCKER_FAILURE=phase)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn('--allow-disruption', result.stderr)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn('Обновление продолжается', result.stdout)
 
     def test_missing_or_invalid_current_container_never_executes_cli(self):
         for data in ['', '[]', json.dumps([{'Id': PRIVATE}])]:
             with self.subTest(data=data):
                 (self.root / 'container.before.json').write_text(data)
                 result, trace = self.run_gate('console.log("{}");')
-                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn('Обновление продолжается', result.stdout)
                 self.assertEqual(trace, [])
 
-    def test_only_explicit_override_bypasses_and_other_actions_are_untouched(self):
+    def test_legacy_override_skips_diagnostics_and_other_actions_are_untouched(self):
         result, trace = self.run_gate('', TEST_ALLOW_DISRUPTION='true')
         self.assertEqual(result.returncode, 0)
         self.assertIn('--allow-disruption', result.stdout)
@@ -159,11 +161,11 @@ class PanelContinuityTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(trace, [])
 
-    def test_deploy_refuses_before_compose_commit_or_any_application_stop(self):
+    def test_deploy_warns_and_continues_when_autonomy_is_unconfirmed(self):
         result, trace = self.run_gate('console.log("{}");', TEST_DEPLOY='true')
-        self.assertEqual(result.returncode, 1)
-        self.assertNotIn('commit', trace)
-        self.assertFalse(any(row.startswith('stop ') for row in trace))
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Обновление продолжается', result.stdout)
+        self.assertEqual(trace[-2:], ['commit', 'stop api worker scheduler'])
         self.assertNotIn('recovery', trace)
 
     def test_deploy_success_checks_before_commit_and_all_application_stops(self):
@@ -182,7 +184,8 @@ class PanelContinuityTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn('--allow-disruption', result.stderr)
         result, _ = self.run_gate('console.log("{}");')
-        self.assertEqual(result.returncode, 1)  # HARNESS already sets YES=true.
+        self.assertEqual(result.returncode, 0)  # No special bypass is required.
+        self.assertIn('Обновление продолжается', result.stdout)
 
 
 if __name__ == '__main__':

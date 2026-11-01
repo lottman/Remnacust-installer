@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='e76a779111835e8f714b4cc6c8374888b12aae618e4a1a36c62c000a35f24749'
+HELPER_BUNDLE_SHA256='811ba61d52d072dc5fad97cd087aba9a0492d5a6d51f9750bcd16a5a0c95cf5a'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -176,7 +176,7 @@ Remnacust · installer.sh
   --panel-ip IP[/CIDR]      Все входящие порты и ping только от панели, кроме SSH
   --backup PATH             Каталог копии для restore-panel
   --yes                     Пропустить подтверждение выбранного действия
-  --allow-disruption        upgrade-panel: разрешить обновление без гарантии работы нод
+  --allow-disruption        upgrade-panel: пропустить диагностику автономности нод
   --source-url URL          Адрес Marzban для переноса
   --destination-url URL     Адрес уже установленной панели Remnacust
   --internal-squad UUID     Внутренний сквад для перенесённых пользователей
@@ -2387,7 +2387,8 @@ panel_continuity_preflight() {
     # Discovery captured the current container before any Compose changes.
     if ! id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[0]["Id"])' "$WORK/container.before.json" 2>/dev/null) ||
        [[ ! $id =~ ^[a-f0-9]{12,64}$ ]]; then
-        die 'Не удалось проверить непрерывность работы нод; приложения не остановлены. Для обновления с возможным перерывом явно укажите --allow-disruption.'
+        info 'ВНИМАНИЕ: проверить автономность нод не удалось. Обновление продолжается; у зависимых от панели нод возможен перерыв связи.'
+        return 0
     fi
     # Inspect the entry without executing it: an old CLI may open an interactive menu.
     if ! timeout --kill-after=5s 10s docker exec "$id" node -e '
@@ -2402,7 +2403,8 @@ try {
         # executing their interactive CLI or stopping their applications.
         if ! count=$(python3 -I "$HELPER_ROOT/panel_continuity.py" --inspect "$WORK/container.before.json" --image "$IMAGE" 2>/dev/null) ||
            [[ ! $count =~ ^[0-9]{1,5}$ ]]; then
-            die 'Автономность нод не подтверждена; приложения не остановлены. Проверьте ноды или явно укажите --allow-disruption для обслуживания с возможным перерывом.'
+            info 'ВНИМАНИЕ: автономность нод не подтверждена. Обновление продолжается; у зависимых от панели нод возможен перерыв связи.'
+            return 0
         fi
         info "Непрерывность работы нод подтверждена: $count."
         return 0
@@ -2420,7 +2422,8 @@ try {
     process.stdout.write(String(value.nodeCount));
 } catch { process.exit(1); }
 ' 2>/dev/null) || [[ ! $count =~ ^[0-9]{1,16}$ ]]; then
-        die 'Непрерывность работы нод не подтверждена; приложения не остановлены. Проверьте готовность нод или явно укажите --allow-disruption для обновления с возможным перерывом.'
+        info 'ВНИМАНИЕ: автономность нод не подтверждена. Обновление продолжается; у зависимых от панели нод возможен перерыв связи.'
+        return 0
     fi
     info "Непрерывность работы нод подтверждена: $count."
 }
