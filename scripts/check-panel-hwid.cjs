@@ -27,6 +27,46 @@ async function createUser(name, limit) {
     users.push(BigInt(result.body.response.id));
     return result.body.response;
 }
+async function checkDomains() {
+    let alias, reader;
+    try {
+        assert.equal((await request('/api/subscription-domains', 'GET', undefined, false)).status, 401);
+        const listed = await request('/api/subscription-domains');
+        assert.equal(listed.status, 200, 'Domain list through the real domain module and JWT guard');
+        const main = listed.body.response.find(domain => domain.isDefault);
+        assert.equal(main.domain, 'sub.example.com', 'Domain from SUB_PUBLIC_DOMAIN must be visible');
+        assert.equal((await request('/api/subscription-domains/' + main.uuid)).status, 200);
+        const body = { name: 'Runtime CDN', domain: 'cdn-fixture.example.com', path: '', kind: 'CDN', parentUuid: main.uuid, isDefault: false };
+        const created = await request('/api/subscription-domains', 'POST', body);
+        assert.equal(created.status, 201);
+        alias = created.body.response;
+        const changed = await request('/api/subscription-domains/' + alias.uuid, 'PATCH', { ...body, name: 'Renamed CDN' });
+        assert.equal(changed.status, 200);
+        assert.equal(changed.body.response.name, 'Renamed CDN');
+        const issued = await request('/api/tokens', 'POST', { name: 'Domain runtime reader', expiresInDays: 1, scopes: ['subscription-domains:read'] });
+        assert.equal(issued.status, 201);
+        reader = issued.body.response;
+        const readAsToken = async (method = 'GET') => fetch('http://127.0.0.1:3000/api/subscription-domains', {
+            method, headers: { ...headers, Authorization: 'Bearer ' + reader.token },
+            ...(method === 'POST' ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000),
+        });
+        const readable = await readAsToken();
+        assert.equal(readable.status, 200, 'A read-only domain API token can list domains');
+        assert.ok((await readable.json()).response.some(domain => domain.uuid === alias.uuid));
+        const denied = await readAsToken('POST');
+        assert.equal(denied.status, 403, 'Read-only domain scope must not grant writes');
+        await denied.arrayBuffer();
+        assert.ok([200, 204].includes((await request('/api/tokens/' + reader.uuid, 'DELETE')).status));
+        const revoked = await readAsToken();
+        assert.equal(revoked.status, 403, 'Revoked API token must lose domain access immediately');
+        await revoked.arrayBuffer();
+        reader = undefined;
+    } finally {
+        if (reader) await request('/api/tokens/' + reader.uuid, 'DELETE');
+        if (alias) assert.equal((await request('/api/subscription-domains/' + alias.uuid, 'DELETE')).status, 204);
+    }
+    console.log('PASS domains: environment seed, authenticated list/get/create/update/delete, read-only scopes and immediate revocation');
+}
 async function checkGeofiles() {
     const endpoint = 'http://127.0.0.1:3000';
     let file, template;
@@ -75,6 +115,7 @@ async function main() {
         assert.equal(registration.status, 201);
         token = registration.body.response.accessToken;
         adminCreated = true;
+        await checkDomains();
         await checkGeofiles();
         const inherited = await createUser('hwid_fixture_inherited');
         assert.equal(inherited.hwidDeviceLimit, null, 'Omitted count must inherit the general limit');
