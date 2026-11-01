@@ -23,6 +23,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_migra
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_pages.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_legacy_subscription_pages.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_connection.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_domain.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_layout.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_deployment_layout.py"
 if [[ ${REMNACUST_TEST_REAL_COMPOSE:-} == 1 ]]; then

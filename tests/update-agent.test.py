@@ -358,6 +358,12 @@ class UpdateTests(unittest.TestCase):
             with self.agent.lock(): pass
 
     def test_real_unix_socket_requires_authentication_and_limits_input(self):
+        directory = self.root / 'panel'
+        directory.mkdir()
+        runtime.write(directory / '.env', 'APP_SECRET=private-domain-fixture\nSUB_PUBLIC_DOMAIN=sub.example.test\n')
+        runtime.write(directory / 'docker-compose.yml', {'services': {'api': {'env_file': ['.env']}}})
+        runtime.write(self.root / 'registry/panel.json', {**self.current, 'directory': str(directory),
+            'applications': ['api'], 'composeFiles': [str(directory / 'docker-compose.yml')]})
         token = 'b' * 64
         runtime.write(self.root / 'update-agent.json', {'token': token})
         script = Path(__file__).resolve().parents[1] / 'installer/update-agent.py'
@@ -391,6 +397,22 @@ class UpdateTests(unittest.TestCase):
             code, result = request('GET', '/status')
             self.assertEqual(code, 200)
             self.assertTrue(result['available'])
+            self.assertEqual(request('GET', '/subscription-domain', token_value='wrong')[0], 403)
+            code, original = request('GET', '/subscription-domain')
+            self.assertEqual(code, 200)
+            self.assertEqual(original['value'], 'sub.example.test')
+            self.assertNotIn('private-domain-fixture', json.dumps(original))
+            code, changed = request('POST', '/subscription-domain', json.dumps({
+                'value': 'new.example.test/client', 'expectedRevision': original['revision']}))
+            self.assertEqual(code, 200)
+            self.assertEqual(changed['value'], 'new.example.test/client')
+            code, failed = request('POST', '/subscription-domain', json.dumps({
+                'value': 'lost.example.test', 'expectedRevision': original['revision']}))
+            self.assertEqual(code, 400)
+            self.assertEqual(failed['error'], 'DOMAIN_CHANGED')
+            for body in ['not json', '{}', 'x' * 1025, json.dumps({
+                    'value': 'new.example.test', 'expectedRevision': changed['revision'], 'path': '/etc/shadow'})]:
+                self.assertEqual(request('POST', '/subscription-domain', body)[0], 400)
             for body in ['not json', '{}', 'x' * 257, json.dumps({'targetVersion': '1.1.7.5', 'requestId': self.request, 'command': 'reboot'})]:
                 self.assertEqual(request('POST', '/update', body)[0], 400)
             self.assertEqual(request('POST', '/update', json.dumps({'targetVersion': '1.1.7.4', 'requestId': self.request}))[0], 400)

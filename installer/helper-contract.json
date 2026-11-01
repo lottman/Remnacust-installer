@@ -18,8 +18,8 @@
       "sha256": "6d8501e62bfabd374b6d6e635434f0438d0af02aae391fc02f229ed11337efcc"
     },
     "helper_bundle.py": {
-      "bytes": 11512,
-      "sha256": "90625efe39ad4d993bf6ed6915b80aa709173118db4c43e7a86b21e79a01807c"
+      "bytes": 11538,
+      "sha256": "459f87fafb86fbfae49f060656469df53569e50de6e3a9072dfd8bfcefc3c8e8"
     },
     "image_cleanup.py": {
       "bytes": 4761,
@@ -61,6 +61,10 @@
       "bytes": 7075,
       "sha256": "901a0ea881ab44128dce1d5188195bc1f0e406b810f17cacf06c6ba32048d0d0"
     },
+    "subscription_domain.py": {
+      "bytes": 9532,
+      "sha256": "14905a89ebc9d16dfab21af367dc21b6ca69606881d85612fcb441e41720a5b3"
+    },
     "subscription_migration.py": {
       "bytes": 12058,
       "sha256": "c1680cb30fafa6e4ac1a390ccd1b39526793d086d312011f00ab61ab25eac5df"
@@ -78,10 +82,10 @@
       "sha256": "6f3a137f95c3caa1f58cd3aa61c1b70ff6fc8d9c3e241501c99c5c851464508b"
     },
     "update-agent.py": {
-      "bytes": 27130,
-      "sha256": "489ec8f197f6791b9b7fb976caa5f3e55d2d816c755cbb01d76157a514cf8c9f"
+      "bytes": 28388,
+      "sha256": "8c8f6f870718a89d5aaded50c91ba2c0f8e98e0093841e3d50c7c2d3ce11e2ea"
     }
   },
   "schema": 1,
-  "version": "1.2.112"
+  "version": "1.2.113"
 }

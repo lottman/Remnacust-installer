@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 
 import runtime
 import subscription_pages
+import subscription_domain
 
 SCRIPT = str(Path(__file__).resolve())
 CLI = '/usr/local/bin/remnacust'
@@ -232,6 +233,15 @@ class Agent:
             except FileNotFoundError:
                 item['job'] = None
         return {'pages': result}
+
+    def subscription_domain(self, change=None):
+        with self.lock(False) as acquired:
+            if not acquired or self.state().get('active'):
+                raise UpdateError('UPDATE_BUSY')
+            try:
+                return subscription_domain.synchronize(self.root, change)
+            except subscription_domain.DomainError as error:
+                raise UpdateError(str(error)) from None
 
     def page_start(self, page, operation, request):
         request = job_id(request)
@@ -475,6 +485,16 @@ def serve(agent):
                     return self.reply(200, agent.status())
                 if self.command == 'GET' and self.path == '/pages':
                     return self.reply(200, agent.pages())
+                if self.command == 'GET' and self.path == '/subscription-domain':
+                    return self.reply(200, agent.subscription_domain())
+                if self.command == 'POST' and self.path == '/subscription-domain':
+                    lengths = self.headers.get_all('Content-Length', [])
+                    if len(lengths) != 1 or self.headers.get('Transfer-Encoding') or not lengths[0].isdigit() or not 0 < int(lengths[0]) <= 1024:
+                        raise UpdateError('INVALID_REQUEST')
+                    data = json.loads(self.rfile.read(int(lengths[0])))
+                    if not isinstance(data, dict) or set(data) != {'value', 'expectedRevision'}:
+                        raise UpdateError('INVALID_REQUEST')
+                    return self.reply(200, agent.subscription_domain(data))
                 if self.command == 'POST' and self.path == '/pages/action':
                     lengths = self.headers.get_all('Content-Length', [])
                     if len(lengths) != 1 or self.headers.get('Transfer-Encoding') or not lengths[0].isdigit() or not 0 < int(lengths[0]) <= 256:
