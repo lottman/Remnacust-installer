@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
+package_tools=$(mktemp -d -t remnacust-test-apt.XXXXXXXX)
+trap 'rm -f -- "$package_tools/apt-get"; rmdir -- "$package_tools"' EXIT
+printf '#!/usr/bin/env bash\nprintf "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\\n"\n' > "$package_tools/apt-get"
+chmod +x "$package_tools/apt-get"
+export PATH="$package_tools:$PATH"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/helper_bundle.py" check --root "$root"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_system_packages.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_helper_bundle.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/tests/test_node_firewall.py"
 bash "$root/installer/tests/bootstrap.sh"

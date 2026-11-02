@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='c1357f64edb63ee0b147f7761629499915671a5b54ee6132a4281657465d53db'
+HELPER_BUNDLE_SHA256='1d4d132a30231124733eae69e4ea119cee54c55ad0b9bdae03f50d1bc7cb5ae7'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -186,6 +186,9 @@ Remnacust · installer.sh
 
 Версия запрашивается перед установкой/обновлением/миграцией; Enter = latest.
 Подтверждение: y/n; Enter = n. Регистр и пробелы не важны.
+Перед каждым выбранным действием: apt update и apt upgrade (также статус, журналы и проверка выпуска).
+На вопросы пакетов отвечайте в SSH-терминале; --yes их не пропускает. Без терминала изменение пакетов требует SSH.
+Справка, меню, выход и --dry-run пакеты не изменяют. Автоматической перезагрузки сервера нет.
 После удаления доступна только новая установка через install-panel/install-node.
 Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS / 26.04 LTS, amd64 / arm64.
 SECRET_KEY виден при вводе или задаётся через REMNACUST_NODE_SECRET. В журналы он не записывается.
@@ -538,6 +541,55 @@ step() {
     if ((status)); then printf '%s  × %s · журнал: %s%s\n' "$ROSE" "$title" "$LOG" "$RESET" >&2; return "$status"; fi
     info "✓ $title"
 }
+package_step() {
+    local title=$1 operation=$2 status=0 plan='' stage=checking; shift 2
+    [[ -z ${SOURCE:-} ]] || stage=preparation
+    local -a apt_command=(apt-get -o DPkg::Lock::Timeout=120 -o APT::Get::Assume-Yes=false -o APT::Get::Assume-No=false "$operation" "$@")
+    command -v apt-get >/dev/null || die 'Нужен APT: системные пакеты обновляются на сервере Ubuntu/Debian'
+    info "$title"
+    [[ -z ${LOG:-} ]] || printf 'APT %s: started\n' "$operation" >> "$LOG"
+    report_update_progress "$stage" "$title" running
+    if [[ ! -t 0 || ! -t 1 || ! -t 2 ]]; then
+        if [[ $operation != update ]]; then
+            plan=$(mktemp "${WORK:-${TMPDIR:-/tmp}}/remnacust-apt-plan.XXXXXXXX") || return $?
+            LC_ALL=C DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" --simulate > "$plan" 2>&1 || status=$?
+            if ((status)); then
+                cat -- "$plan" >&2; rm -f -- "$plan"
+                report_update_progress "$stage" "$title" failed
+                return "$status"
+            fi
+            if grep -Eq '^(Inst|Conf|Remv) ' "$plan" || ! grep -Eq '^0 upgraded, 0 newly installed, 0 to remove' "$plan"; then
+                cat -- "$plan" >&2; rm -f -- "$plan"
+                printf 'Системные пакеты требуют интерактивного обновления. Запустите эту команду в SSH-терминале и ответьте на вопросы APT/dpkg. --yes не выбирает ответы за пользователя.\n' >&2
+                report_update_progress "$stage" 'Обновите системные пакеты в SSH-терминале' failed
+                return 75
+            fi
+            rm -f -- "$plan"
+        fi
+        apt_command+=(--assume-no)
+    fi
+    DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" || status=$?
+    [[ -z ${LOG:-} ]] || printf 'APT %s: exit %s\n' "$operation" "$status" >> "$LOG"
+    if ((status)); then
+        report_update_progress "$stage" "$title" failed
+        printf 'Обновление системных пакетов не завершено (код %s). Действие остановлено; исправьте ошибку APT/dpkg и повторите команду.\n' "$status" >&2
+        return "$status"
+    fi
+    report_update_progress "$stage" "$title" done
+    info "✓ $title"
+}
+update_system_packages() {
+    if $DRY_RUN; then
+        info 'Пробный запуск: системные пакеты не изменяются'
+        return 0
+    fi
+    case "$ACTION" in install-*|upgrade-*|migrate-remnawave-*) supported_ubuntu_codename >/dev/null || return $?;; esac
+    package_step 'Обновление списка системных пакетов' update -o APT::Update::Error-Mode=any || return $?
+    package_step 'Обновление системных пакетов; ответы выбираете вы' upgrade --with-new-pkgs || return $?
+    if [[ -f /var/run/reboot-required ]]; then
+        info 'Системе нужна перезагрузка. Выполните её отдельно в удобное время; установщик сервер не перезагружает.'
+    fi
+}
 helper() {
     if [[ -n ${LOG:-} ]]; then python3 "$HELPER" "$@" 2> >(tee -a -- "$LOG" >&2)
     else python3 "$HELPER" "$@"; fi
@@ -596,26 +648,26 @@ prepare_host() {
     [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Для установки нужен root на Linux'
     case "$(uname -m)" in x86_64|aarch64) ;; *) die 'Нужна архитектура amd64 или arm64';; esac
     if ! command -v python3 >/dev/null || ! command -v curl >/dev/null || ! command -v flock >/dev/null || ! command -v tar >/dev/null || ! command -v openssl >/dev/null; then
-        step 'Подготовка системных пакетов' apt-get update
-        step 'Python, curl, util-linux, OpenSSL' apt-get install -y ca-certificates curl python3 util-linux tar openssl
+        package_step 'Подготовка системных пакетов' update -o APT::Update::Error-Mode=any || return $?
+        package_step 'Python, curl, util-linux, OpenSSL' install ca-certificates curl python3 util-linux tar openssl || return $?
     fi
     installed_helper || return $?
     if ! command -v docker >/dev/null; then
-        step 'Индекс пакетов' apt-get update
-        step 'Ключи репозитория Docker' apt-get install -y ca-certificates curl
+        package_step 'Индекс пакетов' update -o APT::Update::Error-Mode=any || return $?
+        package_step 'Ключи репозитория Docker' install ca-certificates curl || return $?
         install -d -m 0755 /etc/apt/keyrings
         download "https://download.docker.com/linux/$id/gpg" "$WORK/docker.asc"
         install -m 0644 "$WORK/docker.asc" /etc/apt/keyrings/remnacust-docker.asc
         printf 'deb [arch=%s signed-by=/etc/apt/keyrings/remnacust-docker.asc] https://download.docker.com/linux/%s %s stable\n' "$(dpkg --print-architecture)" "$id" "$codename" > /etc/apt/sources.list.d/remnacust-docker.list
-        step 'Индекс Docker' apt-get update
-        step 'Docker Engine и Compose' apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        package_step 'Индекс Docker' update -o APT::Update::Error-Mode=any || return $?
+        package_step 'Docker Engine и Compose' install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || return $?
         systemctl enable --now docker
     fi
     docker info >/dev/null 2>&1 || die 'Docker установлен, но daemon недоступен; текущая установка не изменена'
     if ! docker compose version >/dev/null 2>&1; then
-        step 'Индекс Compose' apt-get update
-        if apt-cache show docker-compose-plugin >/dev/null 2>&1; then step 'Docker Compose plugin' apt-get install -y docker-compose-plugin
-        elif apt-cache show docker-compose-v2 >/dev/null 2>&1; then step 'Docker Compose v2' apt-get install -y docker-compose-v2
+        package_step 'Индекс Compose' update -o APT::Update::Error-Mode=any || return $?
+        if apt-cache show docker-compose-plugin >/dev/null 2>&1; then package_step 'Docker Compose plugin' install docker-compose-plugin || return $?
+        elif apt-cache show docker-compose-v2 >/dev/null 2>&1; then package_step 'Docker Compose v2' install docker-compose-v2 || return $?
         else die 'Нет пакета Compose v2 в настроенных репозиториях; Docker daemon не изменён'; fi
     fi
     docker compose version >/dev/null || die 'Нужен Docker Compose v2'
@@ -1279,6 +1331,8 @@ run_action() {
     local result
     WORK=$(mktemp -d -t remnacust-installer.XXXXXXXX); touch "$WORK/.installer-owned"; trap cleanup EXIT
     if [[ $ACTION == --check-release ]]; then
+        LOG="$WORK/system-packages.log"
+        update_system_packages || return $?
         for result in curl python3 tar; do command -v "$result" >/dev/null || die "Нужен $result"; done
         [[ -n $VERSION ]] || VERSION=latest
         installed_helper
@@ -1316,6 +1370,7 @@ PY
     [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Нужен root на Linux'
     mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
     LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
+    update_system_packages || return $?
     case "$ACTION" in
         change-domain|show-config) installed_helper; lock_operation; manage_component_action;;
         status|logs|start|stop|restart)
@@ -2310,8 +2365,8 @@ obtain_certificate() {
         install -d -m 0700 "$ACME_ROOT"
         CERTBOT="$ROOT/tools/certbot/bin/certbot"
         if [[ ! -x $CERTBOT ]] || ! "$CERTBOT" plugins --authenticators --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs" 2>/dev/null | grep -q dns-gcore; then
-            step 'Пакеты для ACME' apt-get update
-            step 'Python venv и OpenSSL' apt-get install -y python3-venv openssl
+            package_step 'Пакеты для ACME' update -o APT::Update::Error-Mode=any || return $?
+            package_step 'Python venv и OpenSSL' install python3-venv openssl || return $?
             [[ -x $ROOT/tools/certbot/bin/python ]] || step 'Среда Certbot' python3 -m venv "$ROOT/tools/certbot"
             step 'Certbot и DNS-плагины' "$ROOT/tools/certbot/bin/pip" install --disable-pip-version-check --only-binary=:all: certbot==5.8.0 certbot-dns-cloudflare==5.8.0 certbot-dns-gcore==0.1.8
         fi
@@ -2429,7 +2484,7 @@ try {
 }
 node_acl() {
     [[ -n $PANEL_IP ]] || { info "Ограничьте TCP $PORT адресом панели в firewall провайдера"; return; }
-    command -v nft >/dev/null || apt-get install -y --no-install-recommends nftables
+    command -v nft >/dev/null || package_step 'Сетевая защита ноды' install --no-install-recommends nftables || return $?
     python3 -I "$HELPER_ROOT/node_firewall.py" apply --panel "$PANEL_IP"
     info "Все входящие порты и ping разрешены только от $PANEL_IP; SSH сохранён. Клиенты VPN должны идти через главный сервер."
     info 'Отмена ограничения: python3 /etc/remnacust-node-firewall/guard.py remove'
