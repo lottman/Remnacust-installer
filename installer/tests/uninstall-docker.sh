@@ -4,6 +4,10 @@ set -Eeuo pipefail
 [[ $EUID == 0 ]] || exec sudo env PATH="$PATH" bash "$0" "$@"
 installer=${1:-$(cd "$(dirname "$0")/.." && pwd)/installer.sh}
 fixture=$(mktemp -d -t remnacust-uninstall-docker.XXXXXXXX)
+mkdir -p "$fixture/bin"
+printf '#!/usr/bin/env bash\nprintf "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\\n"\n' > "$fixture/bin/apt-get"
+chmod +x "$fixture/bin/apt-get"
+export PATH="$fixture/bin:$PATH"
 token="remnacust-uninstall-test-$(date +%s)-$$"
 export REMNACUST_ROOT="$fixture/root"
 declare -a containers=() volumes=()

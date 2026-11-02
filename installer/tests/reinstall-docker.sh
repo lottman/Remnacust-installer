@@ -5,6 +5,10 @@ set -Eeuo pipefail
 installer=${1:-$(cd "$(dirname "$0")/.." && pwd)/installer.sh}
 runtime=$(cd "$(dirname "$0")/.." && pwd)/runtime.py
 fixture=$(mktemp -d -t remnacust-reinstall-docker.XXXXXXXX)
+mkdir -p "$fixture/bin"
+printf '#!/usr/bin/env bash\nprintf "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\\n"\n' > "$fixture/bin/apt-get"
+chmod +x "$fixture/bin/apt-get"
+export PATH="$fixture/bin:$PATH"
 token="remnacust-reinstall-test-$(date +%s)-$$"
 export REMNACUST_ROOT="$fixture/root" REINSTALL_FIXTURE=$fixture REINSTALL_RUNTIME=$runtime
 old_project="$token-old"; old_volume="${old_project}_database"
