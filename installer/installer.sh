@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='76d8178cc8e24104ca6ad71a001e4b1a4c5290a20284b184f67b3d7b112f45a9'
+HELPER_BUNDLE_SHA256='c524fcf8dde981887bc20c1e0c88109089afc7db3094e4a922fc0e3d653f7987'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -186,8 +186,9 @@ Remnacust · installer.sh
 
 Версия запрашивается перед установкой/обновлением/миграцией; Enter = latest.
 Подтверждение: y/n; Enter = n. Регистр и пробелы не важны.
-Перед каждым выбранным действием: apt update и apt upgrade (также статус, журналы и проверка выпуска).
-На вопросы пакетов отвечайте в SSH-терминале; --yes их не пропускает. Без терминала изменение пакетов требует SSH.
+Перед каждым выбранным действием: apt update -y и apt upgrade -y (также статус, журналы и проверка выпуска).
+Продолжение APT подтверждается автоматически. На вопросы настройки пакетов отвечайте в SSH-терминале.
+Без терминала изменение пакетов требует SSH; --yes не выбирает настройки пакетов.
 Справка, меню, выход и --dry-run пакеты не изменяют. Автоматической перезагрузки сервера нет.
 После удаления доступна только новая установка через install-panel/install-node.
 Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS / 26.04 LTS, amd64 / arm64.
@@ -200,12 +201,12 @@ SECRET_KEY виден при вводе или задаётся через REMNA
 HELP
 }
 show_menu() {
-    local panel_note='' node_note='' panel_upgrade='Не установлена' node_upgrade='Не установлена'
-    local panel_available=false node_available=false panel_install=true node_install=true service_available=false service_note='Компоненты не установлены'
+    local panel_note='' node_note='' panel_upgrade='Не установлена' node_upgrade='Не установлена' page_upgrade='Не установлена'
+    local panel_available=false node_available=false page_available=false panel_install=true node_install=true service_available=false service_note='Компоненты не установлены'
     if component_installed panel; then panel_available=true; panel_install=false; panel_note='Уже установлена. Обновить: пункт 4; удалить: пункт 14.'; panel_upgrade=''; fi
     if component_installed node; then node_available=true; node_install=false; node_note='Уже установлена. Обновить: пункт 5; удалить: пункт 15.'; node_upgrade=''; fi
-    if $panel_available || $node_available; then service_available=true; service_note=''; fi
-    if compgen -G "$ROOT/registry/subscription-pages/*.json" >/dev/null; then service_available=true; service_note=''; fi
+    if subscription_page_installed; then page_available=true; page_upgrade=''; fi
+    if $panel_available || $node_available || $page_available; then service_available=true; service_note=''; fi
     terminal_banner
     terminal_server_card
     terminal_section 'Установка'
@@ -215,7 +216,7 @@ show_menu() {
     terminal_section 'Обновление'
     terminal_action 4 'Обновить панель' upgrade-panel "$panel_upgrade" "$panel_available"
     terminal_action 5 'Обновить ноду и Xray' upgrade-node "$node_upgrade" "$node_available"
-    terminal_action 6 'Обновить страницу подписки' upgrade-subscription-page
+    terminal_action 6 'Обновить страницу подписки' upgrade-subscription-page "$page_upgrade" "$page_available"
     terminal_section 'Перенос'
     terminal_action 7 'Панель из Remnawave' migrate-remnawave-panel
     terminal_action 8 'Нода из Remnawave' migrate-remnawave-node
@@ -229,7 +230,7 @@ show_menu() {
     terminal_text 'Данные, тома, настройки и резервные копии сохраняются.' '      ' '      ' "$DIM"
     terminal_action 14 'Удалить панель' uninstall-panel "$panel_upgrade" "$panel_available"
     terminal_action 15 'Удалить ноду' uninstall-node "$node_upgrade" "$node_available"
-    terminal_action 16 'Удалить страницу подписки' uninstall-subscription-page
+    terminal_action 16 'Удалить страницу подписки' uninstall-subscription-page "$page_upgrade" "$page_available"
     terminal_rule
     terminal_action 0 Выход ''
     printf '\n'
@@ -367,6 +368,47 @@ parse_args() {
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
     [[ $ALLOW_DISRUPTION == false || $ACTION == upgrade-panel ]] || die '--allow-disruption доступен только для upgrade-panel'
     if [[ $ACTION != migrate-marzban-panel ]] && { $DRY_RUN || $PRESERVE_SUBHASH || [[ -n $MARZBAN_URL$DESTINATION_URL$INTERNAL_SQUAD ]]; }; then die 'Параметры Marzban предназначены только для migrate-marzban-panel'; fi
+}
+subscription_page_installed() {
+    if command -v python3 >/dev/null && python3 - "$ROOT" <<'PY'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+def load(path):
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size>1024*1024:return {}
+        value=json.loads(path.read_text())
+        return value if isinstance(value,dict) else {}
+    except (OSError,ValueError):return {}
+def present(item):
+    try:
+        directory=Path(item.get('directory',''))
+        files=item.get('composeFiles',[])
+        return not item.get('uninstalled') and directory.is_absolute() and directory.is_dir() and not directory.is_symlink() and isinstance(files,list) and bool(files) and all(isinstance(value,str) and (path:=directory/value).is_file() and not path.is_symlink() for value in files)
+    except (OSError,TypeError,ValueError):return False
+try:
+    folder=root/'registry/subscription-pages'
+    if not folder.is_symlink():
+        for path in folder.glob('*.json'):
+            if present(load(path)):raise SystemExit(0)
+    panel=load(root/'registry/panel.json')
+    if not panel.get('uninstalled'):
+        if panel.get('subscriptionPage') and present(panel):raise SystemExit(0)
+        migrated=panel.get('subscriptionMigration')
+        if isinstance(migrated,dict) and present(migrated):raise SystemExit(0)
+except (OSError,TypeError,ValueError):pass
+raise SystemExit(1)
+PY
+    then return 0; fi
+    command -v docker >/dev/null || return 1
+    local image rows
+    rows=$(docker ps --all --format '{{.Image}}' 2>/dev/null) || return 1
+    while IFS= read -r image; do
+        case "${image%%@*}" in
+            ghcr.io/lottman/remnacust-subscription-page|ghcr.io/lottman/remnacust-subscription-page:*|remnawave/subscription-page|remnawave/subscription-page:*|docker.io/remnawave/subscription-page|docker.io/remnawave/subscription-page:*|ghcr.io/remnawave/subscription-page|ghcr.io/remnawave/subscription-page:*) return 0;;
+        esac
+    done <<< "$rows"
+    return 1
 }
 component_installed() {
     local component=$1 directory="$ROOT/$1" registry="$ROOT/registry/$1.json" file
@@ -544,7 +586,7 @@ step() {
 package_step() {
     local title=$1 operation=$2 status=0 plan='' stage=checking; shift 2
     [[ -z ${SOURCE:-} ]] || stage=preparation
-    local -a apt_command=(apt-get -o DPkg::Lock::Timeout=120 -o APT::Get::Assume-Yes=false -o APT::Get::Assume-No=false "$operation" "$@")
+    local -a apt_command=(apt-get -y -o DPkg::Lock::Timeout=120 -o APT::Get::Assume-No=false "$operation" "$@")
     command -v apt-get >/dev/null || die 'Нужен APT: системные пакеты обновляются на сервере Ubuntu/Debian'
     info "$title"
     [[ -z ${LOG:-} ]] || printf 'APT %s: started\n' "$operation" >> "$LOG"
@@ -560,13 +602,12 @@ package_step() {
             fi
             if grep -Eq '^(Inst|Conf|Remv) ' "$plan" || ! grep -Eq '^0 upgraded, 0 newly installed, 0 to remove' "$plan"; then
                 cat -- "$plan" >&2; rm -f -- "$plan"
-                printf 'Системные пакеты требуют интерактивного обновления. Запустите эту команду в SSH-терминале и ответьте на вопросы APT/dpkg. --yes не выбирает ответы за пользователя.\n' >&2
+                printf 'Системные пакеты требуют обновления в SSH-терминале для возможных вопросов настройки dpkg/debconf. Продолжение APT подтверждается автоматически (-y); --yes не выбирает настройки пакетов.\n' >&2
                 report_update_progress "$stage" 'Обновите системные пакеты в SSH-терминале' failed
                 return 75
             fi
             rm -f -- "$plan"
         fi
-        apt_command+=(--assume-no)
     fi
     DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" || status=$?
     [[ -z ${LOG:-} ]] || printf 'APT %s: exit %s\n' "$operation" "$status" >> "$LOG"
@@ -585,7 +626,7 @@ update_system_packages() {
     fi
     case "$ACTION" in install-*|upgrade-*|migrate-remnawave-*) supported_ubuntu_codename >/dev/null || return $?;; esac
     package_step 'Обновление списка системных пакетов' update -o APT::Update::Error-Mode=any || return $?
-    package_step 'Обновление системных пакетов; ответы выбираете вы' upgrade --with-new-pkgs || return $?
+    package_step 'Обновление системных пакетов с автоматическим подтверждением APT' upgrade --with-new-pkgs || return $?
     if [[ -f /var/run/reboot-required ]]; then
         info 'Системе нужна перезагрузка. Выполните её отдельно в удобное время; установщик сервер не перезагружает.'
     fi

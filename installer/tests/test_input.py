@@ -250,6 +250,15 @@ class InputWorkflowTests(unittest.TestCase):
                 self.assertEqual([int(number) for number in re.findall(r'^\s+(\d+)  ', plain, re.M)],
                                  [*range(1, 17), 0])
 
+    def test_missing_page_update_and_uninstall_use_the_same_gray_as_missing_panel(self):
+        command = 'source "$1"; COLUMNS=88; component_installed() { return 1; }; subscription_page_installed() { return 1; }; show_menu'
+        code, output = self.terminal(command, [], color=True)
+        self.assertEqual(code, 0, output)
+        for action in ['upgrade-panel', 'upgrade-node', 'upgrade-subscription-page', 'uninstall-subscription-page']:
+            line = next(line for line in output.splitlines() if action in line)
+            self.assertIn('\x1b[38;2;128;132;142m', line)
+        self.assertIn('Не установлена', output)
+
     def test_no_color_progress_has_no_terminal_control_codes(self):
         command = 'source "$1"; LOG="$2/progress.log"; step "Проверка" sleep .15'
         code, output = self.terminal(command, [])

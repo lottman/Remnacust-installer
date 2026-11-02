@@ -22,6 +22,9 @@ if operation=='update':sys.exit(int(os.environ.get('PACKAGE_UPDATE_STATUS','0'))
 if '--simulate' in args:
  print(os.environ.get('PACKAGE_PLAN_TEXT','Inst console-setup [1] (2 fixture)' if os.environ.get('PACKAGE_PENDING')=='1' else '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.'))
  sys.exit(int(os.environ.get('PACKAGE_PLAN_STATUS','0')))
+if '-y' not in args and '--assume-yes' not in args:
+ print('Do you want to continue? [Y/n] ',end='',flush=True)
+ sys.exit(45)
 if os.environ.get('PACKAGE_QUESTIONS')=='1':
  for prompt in ('Encoding to use on the console: ','Character set to support: ','Keep existing configuration: '):
   print(prompt,end='',flush=True)
@@ -78,8 +81,8 @@ class SystemPackageTests(unittest.TestCase):
             self.assertEqual(call['tty'], [True, True, True])
             self.assertEqual(call['frontend'], 'readline')
             self.assertEqual(call['restart'], 'i')
-            self.assertNotIn('-y', call['args'])
-            self.assertNotIn('--assume-yes', call['args'])
+            self.assertIn('-y', call['args'])
+            self.assertNotIn('APT::Get::Assume-Yes=false', call['args'])
             self.assertNotIn('--assume-no', call['args'])
         self.assertEqual([c['operation'] for c in self.calls()], ['update', 'upgrade'])
         self.assertIn('--with-new-pkgs', self.calls()[1]['args'])
@@ -120,7 +123,7 @@ class SystemPackageTests(unittest.TestCase):
         self.assertIn('ACTION-CONTINUED', result.stdout)
         self.assertEqual([c['operation'] for c in self.calls()], ['update', 'upgrade', 'upgrade'])
         self.assertIn('--simulate', self.calls()[1]['args'])
-        self.assertIn('--assume-no', self.calls()[2]['args'])
+        self.assertTrue(all('-y' in call['args'] and '--assume-no' not in call['args'] for call in self.calls()))
 
     def test_unattended_configuration_and_unknown_plans_never_apply(self):
         for plan in ('Conf console-setup (2 fixture)', 'Remv obsolete-package [1]', 'Unknown plan', ''):

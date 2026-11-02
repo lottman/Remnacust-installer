@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "9e2b4fd6d85e9e839129bbbb6ed16638253679322b453ef42c72df914589bd04",
+  "entry_sha256": "a84e160598b3a193be305d254ed4ca090498579f62b1b130f124e60e2abd859a",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -87,5 +87,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.125"
+  "version": "1.2.126"
 }
