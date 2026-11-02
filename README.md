@@ -30,12 +30,12 @@ docker compose up -d --no-build --pull never
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.124) | **1.2.124** |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.125) | **1.2.125** |
 | [Панель и страница подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.87) | **1.1.7.87** |
-| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.20) | **1.1.20**, Remnawave Node 3.4.3 |
+| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.21) | **1.1.21**, Remnawave Node 3.4.3 |
 | [Core / WASM](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.12) | **1.1.12**, стабильный Xray v26.10.31 |
 
-Версия `1.2.124` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.124.md). Новые теги/выпуски создаются отдельно от коммитов README.
+Версия `1.2.125` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.125.md). Новые теги/выпуски создаются отдельно от коммитов README.
 
 ## Обновление системных пакетов перед действиями
 
@@ -57,9 +57,9 @@ sudo bash installer.sh
 Либо выберите действие сразу:
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.124
-sudo bash installer.sh install-node --version 1.2.124
-sudo bash installer.sh install-subscription-page --version 1.2.124
+sudo bash installer.sh install-panel --version 1.2.125
+sudo bash installer.sh install-node --version 1.2.125
+sudo bash installer.sh install-subscription-page --version 1.2.125
 ```
 
 Образы опубликованы для amd64/arm64; скачивание релиза и GHCR открыто без персонального токена. Установщик проверяет выпуск, архитектуру и целостность. Docker добавляется при отсутствии; существующий daemon не переустанавливается ради обновления приложения.

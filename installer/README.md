@@ -1,6 +1,6 @@
 # Установщик Remnacust — справочник
 
-**Установщик 1.2.124**: панель/страница 1.1.7.87, Node 1.1.20, Core 1.1.12 на стабильном Xray v26.10.31. Поддерживаются Ubuntu 22.04/24.04/26.04 LTS и Linux amd64/arm64. Версии, быстрый запуск и пути: [основной README](../README.md).
+**Установщик 1.2.125**: панель/страница 1.1.7.87, Node 1.1.21, Core 1.1.12 на стабильном Xray v26.10.31. Поддерживаются Ubuntu 22.04/24.04/26.04 LTS и Linux amd64/arm64. Версии, быстрый запуск и пути: [основной README](../README.md).
 
 ## Основной домен подписки и .env
 
@@ -31,16 +31,16 @@ CDN хранится в реестре панели и привязываетс�
 ## Установка
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.124
-sudo bash installer.sh install-node --version 1.2.124
-sudo bash installer.sh install-subscription-page --version 1.2.124
+sudo bash installer.sh install-panel --version 1.2.125
+sudo bash installer.sh install-node --version 1.2.125
+sudo bash installer.sh install-subscription-page --version 1.2.125
 ```
 
 Обязательные пустые поля запрашиваются повторно; y/n следует своему показанному default. Домен подтверждается отдельно с default `y`. При автоматизации используйте `--yes` вместе со всеми необходимыми параметрами и явным выбором `--subscription-page` / `--no-subscription-page`.
 
 | Параметр | Назначение |
 | --- | --- |
-| `--version latest|1.2.124` | Выпуск комплекта установщика. |
+| `--version latest|1.2.125` | Выпуск комплекта установщика. |
 | `--domain DOMAIN` | Домен компонента без протокола, порта и пути. |
 | `--port PORT` | Loopback-порт панели или API-порт ноды. |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Явное определение существующей установки. |
