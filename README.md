@@ -30,12 +30,12 @@ docker compose up -d --no-build --pull never
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.128) | **1.2.128** |
-| [Панель и страница подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.90) | **1.1.7.90** |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.129) | **1.2.129** |
+| [Панель и страница подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.91) | **1.1.7.91** |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.21) | **1.1.21**, Remnawave Node 3.4.3 |
 | [Core / WASM](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.12) | **1.1.12**, стабильный Xray v26.10.31 |
 
-Версия `1.2.128` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.128.md). Новые теги/выпуски создаются отдельно от коммитов README.
+Версия `1.2.129` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.129.md). Новые теги/выпуски создаются отдельно от коммитов README.
 
 ## Подробные журналы
 
@@ -65,9 +65,9 @@ sudo bash installer.sh
 Либо выберите действие сразу:
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.128
-sudo bash installer.sh install-node --version 1.2.128
-sudo bash installer.sh install-subscription-page --version 1.2.128
+sudo bash installer.sh install-panel --version 1.2.129
+sudo bash installer.sh install-node --version 1.2.129
+sudo bash installer.sh install-subscription-page --version 1.2.129
 ```
 
 Образы опубликованы для amd64/arm64; скачивание релиза и GHCR открыто без персонального токена. Установщик проверяет выпуск, архитектуру и целостность. Docker добавляется при отсутствии; существующий daemon не переустанавливается ради обновления приложения.

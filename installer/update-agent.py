@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import socketserver
 import subprocess
 import time
@@ -26,6 +27,7 @@ SERVICE = 'remnacust-panel-update.service'
 UNIT_ROOT = Path('/etc/systemd/system')
 PURPOSE = b'remnacust-panel-update-v1'
 STAGES = ('checking', 'download', 'preparation', 'backup', 'applying', 'readiness', 'verifying', 'cleanup')
+MAX_LOG_BYTES = 1024 * 1024
 
 
 def record_progress(root, request, stage, label, event):
@@ -121,6 +123,83 @@ def private_log_failure(path, error):
         pass
 
 
+def start_failure_log(root, name, pattern, error):
+    try:
+        with private_log(root, name, pattern) as output:
+            private_log_event(output, 'FAILED', type(error).__name__ + ': ' + str(error))
+        return str(root / 'logs' / name)
+    except OSError:
+        return None
+
+
+def download_log(root, filename):
+    directory = root / 'logs'
+    if directory.is_symlink():
+        raise UpdateError('LOG_UNAVAILABLE')
+    path = directory / filename
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, 'rb') as source:
+            metadata = os.fstat(source.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise UpdateError('LOG_UNAVAILABLE')
+            truncated = metadata.st_size > MAX_LOG_BYTES
+            source.seek(max(0, metadata.st_size - MAX_LOG_BYTES))
+            raw = source.read(MAX_LOG_BYTES)
+    except OSError as error:
+        raise UpdateError('LOG_UNAVAILABLE') from error
+    if truncated:
+        raw = raw.partition(b'\n')[2]
+    raw = raw[:raw.rfind(b'\n') + 1]
+    text = raw.decode('utf-8', errors='replace')
+    if truncated:
+        ending = re.search(r'-----END [A-Z ]*PRIVATE KEY-----', text)
+        beginning = re.search(r'-----BEGIN [A-Z ]*PRIVATE KEY-----', text)
+        if ending and (not beginning or ending.start() < beginning.start()):
+            text = '[REDACTED PRIVATE KEY]' + text[ending.end():]
+    secrets = []
+    try:
+        secrets.append(read_json(root / 'update-agent.json')['token'])
+    except (OSError, ValueError, KeyError):
+        pass
+    directories = {root / 'panel', root / 'node', root / 'subscription-page'}
+    registry = root / 'registry'
+    records = list(registry.glob('*.json'))[:64] + list((registry / 'subscription-pages').glob('*.json'))[:32]
+    for record in records:
+        try:
+            value = read_json(record)
+            if isinstance(value.get('directory'), str):
+                directories.add(Path(value['directory']))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    for directory in directories:
+        try:
+            descriptor = os.open(directory / '.env', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, 'rb') as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    continue
+                environment = source.read(MAX_LOG_BYTES).decode('utf-8', errors='replace')
+            for match in re.finditer(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$', environment, re.M):
+                if re.search(r'secret|password|token|private|credential|api_?key|database_url|salt|dsn', match[1], re.I):
+                    value = match[2].strip().strip('\"\'')
+                    if len(value) >= 4:
+                        secrets.append(value)
+        except OSError:
+            pass
+    for secret in sorted({value for value in secrets if isinstance(value, str) and len(value) >= 4}, key=len, reverse=True):
+        text = text.replace(secret, '[REDACTED]')
+    text = re.sub(r'(?im)(authorization\s*[:=]\s*(?:bearer|basic)\s+)\S+', r'\1[REDACTED]', text)
+    text = re.sub(r'''(?im)((?:["'])?\b[A-Za-z0-9_]*(?:SECRET|PASSWORD|TOKEN|PRIVATE_?KEY|CREDENTIAL|API_?KEY|AUTHORIZATION)[A-Za-z0-9_]*(?:["'])?\s*[:=]\s*)[^\r\n]+''', r'\1[REDACTED]', text)
+    text = re.sub(r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)', '[REDACTED PRIVATE KEY]', text)
+    text = re.sub(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b', '[REDACTED]', text)
+    text = re.sub(r'([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@', r'\1[REDACTED]@', text)
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    text = ''.join(character for character in text if character in '\n\t' or ord(character) >= 32 and ord(character) != 127)
+    if truncated:
+        text = '[Download contains the last 1 MiB. The complete private log remains on the server.]\n' + text
+    return {'filename': filename, 'content': text, 'truncated': truncated}
+
+
 def latest_installer_release():
     """Resolve mutable Latest once, then let the CLI verify that exact tag."""
     repository = os.environ.get('REMNACUST_REPOSITORY', 'lottman/Remnacust-installer')
@@ -211,7 +290,7 @@ def setup(root, state_path, compose_path, inspection=None):
         runtime.write(control / 'status.json', {'active': False, 'phase': 'idle', 'jobId': None,
                                               'targetVersion': None, 'error': None}, mode=0o644)
     quoted_root = json.dumps(str(root)).replace('%', '%%')
-    unit = ('[Unit]\nDescription=Remnacust panel updates\nAfter=docker.service\n\n'
+    unit = ('[Unit]\nDescription=Remnacust maintenance API (updates on request)\nAfter=docker.service\n\n'
             '[Service]\nType=simple\nExecStart=/usr/bin/python3 -B ' + json.dumps(SCRIPT).replace('%', '%%') + ' --root ' + quoted_root + ' serve\n'
             'Restart=on-failure\nRestartSec=3\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n')
     runtime.write(UNIT_ROOT / SERVICE, unit, mode=0o644)
@@ -254,6 +333,22 @@ class Agent:
             raise UpdateError('NOT_INSTALLED')
         version(record['version'])
         return record['version']
+
+    def log(self, request, page=None):
+        request = job_id(request)
+        if page is None:
+            state = self.state()
+            if state.get('jobId') != request:
+                raise UpdateError('LOG_UNAVAILABLE')
+            filename = 'panel-update-' + request + '.log'
+        else:
+            if not isinstance(page, str) or not re.fullmatch('[a-f0-9]{24}', page):
+                raise UpdateError('INVALID_REQUEST')
+            state = read_json(self.control / ('page-' + page + '.json'))
+            if state.get('requestId') != request:
+                raise UpdateError('LOG_UNAVAILABLE')
+            filename = 'page-' + page + '-' + request + '.log'
+        return download_log(self.root, filename)
 
     def pages(self):
         result = subscription_pages.listing(self.root)
@@ -303,8 +398,9 @@ class Agent:
                 subprocess.run(['systemd-run', '--quiet', '--collect', '--service-type=exec', '--unit=remnacust-page-' + request,
                     '--property=UMask=0077', '--property=RuntimeMaxSec=7200', '/usr/bin/python3', '-B', SCRIPT,
                     '--root', str(self.root), 'page-worker', '--page-id', page, '--job', request], check=True, timeout=15)
-            except (OSError, subprocess.SubprocessError):
-                state.update(phase='failed', error='START_FAILED')
+            except (OSError, subprocess.SubprocessError) as error:
+                state.update(phase='failed', error='START_FAILED', logPath=start_failure_log(
+                    self.root, 'page-' + page + '-' + request + '.log', 'page-' + page + r'-[a-f0-9-]{36}\.log', error))
                 runtime.write(path, state)
                 raise UpdateError('START_FAILED')
             return state
@@ -414,8 +510,9 @@ class Agent:
                     '--unit=remnacust-panel-update-' + request, '--property=UMask=0077',
                     '--property=RuntimeMaxSec=7200', '/usr/bin/python3', '-B', SCRIPT,
                     '--root', str(self.root), 'worker', '--job', request], check=True, timeout=15)
-            except (OSError, subprocess.SubprocessError):
-                state.update(active=False, phase='failed', error='START_FAILED')
+            except (OSError, subprocess.SubprocessError) as error:
+                state.update(active=False, phase='failed', error='START_FAILED', logPath=start_failure_log(
+                    self.root, 'panel-update-' + request + '.log', r'panel-update-[a-f0-9-]{36}\.log', error))
                 self.save(state)
                 raise UpdateError('START_FAILED')
             return state
@@ -521,6 +618,13 @@ def serve(agent):
             try:
                 if self.command == 'GET' and self.path == '/status':
                     return self.reply(200, agent.status())
+                if self.command == 'GET' and self.path.startswith('/logs/panel/'):
+                    return self.reply(200, agent.log(self.path[len('/logs/panel/'):]))
+                if self.command == 'GET' and self.path.startswith('/logs/page/'):
+                    parts = self.path[len('/logs/page/'):].split('/')
+                    if len(parts) != 2:
+                        raise UpdateError('INVALID_REQUEST')
+                    return self.reply(200, agent.log(parts[1], parts[0]))
                 if self.command == 'GET' and self.path == '/pages':
                     return self.reply(200, agent.pages())
                 if self.command == 'GET' and self.path == '/subscription-domain':

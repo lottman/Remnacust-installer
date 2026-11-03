@@ -55,6 +55,82 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(agent.UpdateError, 'UPDATE_BUSY'):
             self.agent.start('1.1.7.6', str(uuid.uuid4()))
 
+    def test_download_is_bound_to_current_job_and_redacts_private_values(self):
+        directory = self.root / 'panel'
+        directory.mkdir()
+        runtime.write(directory / '.env', 'APP_SECRET=private-environment-secret\nSUB_PUBLIC_DOMAIN=sub.example.test\n')
+        runtime.write(self.root / 'update-agent.json', {'token': 'private-control-token'})
+        self.agent.save({'active': False, 'phase': 'failed', 'jobId': self.request})
+        with agent.private_log(self.root, 'panel-update-' + self.request + '.log', r'panel-update-[a-f0-9-]{36}\.log') as output:
+            output.write(b'actual Docker stderr: migration failed at step 3\nprivate-environment-secret\nprivate-control-token\nSECRET_KEY=unknown-private-value\nAuthorization: Bearer private-header-value\npostgresql://user:private-db-value@db/database\nunfinished private line')
+        result = self.agent.log(self.request)
+        self.assertIn('actual Docker stderr: migration failed at step 3', result['content'])
+        for value in ('private-environment-secret', 'private-control-token', 'unknown-private-value', 'private-header-value', 'private-db-value', 'unfinished private line'):
+            self.assertNotIn(value, result['content'])
+        self.assertFalse(result['truncated'])
+        with self.assertRaises(agent.UpdateError):
+            self.agent.log(str(uuid.uuid4()))
+        with self.assertRaises(ValueError):
+            self.agent.log('../etc/shadow')
+
+    def test_download_redacts_json_credentials_and_private_key_blocks(self):
+        self.agent.save({'active': False, 'phase': 'failed', 'jobId': self.request})
+        with agent.private_log(self.root, 'panel-update-' + self.request + '.log', r'panel-update-.*\.log') as output:
+            output.write(b'{"privateKey":"json-private-value"}\n-----BEGIN PRIVATE KEY-----\nprivate-key-block-value\n-----END PRIVATE KEY-----\nconnection failed: timeout\n')
+        text = self.agent.log(self.request)['content']
+        self.assertNotIn('json-private-value', text)
+        self.assertNotIn('private-key-block-value', text)
+        self.assertIn('connection failed: timeout', text)
+
+    def test_download_rejects_links_and_nonregular_files_and_bounds_large_logs(self):
+        self.agent.save({'active': False, 'phase': 'failed', 'jobId': self.request})
+        directory = self.root / 'logs'
+        directory.mkdir(mode=0o700)
+        path = directory / ('panel-update-' + self.request + '.log')
+        outside = self.root / 'private-file'
+        outside.write_text('do not disclose\n')
+        path.symlink_to(outside)
+        with self.assertRaises(agent.UpdateError):
+            self.agent.log(self.request)
+        path.unlink()
+        os.mkfifo(path)
+        with self.assertRaises(agent.UpdateError):
+            self.agent.log(self.request)
+        path.unlink()
+        path.write_text('old beginning\n' + 'diagnostic line\n' * 100000 + 'new failure details\n')
+        result = self.agent.log(self.request)
+        self.assertTrue(result['truncated'])
+        self.assertNotIn('old beginning', result['content'])
+        self.assertIn('new failure details', result['content'])
+        self.assertLess(len(result['content']), agent.MAX_LOG_BYTES + 256)
+
+    def test_page_log_is_bound_to_page_and_operation(self):
+        page = 'a' * 24
+        runtime.write(self.root / 'control' / ('page-' + page + '.json'), {'requestId': self.request})
+        with agent.private_log(self.root, 'page-' + page + '-' + self.request + '.log', r'page-.*\.log') as output:
+            output.write(b'actual subscription page update output\n')
+        self.assertIn('actual subscription page update output', self.agent.log(self.request, page)['content'])
+        with self.assertRaises(agent.UpdateError):
+            self.agent.log(str(uuid.uuid4()), page)
+        with self.assertRaises(agent.UpdateError):
+            self.agent.log(self.request, '../panel')
+
+    def test_truncated_download_does_not_reveal_a_private_key_fragment(self):
+        self.agent.save({'active': False, 'phase': 'failed', 'jobId': self.request})
+        with agent.private_log(self.root, 'panel-update-' + self.request + '.log', r'panel-update-.*\.log') as output:
+            output.write(b'-----BEGIN PRIVATE KEY-----\n' + b'private-fragment\n' * 70000 + b'-----END PRIVATE KEY-----\nactual failure\n')
+        result = self.agent.log(self.request)
+        self.assertTrue(result['truncated'])
+        self.assertNotIn('private-fragment', result['content'])
+        self.assertIn('actual failure', result['content'])
+
+    def test_failed_worker_launch_has_a_downloadable_diagnostic(self):
+        with patch.object(agent.subprocess, 'run', side_effect=OSError('systemd worker launch failed')):
+            with self.assertRaisesRegex(agent.UpdateError, 'START_FAILED'):
+                self.agent.start('1.1.7.5', self.request)
+        self.assertFalse(self.agent.state()['active'])
+        self.assertIn('systemd worker launch failed', self.agent.log(self.request)['content'])
+
     def test_page_actions_are_bounded_registered_and_idempotent(self):
         page = 'a' * 24
         with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
@@ -435,6 +511,17 @@ class UpdateTests(unittest.TestCase):
             code, result = request('GET', '/status')
             self.assertEqual(code, 200)
             self.assertTrue(result['available'])
+            self.agent.save({'active': False, 'phase': 'failed', 'jobId': self.request})
+            with agent.private_log(self.root, 'panel-update-' + self.request + '.log', r'panel-update-.*\.log') as output:
+                output.write(b'actual private-domain-fixture failure\n')
+            route = '/logs/panel/' + self.request
+            self.assertEqual(request('GET', route, token_value='wrong')[0], 403)
+            code, downloaded = request('GET', route)
+            self.assertEqual(code, 200)
+            self.assertIn('failure', downloaded['content'])
+            self.assertNotIn('private-domain-fixture', downloaded['content'])
+            self.assertEqual(request('GET', '/logs/panel/../etc/shadow')[0], 400)
+            self.agent.save({'active': False, 'phase': 'idle', 'jobId': None, 'targetVersion': None, 'error': None})
             self.assertEqual(request('GET', '/subscription-domain', token_value='wrong')[0], 403)
             code, original = request('GET', '/subscription-domain')
             self.assertEqual(code, 200)
