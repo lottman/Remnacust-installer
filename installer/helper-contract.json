@@ -82,10 +82,10 @@
       "sha256": "6f3a137f95c3caa1f58cd3aa61c1b70ff6fc8d9c3e241501c99c5c851464508b"
     },
     "update-agent.py": {
-      "bytes": 35541,
-      "sha256": "d060cdad97a0587e50f63fde48abc5fe39167e63ab3f18cccf5dc82d97089498"
+      "bytes": 35747,
+      "sha256": "09cab3d5d9ccafcd1a51df2f529a76136afbb2bc740818321be5e87d1fb88de8"
     }
   },
   "schema": 1,
-  "version": "1.2.129"
+  "version": "1.2.130"
 }
