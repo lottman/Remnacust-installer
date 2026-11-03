@@ -94,6 +94,21 @@ class SystemPackageTests(unittest.TestCase):
         self.assertEqual(code, 44, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
+    def test_logged_terminal_keeps_package_questions_and_excludes_answers(self):
+        os.environ['PACKAGE_QUESTIONS'] = '1'
+        command = SETUP + 'ROOT="$2/install-root"; start_operation_log; update_system_packages; printf ACTION-CONTINUED'
+        answers = ['private-console-answer', 'private-charset-answer', 'private-config-answer']
+        code, output = self.terminal(command, list(zip(
+            ['Encoding to use on the console: ', 'Character set to support: ', 'Keep existing configuration: '],
+            [answer + '\n' for answer in answers])))
+        self.assertEqual(code, 0, output)
+        log = (self.root / 'install-root/logs/installer-node.log').read_text()
+        self.assertIn('Encoding to use on the console', log)
+        self.assertIn('APT upgrade: exit 0', log)
+        for answer in answers:
+            self.assertNotIn(answer, log)
+        self.assertTrue(all(call['tty'] == [True, True, True] for call in self.calls()))
+
     def test_failed_index_update_prevents_upgrade_and_action(self):
         os.environ['PACKAGE_UPDATE_STATUS'] = '37'
         result = self.run_shell(SETUP + 'update_system_packages; printf UNEXPECTED-ACTION')

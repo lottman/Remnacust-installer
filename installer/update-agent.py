@@ -88,6 +88,39 @@ class UpdateError(ValueError):
     pass
 
 
+def private_log(root, name, previous_pattern):
+    directory = root / 'logs'
+    if directory.is_symlink():
+        raise ValueError('Invalid private log directory')
+    directory.mkdir(mode=0o700, exist_ok=True)
+    directory.chmod(0o700)
+    path = directory / name
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        for previous in directory.iterdir():
+            if previous != path and re.fullmatch(previous_pattern, previous.name) and not previous.is_symlink() and previous.is_file():
+                previous.unlink()
+    except OSError:
+        os.close(fd)
+        raise
+    return os.fdopen(fd, 'wb')
+
+
+def private_log_event(output, event, detail):
+    output.write(('[' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()) + '] ' + event + ' ' + detail + '\n').encode('utf-8', errors='replace'))
+    output.flush()
+
+
+def private_log_failure(path, error):
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'wb') as output:
+            private_log_event(output, 'FAILED', type(error).__name__ + ': ' + str(error))
+            private_log_event(output, 'LOG', str(path))
+    except OSError:
+        pass
+
+
 def latest_installer_release():
     """Resolve mutable Latest once, then let the CLI verify that exact tag."""
     repository = os.environ.get('REMNACUST_REPOSITORY', 'lottman/Remnacust-installer')
@@ -229,7 +262,7 @@ class Agent:
                 job = read_json(self.control / ('page-' + item['id'] + '.json'))
                 if job.get('phase') in ('queued', 'running') and time.time() - job.get('startedAt', 0) > 7200:
                     job.update(phase='failed', error='INTERRUPTED')
-                item['job'] = {key: job.get(key) for key in ('requestId', 'operation', 'phase', 'error')}
+                item['job'] = {key: job.get(key) for key in ('requestId', 'operation', 'phase', 'error', 'logPath')}
             except FileNotFoundError:
                 item['job'] = None
         return {'pages': result}
@@ -285,7 +318,13 @@ class Agent:
             state = read_json(path)
             if state.get('requestId') != request or state.get('phase') != 'queued':
                 return
+            log = self.root / 'logs' / ('page-' + page + '-' + request + '.log')
+            log_created = False
             try:
+                output = private_log(self.root, log.name, 'page-' + page + r'-[a-f0-9-]{36}\.log')
+                log_created = True
+                state['logPath'] = str(log)
+                private_log_event(output, 'START', 'page=' + page + ' operation=' + str(state.get('operation')))
                 item = subscription_pages.selected(self.root, page, allow_discovered=True)
                 operation = state['operation']
                 if operation == 'upgrade' and item.get('managed') is False:
@@ -294,14 +333,17 @@ class Agent:
                     raise UpdateError('INVALID_REQUEST')
                 state.update(phase='running')
                 runtime.write(path, state)
-                log = self.root / 'logs' / ('page-' + request + '.log')
-                fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                with os.fdopen(fd, 'wb') as output:
+                with output:
                     args = [CLI, 'upgrade-subscription-page', '--version', 'latest'] if operation == 'upgrade' else [CLI, 'manage-subscription-page', '--page-operation', operation]
                     subprocess.run([*args, '--page-id', page, '--yes'], stdin=subprocess.DEVNULL, stdout=output, stderr=output, check=True, timeout=7100)
+                    private_log_event(output, 'COMPLETED', 'page=' + page)
                 state.update(phase='completed', error=None)
-            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+                if log_created:
+                    output.close()
+                    private_log_failure(log, error)
                 state.update(phase='failed', error='PAGE_OPERATION_FAILED')
+            state['finishedAt'] = time.time()
             runtime.write(path, state)
 
     def status(self):
@@ -389,11 +431,11 @@ class Agent:
             log_created = False
             log_path = self.root / 'logs' / ('panel-update-' + request + '.log')
             try:
-                log_dir = self.root / 'logs'
-                log_dir.mkdir(mode=0o700, exist_ok=True)
-                fd = os.open(log_dir / ('panel-update-' + request + '.log'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                output = private_log(self.root, log_path.name, r'panel-update-[a-f0-9-]{36}\.log')
                 log_created = True
-                with os.fdopen(fd, 'wb') as log:
+                state['logPath'] = str(log_path)
+                with output as log:
+                    private_log_event(log, 'START', 'requested-panel=' + state['targetVersion'] + ' job=' + request)
                     env = {**os.environ, 'REMNACUST_ROOT': str(self.root), 'REMNACUST_UPDATE_JOB': request, 'REMNACUST_RELEASE_INFO_FILE': str(info),
                        'REMNACUST_RELEASE_ENTRY_FILE': str(entry)}
                     state['phase'] = 'checking'
@@ -425,6 +467,7 @@ class Agent:
                         raise UpdateError('VERSION_MISMATCH')
                     record_progress(self.root, request, 'cleanup', 'Обновление завершено', 'done')
                     state.update(active=False, phase='completed', error=None)
+                    private_log_event(log, 'COMPLETED', 'panel=' + state['targetVersion'])
                     try:
                         progress = read_json(self.control / ('progress-' + request + '.json'))
                         progress['durations'][progress['stage']] = max(0, time.time() - progress['stageStartedAt'])
@@ -435,12 +478,7 @@ class Agent:
                 # The output stream has closed by this point. Preserve Python/network
                 # failures too, without copying private diagnostics into public status.
                 if log_created:
-                    try:
-                        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
-                        with os.fdopen(fd, 'wb') as log:
-                            log.write(('\nUpdate agent failure: ' + type(error).__name__ + ': ' + str(error) + '\n').encode('utf-8', errors='replace'))
-                    except OSError:
-                        pass
+                    private_log_failure(log_path, error)
                 try:
                     progress = update_progress(self.root, state)
                     record_progress(self.root, request, progress['stage'] if progress else 'checking',

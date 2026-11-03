@@ -26,16 +26,22 @@ docker compose up -d --no-build --pull never
 
 ## Текущий стабильный комплект
 
-Актуально на 2 ноября 2026 года:
+Актуально на 3 ноября 2026 года:
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.127) | **1.2.127** |
-| [Панель и страница подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.89) | **1.1.7.89** |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.128) | **1.2.128** |
+| [Панель и страница подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.90) | **1.1.7.90** |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.21) | **1.1.21**, Remnawave Node 3.4.3 |
 | [Core / WASM](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.12) | **1.1.12**, стабильный Xray v26.10.31 |
 
-Версия `1.2.127` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.127.md). Новые теги/выпуски создаются отдельно от коммитов README.
+Версия `1.2.128` относится к комплекту установщика, а не к панели. Закреплённые исходники — в [component-sources.json](component-sources.json), изменения — в [журнале выпуска](docs/releases/1.2.128.md). Новые теги/выпуски создаются отдельно от коммитов README.
+
+## Подробные журналы
+
+CLI сохраняет `/opt/remnacust/logs/installer-panel.log`, `installer-node.log` и `installer-subscription-page.log`. Следующее действие того же компонента заменяет его журнал; статус и диагностика используют `installer-diagnostics.log`. Параллельный запуск не затирает активный журнал. При ошибке показываются путь и команда `sudo less -- ПУТЬ`. Журнал остаётся и после успеха до следующего обслуживания.
+
+Обновление из панели сохраняет `panel-update-<ID>.log`, операция страницы — `page-<ID страницы>-<ID задачи>.log`, SSH-обновление ноды — `node-maintenance.log` на ноде. Журналы и папка закрыты правами `0600`/`0700`; в API передаётся путь и безопасный статус. Ввод и трассировка секретов не записываются. SIGKILL и отключение питания нельзя перехватить: используйте путь, напечатанный в начале.
 
 ## Обновление системных пакетов перед действиями
 
@@ -59,9 +65,9 @@ sudo bash installer.sh
 Либо выберите действие сразу:
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.127
-sudo bash installer.sh install-node --version 1.2.127
-sudo bash installer.sh install-subscription-page --version 1.2.127
+sudo bash installer.sh install-panel --version 1.2.128
+sudo bash installer.sh install-node --version 1.2.128
+sudo bash installer.sh install-subscription-page --version 1.2.128
 ```
 
 Образы опубликованы для amd64/arm64; скачивание релиза и GHCR открыто без персонального токена. Установщик проверяет выпуск, архитектуру и целостность. Docker добавляется при отсутствии; существующий daemon не переустанавливается ради обновления приложения.

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='91ddbdfcbbbafe3111fab120d90c8a74238151f0d57925f7c86e4fd87f2ef71f'
+HELPER_BUNDLE_SHA256='221f57b6f9cc8a1abfd2b7c6341e2afb5d3e45fbc826fc6708e524dc089ce3cd'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -28,6 +28,7 @@ QUOTA_MODE=remaining PRESERVE_SUBHASH=false
 declare -a FILES=() APPS=() START_APPS=() RUNNING_APPS=() EXTRAS=()
 TEAL='' PURPLE='' ROSE='' DIM='' GRAY='' RESET=''
 BOLD='' ACCENT=''
+OPERATION_LOG_PID='' OPERATION_STDERR='' OPERATION_STARTED=0 OPERATION_LOG_ACTIVE=false
 Y_LABEL=y N_LABEL=n
 if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
     TEAL=$'\033[38;2;25;190;160m'; PURPLE=$'\033[38;2;167;139;250m'
@@ -38,7 +39,7 @@ if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then
     GRAY=$'\033[38;2;128;132;142m'
     PURPLE=$ACCENT
 fi
-info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; }
+info() { printf '%s  %s%s\n' "$TEAL" "$*" "$RESET"; operation_log_event INFO "$*"; }
 die() { printf '%s  Ошибка: %s%s\n' "$ROSE" "$*" "$RESET" >&2; exit 1; }
 ask() { local value display_default=${3:-${2:-}}; [[ -t 0 ]] || die "Задайте параметр: $1"; IFS= read -r -p "$1${2:+ [$display_default]}: " value || return 1; value=$(trim_answer "$value"); printf '%s' "${value:-${2:-}}"; }
 ask_required() {
@@ -541,10 +542,68 @@ confirm() {
     [[ $answer == yes ]] || { info 'Действие отменено'; exit 0; }
 }
 cleanup() {
+    local result=0
     if [[ -n ${DOMAIN_PLAN:-} && -f $DOMAIN_PLAN && -n ${HELPER_ROOT:-} ]]; then
-        python3 -I "$HELPER_ROOT/management.py" rollback --root "$ROOT" --plan "$DOMAIN_PLAN" || printf '  Не удалось завершить откат. План восстановления: %s\n' "$DOMAIN_PLAN" >&2
+        python3 -I "$HELPER_ROOT/management.py" rollback --root "$ROOT" --plan "$DOMAIN_PLAN" || { result=$?; printf '  Не удалось завершить откат. План восстановления: %s\n' "$DOMAIN_PLAN" >&2; }
     fi
-    if [[ -n $WORK && -f $WORK/.installer-owned ]]; then rm -rf -- "$WORK"; fi
+    if [[ -n $WORK && -f $WORK/.installer-owned ]]; then rm -rf -- "$WORK" || result=$?; fi
+    return "$result"
+}
+operation_log_event() {
+    $OPERATION_LOG_ACTIVE || return 0
+    printf '[%s] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${2:-}" >> "$LOG"
+}
+operation_log_error() {
+    local result=$1 line=$2 context=$3
+    operation_log_event ERROR "exit=$result line=$line functions=$context"
+    return "$result"
+}
+operation_log_finish() {
+    local result=$1 cleanup_status=0
+    trap - EXIT ERR INT TERM HUP
+    set +e
+    cleanup || cleanup_status=$?
+    ((result != 0 || cleanup_status == 0)) || result=$cleanup_status
+    if $OPERATION_LOG_ACTIVE; then
+        operation_log_event FINISH "action=$ACTION exit=$result elapsed=$((SECONDS-OPERATION_STARTED))s"
+        if [[ -n $OPERATION_STDERR ]]; then exec 2>&"$OPERATION_STDERR"; exec {OPERATION_STDERR}>&-; fi
+        [[ -z $OPERATION_LOG_PID ]] || wait "$OPERATION_LOG_PID"
+        if ((result)); then printf '\n  Действие не завершено (код %s). Подробный журнал: %s\n  Просмотр: sudo less -- %q\n' "$result" "$LOG" "$LOG" >&2
+        else printf '  Подробный журнал: %s (будет заменён при следующем действии).\n' "$LOG"; fi
+    fi
+    exit "$result"
+}
+start_operation_log() {
+    [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Нужен root на Linux'
+    [[ ! -L $ROOT && ! -L $ROOT/logs ]] || die 'Каталог журнала не может быть символической ссылкой'
+    install -d -m 0700 "$ROOT/logs"
+    command -v flock >/dev/null || die 'Нужен util-linux (flock)'
+    [[ ! -L $ROOT/logs/.operation.lock ]] || die 'Некорректный файл блокировки журнала'
+    exec 8>"$ROOT/logs/.operation.lock"
+    flock -n 8 || die 'Другое действие ещё выполняется; предыдущий журнал сохранён'
+    local created kind=${COMPONENT:-maintenance}
+    case "$ACTION" in
+        *subscription-page) kind=subscription-page;;
+        *panel|renew-panel-certificate) kind=panel;;
+        *node|renew-node-certificate) kind=node;;
+    esac
+    case "$ACTION" in status|logs|show-config|check-panel|--check-release) kind=diagnostics;; esac
+    case "$kind" in panel|node|subscription-page|maintenance|diagnostics) ;; *) die 'Некорректный компонент журнала';; esac
+    created=$(mktemp "$ROOT/logs/.installer-log.XXXXXXXX")
+    chmod 0600 "$created"
+    LOG="$ROOT/logs/installer-$kind.log"
+    mv -fT -- "$created" "$LOG"
+    OPERATION_LOG_ACTIVE=true; OPERATION_STARTED=$SECONDS
+    trap 'operation_log_finish "$?"' EXIT
+    trap 'operation_log_error "$?" "$LINENO" "${FUNCNAME[*]}"' ERR
+    trap 'operation_log_event INTERRUPTED signal=INT; exit 130' INT
+    trap 'operation_log_event INTERRUPTED signal=TERM; exit 143' TERM
+    trap 'operation_log_event INTERRUPTED signal=HUP; exit 129' HUP
+    operation_log_event START "action=$ACTION requested=${VERSION:-latest} architecture=$(uname -m) kernel=$(uname -r)"
+    printf '  Подробный журнал: %s\n' "$LOG"
+    exec {OPERATION_STDERR}>&2
+    exec 2> >(tee -a -- "$LOG" >&"$OPERATION_STDERR")
+    OPERATION_LOG_PID=$!
 }
 report_update_progress() {
     [[ -n ${REMNACUST_UPDATE_JOB:-} && -n ${HELPER_ROOT:-} ]] || return 0
@@ -552,7 +611,7 @@ report_update_progress() {
         --stage "$1" --label "$2" --event "$3" >> "$LOG" 2>&1 || true
 }
 step() {
-    local title=$1 pid status=0 i=0 display width stage=preparation; shift
+    local title=$1 pid status=0 i=0 display width stage=preparation started=$SECONDS; shift
     case "$1" in
         fetch_source) stage=checking;;
         prepare_image|prepare_subscription_image) stage=download;;
@@ -562,6 +621,7 @@ step() {
         compose) stage=applying;;
     esac
     [[ -n $LOG ]] || die 'Не настроен журнал операции'
+    operation_log_event STEP "started: $title"
     report_update_progress "$stage" "$title" running
     "$@" >> "$LOG" 2>&1 & pid=$!
     local LC_ALL=C.UTF-8
@@ -578,12 +638,18 @@ step() {
         terminal_text "… $title" '  ' '    '
     fi
     wait "$pid" || status=$?
+    operation_log_event STEP "finished: $title; exit=$status elapsed=$((SECONDS-started))s"
     if ((status)); then report_update_progress "$stage" "$title" failed
     else report_update_progress "$stage" "$title" done; fi
     if ((status)); then printf '%s  × %s · журнал: %s%s\n' "$ROSE" "$title" "$LOG" "$RESET" >&2; return "$status"; fi
     info "✓ $title"
 }
 package_step() {
+    if [[ -n $OPERATION_STDERR ]] && [[ -t $OPERATION_STDERR ]]; then
+        package_step_command "$@" 2>&"$OPERATION_STDERR"
+    else package_step_command "$@"; fi
+}
+package_step_command() {
     local title=$1 operation=$2 status=0 plan='' stage=checking; shift 2
     [[ -z ${SOURCE:-} ]] || stage=preparation
     local -a apt_command=(apt-get -y -o DPkg::Lock::Timeout=120 -o APT::Get::Assume-No=false "$operation" "$@")
@@ -609,7 +675,16 @@ package_step() {
             rm -f -- "$plan"
         fi
     fi
-    DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" || status=$?
+    if $OPERATION_LOG_ACTIVE && [[ -t 0 && -t 1 && -t 2 ]]; then
+        command -v script >/dev/null || die 'Нужен util-linux (script) для интерактивного журнала APT'
+        local package_command
+        printf -v package_command '%q ' env DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}"
+        script --quiet --return --flush --append --echo never --log-out "$LOG" --command "$package_command" || status=$?
+    elif $OPERATION_LOG_ACTIVE; then
+        DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" 2>&1 | tee -a -- "$LOG" || status=$?
+    else
+        DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" || status=$?
+    fi
     [[ -z ${LOG:-} ]] || printf 'APT %s: exit %s\n' "$operation" "$status" >> "$LOG"
     if ((status)); then
         report_update_progress "$stage" "$title" failed
@@ -632,7 +707,8 @@ update_system_packages() {
     fi
 }
 helper() {
-    if [[ -n ${LOG:-} ]]; then python3 "$HELPER" "$@" 2> >(tee -a -- "$LOG" >&2)
+    if $OPERATION_LOG_ACTIVE; then python3 "$HELPER" "$@"
+    elif [[ -n ${LOG:-} ]]; then python3 "$HELPER" "$@" 2> >(tee -a -- "$LOG" >&2)
     else python3 "$HELPER" "$@"; fi
 }
 get() { helper get --state "$STATE" --key "$1"; }
@@ -965,6 +1041,7 @@ PY
 }
 recover() {
     local result=$?; trap - ERR; set +e
+    operation_log_event ERROR "exit=$result line=${BASH_LINENO[0]} functions=${FUNCNAME[*]} rollback=$CHANGED database-changed=$DB_CHANGED"
     if $CHANGED && [[ -n $BACKUP ]]; then
         if [[ $COMPONENT == node ]] || ! $DB_CHANGED; then
             if [[ $COMPONENT == node ]] && ! compose stop "${APPS[@]}" >> "$LOG" 2>&1; then
@@ -1371,8 +1448,8 @@ cleanup_backups_action() {
 run_action() {
     local result
     WORK=$(mktemp -d -t remnacust-installer.XXXXXXXX); touch "$WORK/.installer-owned"; trap cleanup EXIT
+    start_operation_log
     if [[ $ACTION == --check-release ]]; then
-        LOG="$WORK/system-packages.log"
         update_system_packages || return $?
         for result in curl python3 tar; do command -v "$result" >/dev/null || die "Нужен $result"; done
         [[ -n $VERSION ]] || VERSION=latest
@@ -1409,8 +1486,6 @@ PY
         install-*) assert_fresh_target;;
     esac
     [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Нужен root на Linux'
-    mkdir -p "$ROOT/logs"; chmod 700 "$ROOT/logs"
-    LOG="$ROOT/logs/installer-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"; touch "$LOG"; chmod 600 "$LOG"
     update_system_packages || return $?
     case "$ACTION" in
         change-domain|show-config) installed_helper; lock_operation; manage_component_action;;

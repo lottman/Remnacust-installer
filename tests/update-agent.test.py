@@ -173,6 +173,44 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.agent.state()['error'], 'UPDATE_FAILED')
         self.assertEqual((self.root / 'logs' / ('panel-update-' + self.request + '.log')).read_text(), 'fixture')
 
+    def test_panel_log_rotation_keeps_other_operations_and_symlinks(self):
+        directory = self.root / 'logs'
+        directory.mkdir()
+        previous = directory / ('panel-update-' + str(uuid.uuid4()) + '.log')
+        previous.write_text('previous')
+        unrelated = directory / 'operator.log'
+        unrelated.write_text('preserve')
+        target = self.root / 'external'
+        target.write_text('external')
+        linked = directory / ('panel-update-' + str(uuid.uuid4()) + '.log')
+        linked.symlink_to(target)
+        self.work()
+        self.assertFalse(previous.exists())
+        self.assertEqual(unrelated.read_text(), 'preserve')
+        self.assertEqual(target.read_text(), 'external')
+        self.assertTrue(linked.is_symlink())
+        self.assertIn('COMPLETED', Path(self.agent.state()['logPath']).read_text())
+
+    def test_page_failure_retains_exception_and_rotates_only_its_own_log(self):
+        page = 'b' * 24
+        directory = self.root / 'logs'
+        directory.mkdir()
+        previous = directory / ('page-' + page + '-' + str(uuid.uuid4()) + '.log')
+        other = directory / ('page-' + 'c' * 24 + '-' + str(uuid.uuid4()) + '.log')
+        previous.write_text('previous')
+        other.write_text('other page')
+        with patch.object(agent.subscription_pages, 'selected', return_value={}), patch.object(agent.subprocess, 'run'):
+            self.agent.page_start(page, 'upgrade', self.request)
+        with patch.object(agent.subscription_pages, 'selected', side_effect=OSError('precise private failure')):
+            self.agent.page_work(page, self.request)
+        state = runtime.load(self.root / 'control' / ('page-' + page + '.json'))
+        self.assertEqual(state['phase'], 'failed')
+        self.assertIn('precise private failure', Path(state['logPath']).read_text())
+        self.assertNotIn('precise private failure', json.dumps(state))
+        self.assertFalse(previous.exists())
+        self.assertEqual(other.read_text(), 'other page')
+        self.assertEqual(Path(state['logPath']).stat().st_mode & 0o777, 0o600)
+
     def test_release_resolution_failure_is_retained_only_in_private_log(self):
         self.start()
         detail = 'private network failure fixture'
