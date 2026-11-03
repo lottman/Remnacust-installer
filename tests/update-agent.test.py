@@ -249,6 +249,17 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.agent.state()['error'], 'UPDATE_FAILED')
         self.assertEqual((self.root / 'logs' / ('panel-update-' + self.request + '.log')).read_text(), 'fixture')
 
+    def test_package_input_requirement_is_explicit_and_keeps_private_log(self):
+        self.start()
+        failure = subprocess.CalledProcessError(75, ['fixture-command'])
+        with patch.object(agent, 'latest_installer_release', return_value='1.2.130'), patch.object(agent.subprocess, 'run', side_effect=failure):
+            self.agent.work(self.request)
+        state = self.agent.state()
+        self.assertFalse(state['active'])
+        self.assertEqual(state['error'], 'SYSTEM_PACKAGES_REQUIRE_INPUT')
+        self.assertTrue(Path(state['logPath']).is_file())
+        self.assertNotIn('fixture-command', json.dumps(state))
+
     def test_panel_log_rotation_keeps_other_operations_and_symlinks(self):
         directory = self.root / 'logs'
         directory.mkdir()

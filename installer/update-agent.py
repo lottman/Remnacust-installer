@@ -582,7 +582,10 @@ class Agent:
                                     'Обновление не завершено', 'failed')
                 except (OSError, ValueError, KeyError):
                     pass
-                state.update(active=False, phase='failed', error=str(error) if isinstance(error, UpdateError) else 'UPDATE_FAILED')
+                failure = ('SYSTEM_PACKAGES_REQUIRE_INPUT'
+                           if isinstance(error, subprocess.CalledProcessError) and error.returncode == 75
+                           else str(error) if isinstance(error, UpdateError) else 'UPDATE_FAILED')
+                state.update(active=False, phase='failed', error=failure)
             finally:
                 state['finishedAt'] = time.time()
                 self.save(state)
