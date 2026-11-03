@@ -46,7 +46,7 @@ jobs:
       - name: Test installer and package pinned source
         run: |
           bash -n installer/installer.sh
-          bash tests/installer.test.sh
+          sudo env "PATH=$PATH" "REMNACUST_NODE_SOURCE=$REMNACUST_NODE_SOURCE" bash tests/installer.test.sh
           bash installer/tests/database-network-docker.sh
           bash installer/tests/net-admin-docker.sh
           python3 installer/tests/image-cleanup-docker.py

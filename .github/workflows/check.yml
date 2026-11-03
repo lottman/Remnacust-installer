@@ -25,7 +25,7 @@ jobs:
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
-      - run: bash -n installer/installer.sh && bash tests/installer.test.sh
+      - run: bash -n installer/installer.sh && sudo env "PATH=$PATH" "REMNACUST_NODE_SOURCE=$REMNACUST_NODE_SOURCE" "REMNACUST_TEST_REAL_COMPOSE=$REMNACUST_TEST_REAL_COMPOSE" bash tests/installer.test.sh
         env:
           REMNACUST_TEST_REAL_COMPOSE: '1'
       - name: Verify node guard in isolated networks
