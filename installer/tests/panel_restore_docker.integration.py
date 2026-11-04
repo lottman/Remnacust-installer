@@ -80,7 +80,7 @@ load_state
 compose up -d database api worker > /dev/null
 compose --profile standby up --no-start --no-deps --no-build --pull never standby > /dev/null
 for ((attempt=0;attempt<45;attempt++)); do
- if compose exec -T database pg_isready -U postgres >/dev/null;then break;fi
+ if compose exec -T database pg_isready -h 127.0.0.1 -U postgres >/dev/null;then break;fi
  sleep 1
 done
 secret=$(cat "$1/secret")
