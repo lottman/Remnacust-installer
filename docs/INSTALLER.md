@@ -30,7 +30,11 @@
 curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh -o installer.sh && sudo bash installer.sh
 ```
 
-[Скачать installer.sh](https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh). Установка, обновление и миграция доступны на Ubuntu 22.04 LTS, 24.04 LTS и 26.04 LTS (amd64/arm64). На другой ОС приложение и системные пакеты не меняются.
+[Скачать installer.sh](https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh). Выпущенный установщик **1.2.136** поддерживает Ubuntu 22.04/24.04/26.04 LTS, amd64/arm64. Поддержка Debian 12/13 и описанная ниже OS-матрица подготовлены в рабочих исходниках следующего обновления, но ещё не выпущены. Не используйте ссылку на текущий stable как подтверждение поддержки Debian. Неподдерживаемая ОС отклоняется до установки и изменения системных пакетов.
+
+Docker устанавливается из официального репозитория своего дистрибутива: `ubuntu` с `jammy`, `noble` или `resolute`; `debian` с `bookworm` или `trixie`. Уже установленный Docker сохраняется. [Ubuntu](https://docs.docker.com/engine/install/ubuntu/), [Debian](https://docs.docker.com/engine/install/debian/).
+
+Для повторной проверки userspace выполните `python3 installer/tests/os-matrix-docker.py --os ubuntu22 --unit-tests`; остальные варианты: `ubuntu24`, `ubuntu26`, `debian12`, `debian13`. Нужны Docker и Node.js 24 на тестовой машине. При недоступном HTTP-зеркале пакетов можно добавить `--https-apt`: используется доверенный системный CA bundle без отключения проверки TLS. Контейнер ограничен 1 CPU и 768 MiB; исходники подключены только для чтения, Docker socket и рабочие данные сервера внутрь не передаются. Проверяются реальные Bash/Python/OpenSSL и модульные сценарии, а установка Docker подменена для проверки выбранного репозитория. Матрица не подтверждает загрузку ядра, systemd, firewall или arm64 на каждой ОС.
 
 Панель устанавливается через `install-panel`, нода с нашим Xray — через `install-node`. Обновление: `upgrade-panel` и `upgrade-node`. Enter в запросе версии выбирает `latest`; `--version 1.2.28` закрепляет конкретный выпуск установщика. Все команды остаются видимыми в меню.
 

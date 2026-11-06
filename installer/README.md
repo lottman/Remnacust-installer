@@ -1,6 +1,8 @@
 # Установщик Remnacust — справочник
 
-**Установщик 1.2.136**: панель/страница 1.1.7.97, Node 1.1.22, Core 1.1.13 на стабильном Xray v26.10.31. Поддерживаются Ubuntu 22.04/24.04/26.04 LTS и Linux amd64/arm64. Для нового учёта автовыбора обновите ноды и подписки клиентов; исторический расход не перераспределяется. Версии, быстрый запуск и пути: [основной README](../README.md).
+[Русский](README.md) · [English](README.en.md)
+
+**Установщик 1.2.136**: панель/страница 1.1.7.97, Node 1.1.22, Core 1.1.13 на стабильном Xray v26.10.31. Выпущенный установщик поддерживает Ubuntu 22.04/24.04/26.04 LTS, Linux amd64/arm64. Debian 12/13 добавлены в следующих исходниках и ещё не выпущены. Для нового учёта автовыбора обновите ноды и подписки клиентов; исторический расход не перераспределяется. Версии, быстрый запуск и пути: [основной README](../README.md).
 
 ## Основной домен подписки и .env
 
@@ -35,28 +37,28 @@ CLI сохраняет один `logs/installer-<компонент>.log` до �
 ## Установка
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.128
-sudo bash installer.sh install-node --version 1.2.128
-sudo bash installer.sh install-subscription-page --version 1.2.128
+sudo bash installer.sh install-panel --version 1.2.136
+sudo bash installer.sh install-node --version 1.2.136
+sudo bash installer.sh install-subscription-page --version 1.2.136
 ```
 
 Обязательные пустые поля запрашиваются повторно; y/n следует своему показанному default. Домен подтверждается отдельно с default `y`. При автоматизации используйте `--yes` вместе со всеми необходимыми параметрами и явным выбором `--subscription-page` / `--no-subscription-page`.
 
 | Параметр | Назначение |
 | --- | --- |
-| `--version latest|1.2.128` | Выпуск комплекта установщика. |
+| `--version latest\|1.2.136` | Выпуск комплекта установщика. |
 | `--domain DOMAIN` | Домен компонента без протокола, порта и пути. |
 | `--port PORT` | Loopback-порт панели или API-порт ноды. |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Явное определение существующей установки. |
 | `--project-name NAME` | Отдельное имя проекта Compose. |
-| `--proxy caddy|existing` | Новый управляемый Caddy либо существующий proxy. |
-| `--tls-method auto|http|cloudflare|gcore|existing` | Метод TLS в поддерживаемом для компонента сценарии. |
+| `--proxy caddy\|existing` | Новый управляемый Caddy либо существующий proxy. |
+| `--tls-method auto\|http\|cloudflare\|gcore\|existing` | Метод TLS в поддерживаемом для компонента сценарии. |
 | `--email EMAIL` | Почта регистрации ACME. |
 | `--cert-file PATH`, `--key-file PATH` | Готовый сертификат и ключ. |
 | `--dns-credentials PATH` | Закрытый INI выбранного DNS-провайдера. |
 | `--server-ip IP[,IP]` | Публичные адреса для проверки DNS, в том числе за NAT. |
 | `--node-domain DOMAIN` | Управляемый HTTPS/XHTTP endpoint ноды. |
-| `--panel-ip IP[/CIDR]` | Ограничение всех входящих портов и ICMP адресом панели, кроме SSH. |
+| `--panel-ip IP[/CIDR]` | Ограничение всех входящих портов и ICMP адресом панели, кроме SSH. Включает VPN/CDN-порты; не подходит для прямого доступа остальных клиентов к ноде. |
 | `--net-admin`, `--no-net-admin` | Выбор capability контейнера; включённое право сохраняется при обновлении. |
 | `--subscription-page`, `--no-subscription-page` | Установка/перенос сайта подписки либо отказ. |
 | `--subscription-urls URLS` | Один или два адреса сайта через запятую; это не каталог CDN панели. |
