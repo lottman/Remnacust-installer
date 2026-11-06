@@ -324,6 +324,12 @@ class UpdateTests(unittest.TestCase):
         calls = []
         def run(command, **options):
             calls.append(command)
+            self.assertEqual(options['env']['REMNACUST_ROOT'], str(self.root))
+            self.assertEqual(options['env']['REMNACUST_UPDATE_JOB'], self.request)
+            self.assertEqual(options['env']['REMNACUST_RELEASE_INFO_FILE'], str(self.root / 'control' / ('release-' + self.request + '.json')))
+            self.assertEqual(options['env']['REMNACUST_RELEASE_ENTRY_FILE'], str(self.root / 'control' / ('release-' + self.request + '.sh')))
+            self.assertEqual(options['stdin'], subprocess.DEVNULL)
+            self.assertTrue(options['check'])
             if '--check-release' in command:
                 self.assertEqual(command[-2:], ['--version', '1.2.25'])
                 if current_version:
@@ -346,6 +352,18 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.root / 'logs' / ('panel-update-' + self.request + '.log')).stat().st_mode & 0o777, 0o600)
         self.assertFalse(list((self.root / 'control').glob('release-*.json')))
         self.assertFalse(list((self.root / 'control').glob('release-*.sh')))
+
+    def test_release_check_and_upgrade_override_inherited_job_context(self):
+        with patch.dict(os.environ, {
+                'REMNACUST_ROOT': '/unrelated/root',
+                'REMNACUST_UPDATE_JOB': str(uuid.uuid4()),
+                'REMNACUST_RELEASE_INFO_FILE': '/unrelated/release.json',
+                'REMNACUST_RELEASE_ENTRY_FILE': '/unrelated/release.sh'}):
+            commands = self.work()
+        self.assertEqual(len(commands), 2)
+        self.assertIn('--check-release', commands[0])
+        self.assertEqual(commands[1][1], str(self.root / 'control' / ('release-' + self.request + '.sh')))
+        self.assertEqual(self.agent.state()['phase'], 'completed')
 
     def test_mismatched_release_never_runs_upgrade(self):
         self.assertEqual(len(self.work('1.1.7.4')), 1)

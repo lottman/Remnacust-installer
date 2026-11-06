@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='b89eaea6f6b8d684d83fa12f20bf119be523b013d3fd90298ac18f70c6acf0ef'
+HELPER_BUNDLE_SHA256='4e45874a8310e6510d3e9a4edd56d81968fc88170b09a283db952ccbf6b4e03e'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -187,7 +187,7 @@ Remnacust · installer.sh
 
 Версия запрашивается перед установкой/обновлением/миграцией; Enter = latest.
 Подтверждение: y/n; Enter = n. Регистр и пробелы не важны.
-Перед каждым выбранным действием: apt update -y и apt upgrade -y (также статус, журналы и проверка выпуска).
+Перед действиями CLI: apt update -y и apt upgrade -y (кроме проверки выпуска и фонового обновления панели).
 Продолжение APT подтверждается автоматически. На вопросы настройки пакетов отвечайте в SSH-терминале.
 Без терминала изменение пакетов требует SSH; --yes не выбирает настройки пакетов.
 Справка, меню, выход и --dry-run пакеты не изменяют. Автоматической перезагрузки сервера нет.
@@ -695,11 +695,19 @@ package_step_command() {
     info "✓ $title"
 }
 update_system_packages() {
+    [[ $ACTION != --check-release ]] || return 0
     if $DRY_RUN; then
         info 'Пробный запуск: системные пакеты не изменяются'
         return 0
     fi
     case "$ACTION" in install-*|upgrade-*|migrate-remnawave-*) supported_os_codename >/dev/null || return $?;; esac
+    if [[ $ACTION == upgrade-panel && ${REMNACUST_UPDATE_JOB:-} =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ &&
+          ${REMNACUST_RELEASE_ENTRY_FILE:-} == "$ROOT/control/release-${REMNACUST_UPDATE_JOB}.sh" &&
+          ( ! -t 0 || ! -t 1 || ! -t 2 ) ]]; then
+        info 'Обновление панели без APT. Обслуживание ОС отложено: выполните обновление системных пакетов отдельно в SSH-терминале.'
+        report_update_progress checking 'Обслуживание ОС отложено до SSH; обновляется только панель' done
+        return 0
+    fi
     package_step 'Обновление списка системных пакетов' update -o APT::Update::Error-Mode=any || return $?
     package_step 'Обновление системных пакетов' upgrade --with-new-pkgs || return $?
     if [[ -f /var/run/reboot-required ]]; then
@@ -1454,7 +1462,6 @@ run_action() {
     WORK=$(mktemp -d -t remnacust-installer.XXXXXXXX); touch "$WORK/.installer-owned"; trap cleanup EXIT
     start_operation_log
     if [[ $ACTION == --check-release ]]; then
-        update_system_packages || return $?
         for result in curl python3 tar; do command -v "$result" >/dev/null || die "Нужен $result"; done
         [[ -n $VERSION ]] || VERSION=latest
         installed_helper

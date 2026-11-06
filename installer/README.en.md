@@ -2,23 +2,23 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-Stable bundle: Installer **1.2.137**, Panel/website **1.1.7.98**, Node **1.1.23**, Core **1.1.14** / Xray v26.10.31. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.138**, Panel/website **1.1.7.99**, Node **1.1.24**, Core **1.1.15** / Xray v26.10.31. [Requirements and quick start](../README.en.md).
 
-Installer 1.2.137 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.138 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## First installation
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.137
-sudo bash installer.sh install-node --version 1.2.137
-sudo bash installer.sh install-subscription-page --version 1.2.137
+sudo bash installer.sh install-panel --version 1.2.138
+sudo bash installer.sh install-node --version 1.2.138
+sudo bash installer.sh install-subscription-page --version 1.2.138
 ```
 
 Required empty answers are requested again. Domain confirmation defaults to `y`; other y/n questions use their displayed default. For automation supply all required values, `--yes` and an explicit `--subscription-page` or `--no-subscription-page` choice. `--yes` does not select dpkg configuration answers.
 
 | Option | Purpose |
 | --- | --- |
-| `--version latest\|1.2.137` | Installer bundle release, not the panel version |
+| `--version latest\|1.2.138` | Installer bundle release, not the panel version |
 | `--domain DOMAIN` | Component hostname without scheme, port or path |
 | `--port PORT` | Panel loopback port or node API port |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Identify an existing installation |
@@ -100,9 +100,11 @@ Older Remnawave websites are discovered and migration is offered separately. Dom
 
 ## System packages
 
-Every selected CLI action runs `apt-get update -y`, then `apt-get upgrade -y --with-new-pkgs`. Menu/help/exit and `--dry-run` do not change packages. APT continuation is automatic; package configuration choices remain interactive. SSH input and secret answers are not copied into the installer log.
+Selected CLI actions run `apt-get update -y` and `apt-get upgrade -y --with-new-pkgs`, except read-only release verification (`--check-release`) and background panel updates launched by its service. Menu/help/exit and `--dry-run` do not change packages. APT continuation is automatic; package configuration choices remain interactive. SSH input and secret answers are not copied into the installer log.
 
-If package changes are required without a terminal, the action exits with code `75` and asks you to continue over SSH. Complete this before retrying a panel-initiated update. There is no automatic server reboot, but upgraded packages can restart services. A new kernel takes effect only after reboot; check the distribution security bulletin for the actual package.
+Background panel updates change application components and explicitly defer OS maintenance to a separate SSH session. Pending kernel packages do not block them. Other commands without a terminal still exit with code `75` when package changes require SSH; configuration answers are not guessed. There is no automatic server reboot, but upgraded packages can restart services. A new kernel takes effect only after reboot; check the distribution security bulletin for the actual package.
+
+An already installed 1.2.137 agent calls the old CLI before downloading a release. To receive this fix, first update the installer and update service once through SSH using the new verified script. Publishing a release or editing source alone does not replace an already running old agent.
 
 ## Logs and panel-initiated updates
 

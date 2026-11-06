@@ -171,6 +171,49 @@ class SystemPackageTests(unittest.TestCase):
             self.assertEqual(result.returncode, expected, result.stderr)
             self.assertEqual(self.calls(), [])
 
+    def test_release_check_never_calls_apt_even_with_pending_kernel_or_package_errors(self):
+        os.environ.update(PACKAGE_PENDING='1', PACKAGE_UPDATE_STATUS='37')
+        result = self.run_shell(SETUP + 'ACTION=--check-release; update_system_packages; printf ACTION-CONTINUED')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('ACTION-CONTINUED', result.stdout)
+        self.assertEqual(self.calls(), [])
+
+    def test_background_panel_upgrade_defers_os_maintenance_without_simulation_or_answers(self):
+        job = '11111111-1111-4111-8111-111111111111'
+        os.environ.update(REMNACUST_UPDATE_JOB=job,
+                          REMNACUST_RELEASE_ENTRY_FILE=str(self.root / 'installation/control' / ('release-' + job + '.sh')),
+                          PACKAGE_PENDING='1', PACKAGE_QUESTIONS='1', PACKAGE_UPDATE_STATUS='37')
+        result = self.run_shell(SETUP + 'ACTION=upgrade-panel; report_update_progress() { printf "%s\\n" "$2" >> "$WORK/stages"; }; update_system_packages; printf ACTION-CONTINUED')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('ACTION-CONTINUED', result.stdout)
+        self.assertIn('Обслуживание ОС отложено', result.stdout)
+        self.assertIn('отложено до SSH', (self.root / 'stages').read_text())
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.root / 'answers').exists())
+
+    def test_background_marker_without_matching_verified_entry_does_not_bypass_cli_package_policy(self):
+        os.environ.update(REMNACUST_UPDATE_JOB='11111111-1111-4111-8111-111111111111',
+                          REMNACUST_RELEASE_ENTRY_FILE='/unrelated/entry.sh', PACKAGE_PENDING='1')
+        result = self.run_shell(SETUP + 'ACTION=upgrade-panel; update_system_packages')
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual([c['operation'] for c in self.calls()], ['update', 'upgrade'])
+
+    def test_background_context_retains_os_validation_and_terminal_questions(self):
+        job = '11111111-1111-4111-8111-111111111111'
+        os.environ.update(REMNACUST_UPDATE_JOB=job,
+                          REMNACUST_RELEASE_ENTRY_FILE=str(self.root / 'installation/control' / ('release-' + job + '.sh')),
+                          PACKAGE_QUESTIONS='1')
+        result = self.run_shell(SETUP + 'ACTION=upgrade-panel; supported_os_codename() { return 19; }; update_system_packages')
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertEqual(self.calls(), [])
+        code, output = self.terminal(SETUP + 'ACTION=upgrade-panel; update_system_packages; printf ACTION-CONTINUED', [
+            ('Encoding to use on the console: ', '27\n'),
+            ('Character set to support: ', '6\n'),
+            ('Keep existing configuration: ', 'retain-value\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('ACTION-CONTINUED', output)
+        self.assertEqual([c['operation'] for c in self.calls()], ['update', 'upgrade'])
+
     def test_dry_run_and_unsupported_host_do_not_change_packages(self):
         result = self.run_shell(SETUP + 'DRY_RUN=true; update_system_packages')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -207,7 +250,7 @@ main "$3" --yes
                 result = subprocess.run(['bash', '-c', setup, 'test', str(INSTALLER), str(self.root), action],
                                         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual([c['operation'] for c in self.calls()], ['update', 'upgrade', 'upgrade'])
+                self.assertEqual([c['operation'] for c in self.calls()], [] if action == '--check-release' else ['update', 'upgrade', 'upgrade'])
                 self.assertIn('Выпуск v1.2.122 проверен' if action == '--check-release' else 'ACTION-CONTINUED', result.stdout)
 
 

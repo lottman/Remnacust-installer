@@ -30,7 +30,7 @@
 curl -fsSL --proto '=https' --proto-redir '=https' https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh -o installer.sh && sudo bash installer.sh
 ```
 
-[Скачать installer.sh](https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh). Выпущенный установщик **1.2.136** поддерживает Ubuntu 22.04/24.04/26.04 LTS, amd64/arm64. Поддержка Debian 12/13 и описанная ниже OS-матрица подготовлены в рабочих исходниках следующего обновления, но ещё не выпущены. Не используйте ссылку на текущий stable как подтверждение поддержки Debian. Неподдерживаемая ОС отклоняется до установки и изменения системных пакетов.
+[Скачать installer.sh](https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh). Выпущенный установщик **1.2.138** поддерживает Ubuntu 22.04/24.04/26.04 LTS и Debian 12/13, amd64/arm64. Описанная ниже OS-матрица проверяет userspace; её границы перечислены отдельно. Неподдерживаемая ОС отклоняется до установки и изменения системных пакетов.
 
 Docker устанавливается из официального репозитория своего дистрибутива: `ubuntu` с `jammy`, `noble` или `resolute`; `debian` с `bookworm` или `trixie`. Уже установленный Docker сохраняется. [Ubuntu](https://docs.docker.com/engine/install/ubuntu/), [Debian](https://docs.docker.com/engine/install/debian/).
 
