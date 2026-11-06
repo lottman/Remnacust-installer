@@ -503,6 +503,7 @@ class InputWorkflowTests(unittest.TestCase):
 
     def test_subscription_uninstall_defaults_to_cancel_before_mutation(self):
         command = ('source "$1"; ACTION=uninstall-subscription-page; '
+                   'docker() { return 0; }; '
                    'lock_operation() { :; }; installed_helper() { :; }; '
                    'select_managed_page() { PAGE_ID=aaaaaaaaaaaaaaaaaaaaaaaa; }; '
                    'subscription_page_action; printf UNEXPECTED-CONTINUATION')

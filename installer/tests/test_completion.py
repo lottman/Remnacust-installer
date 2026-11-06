@@ -43,6 +43,7 @@ class CompletionTests(unittest.TestCase):
         for value in ['Адрес входа:', 'https://panel.example.org', 'Создайте аккаунт', '24 символов',
                       'Файл настроек:', '/data', 'автоматически', 'status --component panel']:
             self.assertIn(value, output)
+        self.assertNotIn('генератор в форме', output)
 
     def test_primary_and_additional_subscription_urls_are_visible(self):
         for action in ['install-panel', 'upgrade-panel']:

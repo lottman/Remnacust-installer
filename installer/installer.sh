@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='766d6aa53bc8c7172fb6ad6cd00451b07c4ee20758235e8ae3ee357cc9e27a19'
+HELPER_BUNDLE_SHA256='b89eaea6f6b8d684d83fa12f20bf119be523b013d3fd90298ac18f70c6acf0ef'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -192,7 +192,7 @@ Remnacust · installer.sh
 Без терминала изменение пакетов требует SSH; --yes не выбирает настройки пакетов.
 Справка, меню, выход и --dry-run пакеты не изменяют. Автоматической перезагрузки сервера нет.
 После удаления доступна только новая установка через install-panel/install-node.
-Установка и обновление: только Ubuntu 22.04 LTS / 24.04 LTS / 26.04 LTS, amd64 / arm64.
+Установка и обновление: Ubuntu 22.04 / 24.04 / 26.04 LTS, Debian 12 / 13; amd64 / arm64.
 SECRET_KEY виден при вводе или задаётся через REMNACUST_NODE_SECRET. В журналы он не записывается.
 Существующие APP_SECRET, SECRET_KEY, БД, сети и тома не пересоздаются.
 Если панель подключена к нескольким сетям Docker, сеть БД выбирается по DATABASE_URL и работающему контейнеру базы. Для внешней БД без Docker-алиаса укажите REMNACUST_DATABASE_NETWORK; сеть должна быть подключена к панели.
@@ -699,9 +699,9 @@ update_system_packages() {
         info 'Пробный запуск: системные пакеты не изменяются'
         return 0
     fi
-    case "$ACTION" in install-*|upgrade-*|migrate-remnawave-*) supported_ubuntu_codename >/dev/null || return $?;; esac
+    case "$ACTION" in install-*|upgrade-*|migrate-remnawave-*) supported_os_codename >/dev/null || return $?;; esac
     package_step 'Обновление списка системных пакетов' update -o APT::Update::Error-Mode=any || return $?
-    package_step 'Обновление системных пакетов с автоматическим подтверждением APT' upgrade --with-new-pkgs || return $?
+    package_step 'Обновление системных пакетов' upgrade --with-new-pkgs || return $?
     if [[ -f /var/run/reboot-required ]]; then
         info 'Системе нужна перезагрузка. Выполните её отдельно в удобное время; установщик сервер не перезагружает.'
     fi
@@ -745,7 +745,7 @@ PY
     ((status==0)) || return "$status"
     mapfile -t START_APPS < "$WORK/restore-applications"
 }
-supported_ubuntu_codename() {
+supported_os_codename() {
     local release=${1:-/etc/os-release} id version
     [[ -f $release ]] || die 'Не определена ОС: отсутствует /etc/os-release'
     # shellcheck disable=SC1090,SC1091
@@ -756,14 +756,18 @@ supported_ubuntu_codename() {
         ubuntu:22.04) printf jammy;;
         ubuntu:24.04) printf noble;;
         ubuntu:26.04) printf resolute;;
-        *) die "Поддерживаются только Ubuntu 22.04 LTS, Ubuntu 24.04 LTS и Ubuntu 26.04 LTS. Обнаружено: ${id:-неизвестно} ${version:-неизвестно}";;
+        debian:12) printf bookworm;;
+        debian:13) printf trixie;;
+        *) die "Поддерживаются Ubuntu 22.04 LTS, Ubuntu 24.04 LTS, Ubuntu 26.04 LTS, Debian 12 и Debian 13. Обнаружено: ${id:-неизвестно} ${version:-неизвестно}";;
     esac
 }
 prepare_host() {
-    local id=ubuntu codename
-    codename=$(supported_ubuntu_codename) || return $?
+    local id codename
+    codename=$(supported_os_codename) || return $?
     [[ $EUID == 0 && $(uname -s) == Linux ]] || die 'Для установки нужен root на Linux'
     case "$(uname -m)" in x86_64|aarch64) ;; *) die 'Нужна архитектура amd64 или arm64';; esac
+    id=$(unset ID; . /etc/os-release; printf '%s' "${ID:-}")
+    case "$id" in ubuntu|debian) ;; *) die 'Не определён репозиторий Docker для ОС';; esac
     if ! command -v python3 >/dev/null || ! command -v curl >/dev/null || ! command -v flock >/dev/null || ! command -v tar >/dev/null || ! command -v openssl >/dev/null; then
         package_step 'Подготовка системных пакетов' update -o APT::Update::Error-Mode=any || return $?
         package_step 'Python, curl, util-linux, OpenSSL' install ca-certificates curl python3 util-linux tar openssl || return $?
@@ -1474,7 +1478,7 @@ if entry:
 Path(sys.argv[3]).write_text(json.dumps({'installerVersion':sys.argv[2].removeprefix('v'),'panelVersion':lock['panel']['version']}))
 PY
         fi
-        info "Выпуск $TAG: SHA-256, пути архива и версии проверены"; return 0
+        info "Выпуск $TAG проверен"; return 0
     fi
     case "$ACTION" in *subscription-page) COMPONENT=subscription-page;; *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
     case "$ACTION" in
@@ -1840,7 +1844,7 @@ panel_net_admin_wizard() {
     [[ $COMPONENT == panel ]] || return 0
     if [[ -t 0 ]] && ! $YES && ! $PANEL_NET_ADMIN_SET; then
         info 'NET_ADMIN разрешает управление сетью внутри контейнера панели.'
-        info 'Для закрытия соединений и nftables это право требуется на нодах; при установке ноды можно выбрать его отдельно.'
+        info 'Для сетевых ограничений и закрытия соединений разрешите NET_ADMIN на нодах при их установке.'
         local choice
         choice=$(ask_yes_no 'Добавить NET_ADMIN контейнеру панели?') || return $?
         PANEL_NET_ADMIN=false; [[ $choice != yes ]] || PANEL_NET_ADMIN=true
@@ -1870,7 +1874,7 @@ node_net_admin_wizard() {
             if [[ $enabled != yes ]]; then
                 helper node-capability --source "$1" --state "$STATE" --key enable >/dev/null
             fi
-            info 'NET_ADMIN подтверждён в контейнере ноды — сохраняем без повторного вопроса.'
+            info 'NET_ADMIN ноды включён; право сохранится после обновления.'
             NODE_NET_ADMIN=true
             return 0
         fi
@@ -2388,12 +2392,12 @@ check_dns() {
         return 1
     fi
     expected=$(server_addresses) || return $?
-    info "DNS $domain: ${actual//$'\n'/, }"
-    info "IP сервера: ${expected//$'\n'/, }"
     while IFS= read -r address; do
         if ! grep -Fxq -- "$address" <<< "$expected"; then mismatch=true; fi
     done <<< "$actual"
     if $mismatch; then
+        info "DNS $domain: ${actual//$'\n'/, }"
+        info "IP сервера: ${expected//$'\n'/, }"
         printf '  A/AAAA %s ведут на другой IP. Исправьте записи, включая IPv6, и дождитесь обновления DNS.\n  Для сервера за NAT укажите --server-ip IPv4[,IPv6].\n' "$domain" >&2
         return 1
     fi
@@ -2610,7 +2614,7 @@ deploy() {
     [[ $ACTION == install-* || -z $PORT ]] || die '--port задаёт порт новой установки. Обновление и миграция сохраняют фактический порт существующего контейнера.'
     if [[ $ACTION == install-* ]]; then
         info "$ACTION · новая установка $COMPONENT"
-    else info "$ACTION · обновим основной Compose; активные слои объединяются, оригиналы сохраняются в копии"; fi
+    else info "$ACTION · настройки и данные будут сохранены"; fi
     choose_version
     confirm "Выполнить $ACTION ($VERSION)"
     prepare_host; lock_operation
@@ -2635,7 +2639,7 @@ deploy() {
         dns_preflight
         if [[ $COMPONENT == panel ]]; then backup_password_wizard; fi
     fi
-    step "Готовый Docker-образ $COMPONENT" prepare_image
+    step "Подготовка образа $COMPONENT" prepare_image
     if [[ $ACTION == install-panel ]] && $SUBSCRIPTION_PAGE; then
         select_subscription_image
         step 'Готовый образ сайта подписки' prepare_subscription_image
@@ -2682,7 +2686,7 @@ deploy() {
         # Validate the merged candidate while the original applications run.
         docker compose --project-name "$PROJECT" --project-directory "$DEPLOY" -f "$WORK/compose.after.json" \
             --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.validated.json"
-        report_update_progress applying 'Применение Compose и обновление приложений' running
+        report_update_progress applying 'Обновление приложений' running
         panel_continuity_preflight
         CHANGED=true
         helper commit-compose --source "$WORK/compose.after.json" --state "$STATE" --directory "$BACKUP" \
@@ -2697,9 +2701,9 @@ if before!=after:raise SystemExit('Основной Compose отличается
 PY
         compose stop "${APPS[@]}"
         if [[ $COMPONENT == node ]]; then
-            step 'Сохранение настроек ядра и лимитов ноды' helper snapshot-node-state --source "$WORK/node-state-plan.json"
+            step 'Сохранение настроек и лимитов ноды' helper snapshot-node-state --source "$WORK/node-state-plan.json"
             helper preserve-node-state-rollback --source "$WORK/node-state-plan.json" --directory "$BACKUP"
-            step 'Совместимость образа ноды с сохранёнными квотами' verify_node_image_policy
+            step 'Проверка совместимости обновления ноды' verify_node_image_policy
         fi
         if [[ $COMPONENT == panel ]]; then
             # Refresh the dump after all known writers have stopped. Infrastructure stays running.
@@ -2741,7 +2745,7 @@ PY
         step 'Перенос и проверка страницы подписки' subscription_migration_apply
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     fi
-    step 'Постоянный рабочий каталог' python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "$COMPONENT"
+    step 'Подготовка рабочего каталога' python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "$COMPONENT"
     helper_file_copy "$ROOT/registry/$COMPONENT.json" "$STATE"
     load_state
     compose --profile '*' config --no-interpolate --no-env-resolution --format json > "$WORK/compose.layout.json"
@@ -2818,7 +2822,7 @@ PY
         fi
         if [[ $ACTION == install-panel ]]; then
             completion_row 'Администратор:' 'Создайте аккаунт при первом входе'
-            completion_row 'Пароль:' 'От 24 символов: A–Z, a–z и цифры; генератор в форме — 32 символа'
+            completion_row 'Пароль:' 'От 24 символов: A–Z, a–z и цифры'
             if [[ -f $directory/backup-password.txt && ! -L $directory/backup-password.txt ]]; then
                 completion_row 'Пароль резервных копий:' "$(cat "$directory/backup-password.txt")"
                 completion_row 'Сохранён в файле:' "$directory/backup-password.txt · доступ только root"
@@ -2831,7 +2835,7 @@ PY
             completion_row 'Сертификат:' 'Путь указан в конфигурации вашего proxy; установщик его не меняет'
         fi
         if [[ -n $(managed_subscription_options) ]]; then
-            completion_row 'Сайт подписки установлен:' 'Контейнер remnawave-subscription-page; токен только для чтения подписок и оформления'
+            completion_row 'Сайт подписки установлен:' 'Токен только для чтения подписок и оформления'
             completion_row 'Настройки сайта:' "$directory/subscription.env · доступ только root"
             if [[ $proxy == existing ]]; then
                 completion_row 'Upstream сайта:' "http://127.0.0.1:$(get subscriptionPort) · для обоих доменов сайта"

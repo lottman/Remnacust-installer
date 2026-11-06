@@ -2,7 +2,7 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-**Установщик 1.2.136**: панель/страница 1.1.7.97, Node 1.1.22, Core 1.1.13 на стабильном Xray v26.10.31. Выпущенный установщик поддерживает Ubuntu 22.04/24.04/26.04 LTS, Linux amd64/arm64. Debian 12/13 добавлены в следующих исходниках и ещё не выпущены. Для нового учёта автовыбора обновите ноды и подписки клиентов; исторический расход не перераспределяется. Версии, быстрый запуск и пути: [основной README](../README.md).
+**Установщик 1.2.137**: панель/страница 1.1.7.98, Node 1.1.23, Core 1.1.14 на стабильном Xray v26.10.31. Установщик поддерживает Ubuntu 22.04/24.04/26.04 LTS и Debian 12/13, Linux amd64/arm64. При установке Docker используется официальный репозиторий своей ОС. Для нового учёта автовыбора обновите ноды и подписки клиентов; исторический расход не перераспределяется. Версии, быстрый запуск и пути: [основной README](../README.md).
 
 ## Основной домен подписки и .env
 
@@ -37,16 +37,16 @@ CLI сохраняет один `logs/installer-<компонент>.log` до �
 ## Установка
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.136
-sudo bash installer.sh install-node --version 1.2.136
-sudo bash installer.sh install-subscription-page --version 1.2.136
+sudo bash installer.sh install-panel --version 1.2.137
+sudo bash installer.sh install-node --version 1.2.137
+sudo bash installer.sh install-subscription-page --version 1.2.137
 ```
 
 Обязательные пустые поля запрашиваются повторно; y/n следует своему показанному default. Домен подтверждается отдельно с default `y`. При автоматизации используйте `--yes` вместе со всеми необходимыми параметрами и явным выбором `--subscription-page` / `--no-subscription-page`.
 
 | Параметр | Назначение |
 | --- | --- |
-| `--version latest\|1.2.136` | Выпуск комплекта установщика. |
+| `--version latest\|1.2.137` | Выпуск комплекта установщика. |
 | `--domain DOMAIN` | Домен компонента без протокола, порта и пути. |
 | `--port PORT` | Loopback-порт панели или API-порт ноды. |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Явное определение существующей установки. |

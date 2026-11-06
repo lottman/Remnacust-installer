@@ -2,23 +2,23 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-Stable bundle: Installer **1.2.136**, Panel/website **1.1.7.97**, Node **1.1.22**, Core **1.1.13** / Xray v26.10.31. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.137**, Panel/website **1.1.7.98**, Node **1.1.23**, Core **1.1.14** / Xray v26.10.31. [Requirements and quick start](../README.en.md).
 
-Released installer OS: Ubuntu 22.04/24.04/26.04 LTS, amd64/arm64. Debian 12/13 support exists in upcoming source only. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.137 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## First installation
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.136
-sudo bash installer.sh install-node --version 1.2.136
-sudo bash installer.sh install-subscription-page --version 1.2.136
+sudo bash installer.sh install-panel --version 1.2.137
+sudo bash installer.sh install-node --version 1.2.137
+sudo bash installer.sh install-subscription-page --version 1.2.137
 ```
 
 Required empty answers are requested again. Domain confirmation defaults to `y`; other y/n questions use their displayed default. For automation supply all required values, `--yes` and an explicit `--subscription-page` or `--no-subscription-page` choice. `--yes` does not select dpkg configuration answers.
 
 | Option | Purpose |
 | --- | --- |
-| `--version latest\|1.2.136` | Installer bundle release, not the panel version |
+| `--version latest\|1.2.137` | Installer bundle release, not the panel version |
 | `--domain DOMAIN` | Component hostname without scheme, port or path |
 | `--port PORT` | Panel loopback port or node API port |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Identify an existing installation |

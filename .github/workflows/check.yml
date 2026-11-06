@@ -3,6 +3,19 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  os-userspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu22, ubuntu24, ubuntu26, debian12, debian13]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: python3 installer/tests/os-matrix-docker.py --os '${{ matrix.os }}' --unit-tests
   installer:
     runs-on: ubuntu-latest
     env:

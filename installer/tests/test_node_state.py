@@ -72,7 +72,7 @@ class NodeStateTests(unittest.TestCase):
                 return self.runner(args, **kwargs)
             return types.SimpleNamespace(returncode=1, stderr='permission denied', stdout='')
         with self.assertRaises(runtime.ConfigurationError):
-            runtime.snapshot_node_state(self.plan(), run)
+            runtime.snapshot_node_state(self.plan(), run, self.copy_state(run))
 
     def test_managed_core_digest_and_state_are_copied_before_replacement(self):
         binary = b'fixture core binary'

@@ -9,7 +9,7 @@ import test_input
 
 
 INSTALLER = Path(__file__).resolve().parents[1] / 'installer.sh'
-SETUP = 'source "$1"; WORK="$2"; LOG="$2/packages.log"; ACTION=upgrade-node; YES=true; supported_ubuntu_codename() { printf noble; }; '
+SETUP = 'source "$1"; WORK="$2"; LOG="$2/packages.log"; ACTION=upgrade-node; YES=true; supported_os_codename() { printf noble; }; '
 MOCK = '''#!/usr/bin/env python3
 import json,os,sys
 from pathlib import Path
@@ -136,6 +136,8 @@ class SystemPackageTests(unittest.TestCase):
         result = self.run_shell(SETUP + 'update_system_packages; printf ACTION-CONTINUED')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('ACTION-CONTINUED', result.stdout)
+        self.assertIn('✓ Обновление системных пакетов\n', result.stdout)
+        self.assertNotIn('автоматическим подтверждением', result.stdout)
         self.assertEqual([c['operation'] for c in self.calls()], ['update', 'upgrade', 'upgrade'])
         self.assertIn('--simulate', self.calls()[1]['args'])
         self.assertTrue(all('-y' in call['args'] and '--assume-no' not in call['args'] for call in self.calls()))
@@ -173,14 +175,14 @@ class SystemPackageTests(unittest.TestCase):
         result = self.run_shell(SETUP + 'DRY_RUN=true; update_system_packages')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [])
-        result = self.run_shell(SETUP + 'supported_ubuntu_codename() { return 19; }; update_system_packages')
+        result = self.run_shell(SETUP + 'supported_os_codename() { return 19; }; update_system_packages')
         self.assertEqual(result.returncode, 19, result.stderr)
         self.assertEqual(self.calls(), [])
 
     @unittest.skipUnless(os.geteuid() == 0, 'Dispatcher enforces root')
     def test_all_public_actions_update_packages_before_dispatch(self):
         setup = '''source "$1";
-supported_ubuntu_codename() { printf noble; }
+supported_os_codename() { printf noble; }
 component_installed() { return 0; }
 assert_fresh_target() { :; }
 installed_helper() { :; }
@@ -206,7 +208,7 @@ main "$3" --yes
                                         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual([c['operation'] for c in self.calls()], ['update', 'upgrade', 'upgrade'])
-                self.assertIn('SHA-256' if action == '--check-release' else 'ACTION-CONTINUED', result.stdout)
+                self.assertIn('Выпуск v1.2.122 проверен' if action == '--check-release' else 'ACTION-CONTINUED', result.stdout)
 
 
 if __name__ == '__main__':

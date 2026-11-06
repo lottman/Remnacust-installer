@@ -180,7 +180,7 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn('NETWORK', result.stdout + result.stderr)
         if os.geteuid() == 0:
             command = r'''source "$1";WORK=$2
-supported_ubuntu_codename(){ printf noble; }
+supported_os_codename(){ printf noble; }
 command(){ if [[ $1 == -v ]];then return 0;else builtin command "$@";fi; }
 step(){ echo UNEXPECTED_PACKAGES >&2;return 99; }
 docker(){ echo UNEXPECTED_DOCKER >&2;return 99; }

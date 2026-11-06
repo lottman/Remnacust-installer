@@ -71,13 +71,16 @@ class NetworkWorkflowTests(unittest.TestCase):
             runtime.database_network(panel, [], 'private')
 
     def test_matching_addresses_and_ipv6_normalization(self):
-        self.shell("SERVER_IPS='93.184.216.34,2606:4700:4700:0000::1111'; "
-                   "dns_addresses() { printf '93.184.216.34\\n2606:4700:4700::1111\\n'; }; check_dns panel.example.com")
+        result = self.shell("SERVER_IPS='93.184.216.34,2606:4700:4700:0000::1111'; "
+                            "dns_addresses() { printf '93.184.216.34\\n2606:4700:4700::1111\\n'; }; check_dns panel.example.com")
+        self.assertEqual(result.stdout.strip(), '✓ A/AAAA panel.example.com указывают на сервер')
 
     def test_wrong_ipv6_rejects_even_with_matching_ipv4(self):
         result = self.shell("SERVER_IPS=93.184.216.34; dns_addresses() { printf '93.184.216.34\\n2606:4700:4700::1111\\n'; }; "
                             "check_dns panel.example.com", success=False)
         self.assertIn('включая IPv6', result.stderr)
+        self.assertIn('DNS panel.example.com: 93.184.216.34, 2606:4700:4700::1111', result.stdout)
+        self.assertIn('IP сервера: 93.184.216.34', result.stdout)
 
     def test_wrong_a_or_missing_dns_is_rejected(self):
         self.shell("SERVER_IPS=93.184.216.34; dns_addresses() { printf 1.1.1.1; }; check_dns panel.example.com", success=False)
