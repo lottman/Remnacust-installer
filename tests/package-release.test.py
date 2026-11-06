@@ -56,6 +56,60 @@ class ReleaseTests(unittest.TestCase):
         self.git(root,'add','-f','.');self.git(root,'commit','-m','Fixture')
     def retag(self):
         self.git(self.root,'add','-f','.');self.git(self.root,'commit','-m','Changed fixture');self.git(self.root,'tag','-f','v1.1.1')
+    def pin_core(self,files):
+        directory=self.parent/'Remnacust-core'
+        self.write(directory,files)
+        self.git(directory,'add','-f','.');self.git(directory,'commit','-m','Core local dependency fixture')
+        self.lock['core']['commit']=self.git(directory,'rev-parse','HEAD').strip()
+        self.write(self.root,{'component-sources.json':json.dumps(self.lock)});self.retag()
+    def utls_fixture(self):
+        sources={'go.mod':'module github.com/refraction-networking/utls\n','LICENSE':'fixture license\n',
+                 'handshake_client.go':'package tls\n','dicttls/alerts.go':'package dicttls\n'}
+        digest=lambda data:hashlib.sha256(data.encode()).hexdigest()
+        metadata={'module':'github.com/refraction-networking/utls',
+                  'upstreamFiles':{name:digest(data) for name,data in sources.items()},
+                  'patchedFiles':{'handshake_client.go':digest(sources['handshake_client.go'])},
+                  'patchSha256':digest('fixture patch\n')}
+        metadata['upstreamFiles']['handshake_client.go']=digest('package original\n')
+        sources.update({'REMNACUST-PATCH.json':json.dumps(metadata)+'\n',
+                        'certificate-decompression.patch':'fixture patch\n',
+                        'remnacust_certificate_compression_test.go':'package tls\n'})
+        return {'xray/go.mod':'module github.com/xtls/xray-core\nreplace github.com/refraction-networking/utls => ../vendor/utls\n',
+                **{'vendor/utls/'+name:data for name,data in sources.items()}}
+    def test_combined_source_keeps_verified_utls_from_exact_core_pin(self):
+        files=self.utls_fixture();self.pin_core(files)
+        self.write(self.parent/'Remnacust-core',{'vendor/utls/handshake_client.go':'uncommitted change\n'})
+        destination=module.package(self.root,'v1.1.1',self.parent)
+        contents=module.read_archive((destination/'remnacust-source-v1.1.1.tar.gz').read_bytes())
+        for name,data in files.items():self.assertEqual(contents[name],data.encode())
+    def test_missing_local_core_module_is_rejected(self):
+        files=self.utls_fixture();del files['vendor/utls/go.mod'];self.pin_core(files)
+        with self.assertRaisesRegex(ValueError,'Missing local Core replacement.*vendor/utls'):
+            module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_missing_utls_manifest_is_rejected(self):
+        files=self.utls_fixture();del files['vendor/utls/REMNACUST-PATCH.json'];self.pin_core(files)
+        with self.assertRaisesRegex(ValueError,'Missing uTLS patch manifest'):
+            module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_modified_utls_source_is_rejected(self):
+        files=self.utls_fixture();files['vendor/utls/handshake_client.go']='package modified\n';self.pin_core(files)
+        with self.assertRaisesRegex(ValueError,'uTLS integrity mismatch.*handshake_client.go'):
+            module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_incomplete_utls_inventory_is_rejected(self):
+        files=self.utls_fixture();del files['vendor/utls/dicttls/alerts.go'];self.pin_core(files)
+        with self.assertRaisesRegex(ValueError,'uTLS source inventory'):
+            module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_unreviewed_utls_file_is_rejected(self):
+        files=self.utls_fixture();files['vendor/utls/unreviewed.go']='package tls\n';self.pin_core(files)
+        with self.assertRaisesRegex(ValueError,'uTLS source inventory'):
+            module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_modified_utls_patch_is_rejected(self):
+        files=self.utls_fixture();files['vendor/utls/certificate-decompression.patch']='modified\n';self.pin_core(files)
+        with self.assertRaisesRegex(ValueError,'uTLS integrity mismatch.*certificate-decompression.patch'):
+            module.package(self.root,'v1.1.1',self.parent,check=True)
+    def test_local_replacement_block_cannot_reference_an_omitted_module(self):
+        self.pin_core({'xray/go.mod':'module github.com/xtls/xray-core\nreplace (\n example.invalid/local => ../vendor/missing\n)\n'})
+        with self.assertRaisesRegex(ValueError,'Missing local Core replacement.*vendor/missing'):
+            module.package(self.root,'v1.1.1',self.parent,check=True)
     def test_pinned_sources_and_reproducible_output(self):
         destination=module.package(self.root,'v1.1.1',self.parent)
         first=(destination/'remnacust-source-v1.1.1.tar.gz').read_bytes()

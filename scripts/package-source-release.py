@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import json
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -12,8 +13,43 @@ import urllib.request
 
 REPOSITORIES = {kind: f'lottman/Remnacust-{kind}' for kind in ('panel', 'node', 'core')}
 PREFIXES = {'panel': ('panel/', 'subscription-page/', 'images/'),
-            'node': ('node/',), 'core': ('xray/', 'editor/', 'vendor/olcrtc/')}
+            'node': ('node/',), 'core': ('xray/', 'editor/', 'vendor/olcrtc/', 'vendor/utls/')}
 COMPONENT_FILES = {'panel': {'docs/COMPATIBILITY.md'}}
+
+
+def validate_core_sources(files):
+    for line in files.get('xray/go.mod', b'').decode('utf-8').splitlines():
+        replacement = re.search(r'=>\s*(\S+)', line.split('//', 1)[0])
+        if not replacement:
+            continue
+        target = replacement.group(1).strip('"')
+        if target.startswith('/') or re.match(r'^[A-Za-z]:[/\\]', target):
+            raise ValueError('Absolute local Core replacement: ' + target)
+        if target.startswith(('./', '../')):
+            directory = posixpath.normpath(posixpath.join('xray', target))
+            if directory == '..' or directory.startswith('../') or directory + '/go.mod' not in files:
+                raise ValueError('Missing local Core replacement: ' + directory)
+    prefix = 'vendor/utls/'
+    sources = {name[len(prefix):]: data for name, data in files.items() if name.startswith(prefix)}
+    if not sources:
+        return
+    if 'REMNACUST-PATCH.json' not in sources:
+        raise ValueError('Missing uTLS patch manifest')
+    metadata = json.loads(sources['REMNACUST-PATCH.json'])
+    if metadata.get('module') != 'github.com/refraction-networking/utls':
+        raise ValueError('Invalid uTLS patch module')
+    upstream, patched = metadata.get('upstreamFiles'), metadata.get('patchedFiles')
+    if not isinstance(upstream, dict) or not upstream or not isinstance(patched, dict):
+        raise ValueError('Invalid uTLS source inventory')
+    expected = {**upstream, **patched}
+    extras = {'REMNACUST-PATCH.json', 'certificate-decompression.patch', 'remnacust_certificate_compression_test.go'}
+    if not {'go.mod', 'LICENSE'} <= expected.keys() or set(sources) != set(expected) | extras:
+        raise ValueError('uTLS source inventory differs from the reviewed subset')
+    for name, checksum in {**expected, 'certificate-decompression.patch': metadata.get('patchSha256')}.items():
+        if not isinstance(checksum, str) or not re.fullmatch(r'[a-f0-9]{64}', checksum):
+            raise ValueError('Invalid uTLS source checksum: ' + name)
+        if hashlib.sha256(sources[name]).hexdigest() != checksum:
+            raise ValueError('uTLS integrity mismatch: ' + name)
 
 
 def read_archive(data, strip_root=False):
@@ -138,6 +174,7 @@ def validate(files, version, versions):
     digest = files[name+'.sha256'].decode().split()[0]
     if hashlib.sha256(files[name]).hexdigest() != digest:
         raise ValueError('Bundled node core checksum mismatch')
+    validate_core_sources(files)
     validate_core_catalog(files, versions)
 
 
