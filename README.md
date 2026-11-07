@@ -64,18 +64,18 @@ docker compose up -d --no-build --pull never
 Подготовьте домен и его DNS-записи. Для подписок нужен отдельный публичный адрес. Сохраните SSH-доступ; API, БД и кеш не должны быть открыты всему интернету.
 
 ```bash
-curl -fsSL --proto '=https' --proto-redir '=https' \
-  https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh \
-  -o installer.sh
+curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh
 sudo bash installer.sh
 ```
+
+Команда скачивает последний стабильный установщик. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
 
 Либо сразу выберите действие:
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.138
-sudo bash installer.sh install-node --version 1.2.138
-sudo bash installer.sh install-subscription-page --version 1.2.138
+sudo bash installer.sh install-panel
+sudo bash installer.sh install-node
+sudo bash installer.sh install-subscription-page
 ```
 
 Панель отдельно спрашивает, устанавливать ли сайт подписки. Обязательные пустые поля запрашиваются повторно; после домена показывается подтверждение с default `y`. Для автоматизации указывайте все обязательные параметры, `--yes` и явный выбор `--subscription-page` / `--no-subscription-page`. Свой reverse proxy: `--proxy existing`.

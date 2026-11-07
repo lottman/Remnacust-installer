@@ -39,10 +39,12 @@ CLI сохраняет один `logs/installer-<компонент>.log` до �
 ## Установка
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.138
-sudo bash installer.sh install-node --version 1.2.138
-sudo bash installer.sh install-subscription-page --version 1.2.138
+sudo bash installer.sh install-panel
+sudo bash installer.sh install-node
+sudo bash installer.sh install-subscription-page
 ```
+
+Команда скачивает последний стабильный установщик. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
 
 Обязательные пустые поля запрашиваются повторно; y/n следует своему показанному default. Домен подтверждается отдельно с default `y`. При автоматизации используйте `--yes` вместе со всеми необходимыми параметрами и явным выбором `--subscription-page` / `--no-subscription-page`.
 

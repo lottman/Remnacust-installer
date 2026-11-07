@@ -64,18 +64,18 @@ Current panel source was tested on PostgreSQL 14–18. This is the next-update m
 Prepare a hostname and DNS records. Subscriptions need a separate public address. Preserve SSH access; do not expose the API, database or cache to the entire internet.
 
 ```bash
-curl -fsSL --proto '=https' --proto-redir '=https' \
-  https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh \
-  -o installer.sh
+curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh
 sudo bash installer.sh
 ```
+
+The command downloads the latest stable installer. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.
 
 Or choose an action directly:
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.138
-sudo bash installer.sh install-node --version 1.2.138
-sudo bash installer.sh install-subscription-page --version 1.2.138
+sudo bash installer.sh install-panel
+sudo bash installer.sh install-node
+sudo bash installer.sh install-subscription-page
 ```
 
 Panel installation asks separately whether to install the subscription website. Empty required answers are requested again; domain confirmation defaults to `y`. Automation must specify required inputs, `--yes` and `--subscription-page` or `--no-subscription-page`. Use `--proxy existing` for your own reverse proxy.

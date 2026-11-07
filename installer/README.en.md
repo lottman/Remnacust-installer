@@ -9,10 +9,12 @@ Installer 1.2.138 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/
 ## First installation
 
 ```bash
-sudo bash installer.sh install-panel --version 1.2.138
-sudo bash installer.sh install-node --version 1.2.138
-sudo bash installer.sh install-subscription-page --version 1.2.138
+sudo bash installer.sh install-panel
+sudo bash installer.sh install-node
+sudo bash installer.sh install-subscription-page
 ```
+
+The command downloads the latest stable installer. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.
 
 Required empty answers are requested again. Domain confirmation defaults to `y`; other y/n questions use their displayed default. For automation supply all required values, `--yes` and an explicit `--subscription-page` or `--no-subscription-page` choice. `--yes` does not select dpkg configuration answers.
 
