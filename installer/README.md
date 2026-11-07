@@ -99,6 +99,12 @@ sudo remnacust configure-subscription-page --page-id ID --panel-url https://othe
 
 Дополнительные страницы имеют отдельные `--project-name`, `--domain`, порт и при необходимости `--directory`; без явно выбранного каталога используются `/opt/remnacust/subscription-pages/<project>`. Реестр: `/opt/remnacust/registry/subscription-pages`.
 
+### Сайт на ноде
+
+Нода с собственным доменом получает один из 20 случайных сайтов с локальными страницами и ресурсами. Выбор сохраняется при обновлении; авторские файлы не заменяются. Рабочий каталог — `www/` внутри каталога ноды.
+
+Для другого варианта: `sudo remnacust configure-node-site`. После подтверждения прежние файлы сохраняются в `backups/node-sites/`. Работающий Nginx пересоздаётся и проверяется; при ошибке выполняется попытка отката. Xray не перезапускается. [Подробная настройка selfsteal](../docs/NODE-SELFSTEAL.md).
+
 ### Смена домена и TLS
 
 ```bash

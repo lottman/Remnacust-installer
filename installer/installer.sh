@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='78916a774a82b29f20668bcd9e36b74671452c641cc99016ea7a976af435deb9'
+HELPER_BUNDLE_SHA256='af9e267e9068f83a3aa4e72faa20c4e5b857f42a81c2892803169fac55615690'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -146,6 +146,7 @@ Remnacust · installer.sh
   backup-panel              Копия БД и конфигурации панели
   restore-panel             Данные и ключи из копии; текущая версия сохраняется
   renew-node-certificate    Копирование обновлённого TLS и перезапуск ноды
+  configure-node-site       Случайный новый сайт selfsteal; прежний сохраняется в копии
   renew-panel-certificate   Копирование обновлённого TLS и reload Caddy
   --help, -h                Эта справка
 
@@ -328,7 +329,7 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            manage-panel|manage-node|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            manage-panel|manage-node|configure-node-site|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
             --page-id|--page-operation|--panel-url|--panel-token-file|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
@@ -585,7 +586,7 @@ start_operation_log() {
     case "$ACTION" in
         *subscription-page) kind=subscription-page;;
         *panel|renew-panel-certificate) kind=panel;;
-        *node|renew-node-certificate) kind=node;;
+        *node|renew-node-certificate|configure-node-site) kind=node;;
     esac
     case "$ACTION" in status|logs|show-config|check-panel|--check-release) kind=diagnostics;; esac
     case "$kind" in panel|node|subscription-page|maintenance|diagnostics) ;; *) die 'Некорректный компонент журнала';; esac
@@ -1259,7 +1260,8 @@ component_menu() {
         maximum=8
     elif [[ $COMPONENT == node ]]; then
         terminal_action 8 'Перечитать сертификат' renew-node-certificate
-        maximum=8
+        terminal_action 9 'Выбрать другой случайный сайт' configure-node-site
+        maximum=9
     elif [[ $COMPONENT == subscription-page ]]; then
         terminal_action 8 'Удалить страницу; сохранить настройки и данные' uninstall-subscription-page
         terminal_action 9 'Сменить панель и API-токен' configure-subscription-page
@@ -1271,7 +1273,7 @@ component_menu() {
         1) ACTION=status;; 2) ACTION=show-config;; 3) ACTION=logs;; 4) ACTION=start;;
         5) ACTION=stop;; 6) ACTION=restart;; 7) ACTION=change-domain;;
         8) if [[ $COMPONENT == subscription-page ]]; then ACTION=uninstall-subscription-page; else ACTION=renew-$COMPONENT-certificate; fi;;
-        9) ACTION=configure-subscription-page;; 0) ACTION='';;
+        9) if [[ $COMPONENT == node ]]; then ACTION=configure-node-site; else ACTION=configure-subscription-page; fi;; 0) ACTION='';;
     esac
 }
 service_menu() {
@@ -1398,6 +1400,49 @@ manage_component_action() {
     [[ $requested_component != node ]] || info 'Обновите адрес и SNI этой ноды в хостах панели; существующие ссылки клиента сами домен не меняют.'
     DOMAIN_PLAN=''
 }
+configure_node_site() {
+    COMPONENT=node
+    installed_helper; lock_operation
+    STATE="$ROOT/registry/node.json"
+    [[ -f $STATE && ! -L $STATE ]] || die 'Нода не зарегистрирована'
+    load_state; assert_not_uninstalled
+    if retired_installation node; then die 'Нода удалена. Сначала установите её заново; файлы сайта не изменены.'; fi
+    local domain id status running=false
+    domain=$(get nodeDomain)
+    [[ -n $domain && " ${EXTRAS[*]} " == *' node-nginx '* ]] || die 'Сначала настройте домен и сайт selfsteal для ноды'
+    confirm 'Заменить сайт случайным вариантом? Текущие файлы сохранятся в резервной копии'
+    if ! id=$(compose ps --all --quiet node-nginx); then die 'Не удалось проверить состояние сайта. Файлы не изменены.'; fi
+    if [[ -n $id ]]; then
+        if ! status=$(docker inspect --format '{{.State.Running}}' "$id"); then die 'Не удалось проверить контейнер сайта. Файлы не изменены.'; fi
+        case "$status" in true) running=true;; false) ;; *) die 'Неизвестное состояние контейнера сайта. Файлы не изменены.';; esac
+    fi
+    python3 -I "$HELPER_ROOT/node_site.py" --directory "$DEPLOY" --domain "$domain" --template random --replace --backup-root "$ROOT/backups/node-sites" > "$WORK/node-site-result.json"
+    if $running; then
+        if ! compose up -d --no-deps --no-build --pull never --force-recreate node-nginx || ! compose exec -T node-nginx nginx -t; then
+            local -a rollback=()
+            mapfile -t rollback < <(python3 - "$WORK/node-site-result.json" <<'PY'
+import json,sys
+result=json.load(open(sys.argv[1]))
+if result.get('backup') and result.get('generation'):
+    print(result['backup'])
+    print(result['generation'])
+PY
+            )
+            if ((${#rollback[@]} == 2)) && python3 -I "$HELPER_ROOT/node_site.py" --directory "$DEPLOY" --restore "${rollback[0]}" --expected-generation "${rollback[1]}" --backup-root "$ROOT/backups/node-sites" > "$WORK/node-site-rollback.json"; then
+                if compose up -d --no-deps --no-build --pull never --force-recreate node-nginx && compose exec -T node-nginx nginx -t; then
+                    info 'Новый сайт не запущен; предыдущий сайт восстановлен.'
+                else info 'Предыдущие файлы восстановлены. Nginx не запущен; проверьте Docker и журнал.'; fi
+            else info 'Не удалось перезапустить сайт. Проверьте журнал и сохранённую резервную копию.'; fi
+            return 1
+        fi
+    fi
+    python3 - "$WORK/node-site-result.json" <<'PY'
+import json,sys
+result=json.load(open(sys.argv[1]))
+print('  Сайт обновлён. Файлы: '+result['directory'])
+if result.get('backup'): print('  Предыдущий сайт: '+result['backup'])
+PY
+}
 main() {
     local result
     parse_args "$@" || { result=$?; [[ $result == 10 ]] && return 0; return "$result"; }
@@ -1487,7 +1532,7 @@ PY
         fi
         info "Выпуск $TAG проверен"; return 0
     fi
-    case "$ACTION" in *subscription-page) COMPONENT=subscription-page;; *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
+    case "$ACTION" in configure-node-site) COMPONENT=node;; *subscription-page) COMPONENT=subscription-page;; *panel|renew-panel-certificate) COMPONENT=panel;; *node|renew-node-certificate) COMPONENT=node;; esac
     case "$ACTION" in
         *subscription-page) ;;
         upgrade-*)
@@ -1500,6 +1545,7 @@ PY
     update_system_packages || return $?
     case "$ACTION" in
         change-domain|show-config) installed_helper; lock_operation; manage_component_action;;
+        configure-node-site) configure_node_site;;
         status|logs|start|stop|restart)
             if [[ $COMPONENT == subscription-page ]]; then
                 PAGE_OPERATION=$ACTION; ACTION=manage-subscription-page; subscription_page_action

@@ -77,5 +77,6 @@ jobs:
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
       - run: bash installer/tests/proxy-config.sh
+      - run: python3 -B installer/tests/node_site_nginx.integration.py
       - run: python3 installer/tests/management_docker.integration.py
       - run: bash installer/tests/panel-tls-integration.sh "$PWD/component-panel"

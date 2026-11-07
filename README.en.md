@@ -34,7 +34,7 @@ Checked on **November 7, 2026**:
 
 | Component | Version |
 | --- | --- |
-| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.143) | 1.2.143 |
+| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.144) | 1.2.144 |
 | [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.100) | 1.1.7.100 |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.26) | 1.1.26 |
 | [Core / editor](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.16) | 1.1.16, Xray v26.10.31 |
@@ -45,7 +45,7 @@ The installer version is not the panel version. Updating one component does not 
 
 | Item | Minimum or planning allocation |
 | --- | --- |
-| Installer 1.2.143 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| Installer 1.2.144 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Architecture | Linux amd64 or arm64 |
 | Panel with database/cache | At least 2 CPU, 2 GiB RAM and 20 GiB storage; 4 CPU / 4 GiB recommended, plus backup headroom |
 | Node | At least 1 CPU / 1 GiB RAM, with headroom for Xray connections/rules |
@@ -92,6 +92,7 @@ After installation use `sudo remnacust COMMAND`.
 | Update | `upgrade-panel`, `upgrade-node`, `upgrade-subscription-page --page-id ID` |
 | Management menu | `manage-panel`, `manage-node`, `manage-subscription-page` |
 | Website panel address/token | `configure-subscription-page --page-id ID --panel-url URL` |
+| Another node website | `configure-node-site` — random theme with a backup of the previous site |
 | Domain/settings | `change-domain --component COMPONENT`, `show-config --component COMPONENT` |
 | Status/logs | `status`, `logs` with `--component panel\|node\|subscription-page` |
 | Start/stop | `start`, `stop`, `restart` with `--component` |
@@ -102,6 +103,12 @@ After installation use `sudo remnacust COMMAND`.
 | Check/help | `--check-release`, `check-panel`, `--help` |
 
 Uninstall preserves data, volumes, settings and backups. Websites are removed by ID without removing other components. Menu numbers can change; use command names for automation.
+
+## Node website
+
+Installing a node with its own domain selects one of 20 multi-page websites at random: footwear, coffee, books, Minecraft and other topics. Pages, tools and illustrations use local files without external CDNs. Updates preserve the selected theme and your edits. Files live in `/opt/remnacust/node/www/`.
+
+Run `sudo remnacust configure-node-site` to choose another random theme, keeping the previous site in `backups/node-sites/`. [Setup, selfsteal and recovery](docs/NODE-SELFSTEAL.en.md). A matching active Xray profile is required; website files alone do not expose public HTTPS.
 
 ## System packages and certificates
 
@@ -144,6 +151,6 @@ Restore retains the installed application version and restores the database with
 
 [CLI parameters](installer/README.en.md) · [Installation/maintenance](docs/INSTALLER.md) · [Panel](https://github.com/lottman/Remnacust-panel) · [Node](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.143.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
+Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.144.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
 
 Component licenses and attribution are preserved. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Project support](https://t.me/lottman).

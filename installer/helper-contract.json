@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "b3ee58a636da0250eb2ab68d6fbbce5150a4aa65b310ee854a4870482057bcfb",
+  "entry_sha256": "d64987d930164a80329da1c549145082952a7bb80a07b873806df476c1340885",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -18,8 +18,8 @@
       "sha256": "6d8501e62bfabd374b6d6e635434f0438d0af02aae391fc02f229ed11337efcc"
     },
     "helper_bundle.py": {
-      "bytes": 11538,
-      "sha256": "459f87fafb86fbfae49f060656469df53569e50de6e3a9072dfd8bfcefc3c8e8"
+      "bytes": 11578,
+      "sha256": "93d179034ed62a55b704d81361826a1c283f7268b66ad35e80d4264d97719cd3"
     },
     "image_cleanup.py": {
       "bytes": 4761,
@@ -41,13 +41,21 @@
       "bytes": 8323,
       "sha256": "6a0a19d79bc16e96919a5c4f79a95533f9203f3f154e191d6fa1083cd8919a86"
     },
+    "node_site.py": {
+      "bytes": 33741,
+      "sha256": "bf4488a34280d7c69ff7e60b5323e9a34358b39521b142c8a4db55452c4d0347"
+    },
+    "node_site_catalog.py": {
+      "bytes": 562975,
+      "sha256": "16bf9f55e0adeb848788b4add3c0a6b49e1558d0bd0d009e867406a5bb1cae10"
+    },
     "panel_continuity.py": {
       "bytes": 4458,
       "sha256": "d9d1d35c135c65446c44e54afe65705e1ded4f915e7dcdd218e940183721e9d0"
     },
     "runtime.py": {
-      "bytes": 73485,
-      "sha256": "d66f72beff1c535f758efb56645792a7d49c24421924467b2f64df1953596e04"
+      "bytes": 73826,
+      "sha256": "ded77b13db4a7386cc2ad321c22c761768fd50d972e29d80872ad570cca3b3e6"
     },
     "stable_entry.py": {
       "bytes": 411,
@@ -87,5 +95,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.143"
+  "version": "1.2.144"
 }

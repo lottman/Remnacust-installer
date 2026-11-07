@@ -745,13 +745,19 @@ def nginx_config(hostname):
     ssl_certificate_key /var/lib/remnacust/tls/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     http2 on;
+    server_tokens off;
     root /usr/share/nginx/html;
-    location /xhttppath/ {{
+    autoindex off;
+    error_page 404 /404.html;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    location ^~ /xhttppath/ {{
         client_max_body_size 0;
         grpc_read_timeout 300s;
         grpc_send_timeout 300s;
         grpc_pass grpc://unix:/var/lib/remnacust/run/xhttp.sock;
     }}
+    location ~ /\\.(?!well-known/) {{ deny all; }}
     location / {{ try_files $uri $uri/ =404; }}
 }}
 '''
@@ -1081,7 +1087,7 @@ def write_layout(state, config):
               'Журналы установщика: ' + str(root / 'logs'),
               'Реестр установок: ' + str(root / 'registry'),
               '', 'Команды: cd ' + str(deployment), '  docker compose ps', '  remnacust status --component ' + state['component']]
-    for name in ['Caddyfile', 'subscription.env', 'backup-password.txt', 'nginx.conf', 'certs', 'run', 'logs', 'state']:
+    for name in ['Caddyfile', 'subscription.env', 'backup-password.txt', 'nginx.conf', 'certs', 'run', 'logs', 'state', 'www']:
         if (deployment / name).exists():
             lines.append(name + ': ' + str(deployment / name))
     def publish(path, content):
@@ -1204,10 +1210,14 @@ def main():
         write(args.target, node_env(os.environ.get('REMNACUST_NODE_SECRET', ''), args.port))
     elif args.operation == 'node-proxy':
         p = Path(args.directory)
-        for name in ['run', 'www']:
-            (p/name).mkdir(exist_ok=True); (p/name).chmod(0o755)
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import node_site
+        if (p/'run').is_symlink():
+            fail('Небезопасный каталог сокетов ноды')
+        node_site.install_site(p, domain(args.domain))
+        (p/'run').mkdir(exist_ok=True); (p/'run').chmod(0o755)
         write(p/'nginx.conf', nginx_config(args.domain))
-        write(p/'www/index.html', '<!doctype html><html lang="en"><meta charset="utf-8"><title>Service</title><p>Service is available.</p></html>\n', mode=0o644)
     elif args.operation == 'fresh':
         config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port, args.panel_net_admin, not args.node_no_net_admin)
         state['composeFiles'] = [str(Path(args.target).resolve())]

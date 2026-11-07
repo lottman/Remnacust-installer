@@ -60,11 +60,20 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(current_raw, raw)
         self.assertEqual(current_files, files)
         self.assertIn('stable_entry.py', files)
+        self.assertIn('node_site_catalog.py', files)
         self.assertNotIn(b'configure-entry-node', entry)
         altered = json.loads(raw)
         del altered['files']['stable_entry.py']
         with self.assertRaisesRegex(ValueError, 'Incomplete helper cohort'):
             legacy.manifest(json.dumps(altered).encode())
+
+    def test_unsigned_json_helpers_remain_disallowed(self):
+        data = json.loads(self.manifest)
+        bundle.manifest(self.manifest)
+        for name in ['node-sites.json', 'other.json', '../node_site_catalog.py', 'nested/node_site_catalog.py']:
+            altered = {**data, 'files': {**data['files'], name: data['files']['node_site_catalog.py']}}
+            with self.assertRaisesRegex(ValueError, 'Invalid helper filename'):
+                bundle.manifest(json.dumps(altered).encode())
 
     def test_modified_entry_manifest_and_each_helper_are_rejected(self):
         for entry, raw, files in [

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/scripts/build-node-sites.py" --check
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/tests/node-sites-catalog.test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_node_site.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_node_site_cli.py"
 package_tools=$(mktemp -d -t remnacust-test-apt.XXXXXXXX)
 trap 'rm -f -- "$package_tools/apt-get"; rmdir -- "$package_tools"' EXIT
 printf '#!/usr/bin/env bash\nprintf "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\\n"\n' > "$package_tools/apt-get"
