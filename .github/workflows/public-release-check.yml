@@ -1,0 +1,32 @@
+name: Public release check
+run-name: Public ${{ inputs.tag }}
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Expected stable installer tag
+        required: true
+permissions:
+  contents: read
+jobs:
+  anonymous-installer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      EXPECTED_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Verify anonymous Latest download and release preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          root=$(mktemp -d "$RUNNER_TEMP/remnacust-public.XXXXXXXX")
+          trap '[[ "$root" == "$RUNNER_TEMP"/remnacust-public.* ]] && rm -rf -- "$root"' EXIT
+          unset GH_TOKEN GITHUB_TOKEN
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --connect-timeout 10 --max-time 90 --retry 2 --max-filesize 1048576 \
+            https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh \
+            --output "$root/installer.sh"
+          bash -n "$root/installer.sh"
+          sudo env REMNACUST_ROOT="$root/state" bash "$root/installer.sh" --check-release --version latest | tee "$root/result.log"
+          grep -F -- "$EXPECTED_TAG" "$root/result.log"
