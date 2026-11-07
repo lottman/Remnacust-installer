@@ -36,7 +36,7 @@ jobs:
         run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 26.13.0
       - name: Load Docker test images from public mirror
         run: |
           for image in alpine:3.22 postgres:18.4 node:24.22.1-trixie-slim; do

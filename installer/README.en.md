@@ -2,9 +2,9 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-Stable bundle: Installer **1.2.138**, Panel/website **1.1.7.99**, Node **1.1.24**, Core **1.1.15** / Xray v26.10.31. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.139**, Panel/website **1.1.7.101**, Node **1.1.26**, Core **1.1.16** / Xray v26.10.31. [Requirements and quick start](../README.en.md).
 
-Installer 1.2.138 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.139 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## First installation
 
@@ -20,7 +20,7 @@ Required empty answers are requested again. Domain confirmation defaults to `y`;
 
 | Option | Purpose |
 | --- | --- |
-| `--version latest\|1.2.138` | Installer bundle release, not the panel version |
+| `--version latest\|1.2.139` | Installer bundle release, not the panel version |
 | `--domain DOMAIN` | Component hostname without scheme, port or path |
 | `--port PORT` | Panel loopback port or node API port |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Identify an existing installation |

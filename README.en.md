@@ -34,10 +34,10 @@ Checked on **November 6, 2026**:
 
 | Component | Version |
 | --- | --- |
-| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.138) | 1.2.138 |
-| [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.99) | 1.1.7.99 |
-| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.24) | 1.1.24 |
-| [Core / editor](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.15) | 1.1.15, Xray v26.10.31 |
+| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.139) | 1.2.139 |
+| [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.101) | 1.1.7.101 |
+| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.26) | 1.1.26 |
+| [Core / editor](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.16) | 1.1.16, Xray v26.10.31 |
 
 The installer version is not the panel version. Updating one component does not automatically replace the others. Pinned sources: [component-sources.json](component-sources.json). A README update does not create a new application release.
 
@@ -45,7 +45,7 @@ The installer version is not the panel version. Updating one component does not 
 
 | Item | Minimum or planning allocation |
 | --- | --- |
-| Installer 1.2.138 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| Installer 1.2.139 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Architecture | Linux amd64 or arm64 |
 | Panel with database/cache | At least 2 CPU, 2 GiB RAM and 20 GiB storage; 4 CPU / 4 GiB recommended, plus backup headroom |
 | Node | At least 1 CPU / 1 GiB RAM, with headroom for Xray connections/rules |
@@ -55,7 +55,7 @@ The installer version is not the panel version. Updating one component does not 
 
 These are starting allocations, not client-capacity guarantees. Allow for all components on a shared server. [Remnawave requirements](https://docs.rw/install/requirements/).
 
-If Docker is absent, the installer adds its official distribution repository. An existing daemon is preserved. A specific minimum Engine/Compose minor version has not been established; use current packages. Host Node.js and Go are unnecessary for prebuilt images. Development uses Node.js 24 and Go 1.27.3 for Core.
+If Docker is absent, the installer adds its official distribution repository. An existing daemon is preserved. A specific minimum Engine/Compose minor version has not been established; use current packages. Host Node.js and Go are unnecessary for prebuilt images. Development uses Node.js 26.13 LTS and Go 1.27.3 for Core.
 
 Current panel source was tested on PostgreSQL 14–18. This is the next-update matrix, not a claim that every earlier release was tested. PostgreSQL 14 support ends on November 12, 2026. The installer retains the existing database major version; major changes require a separate migration. [Database compatibility](docs/DATABASE-COMPATIBILITY.md).
 
@@ -144,6 +144,6 @@ Restore retains the installed application version and restores the database with
 
 [CLI parameters](installer/README.en.md) · [Installation/maintenance](docs/INSTALLER.md) · [Panel](https://github.com/lottman/Remnacust-panel) · [Node](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.138.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
+Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.139.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
 
 Component licenses and attribution are preserved. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Project support](https://t.me/lottman).
