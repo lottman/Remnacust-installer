@@ -2,8 +2,20 @@
 'use strict';
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { PrismaClient } = require('/opt/app/node_modules/@prisma/client');
-const prisma = new PrismaClient();
+const { PrismaClient, Prisma } = require('/opt/app/node_modules/@prisma/client');
+const prisma = (() => {
+    try {
+        const options = Number(Prisma?.prismaVersion?.client?.split('.')[0] ?? 0) >= 7 ? {
+            adapter: new (require('/opt/app/node_modules/@prisma/adapter-pg').PrismaPg)({
+                connectionString: process.env.DATABASE_URL, max: 2,
+                connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000,
+            }, { schema: new URL(process.env.DATABASE_URL).searchParams.get('schema') ?? 'public' }),
+        } : undefined;
+        return new PrismaClient(options);
+    } catch {
+        throw new Error('Database initialization failed; verify DATABASE_URL');
+    }
+})();
 const headers = { 'Content-Type': 'application/json', 'X-Forwarded-Proto': 'https',
     'X-Forwarded-For': '127.0.0.1', 'X-Remnawave-Client-Type': 'browser' };
 const users = [];

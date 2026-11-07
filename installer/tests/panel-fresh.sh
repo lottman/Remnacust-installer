@@ -83,8 +83,14 @@ docker exec -i "$(compose ps --quiet remnawave)" node <<'JS'
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 (async () => {
-    const {PrismaClient} = require('@prisma/client');
-    const prisma = new PrismaClient();
+    const {PrismaClient,Prisma} = require('@prisma/client');
+    const options = Number(Prisma?.prismaVersion?.client?.split('.')[0] ?? 0) >= 7 ? {
+        adapter: new (require('@prisma/adapter-pg').PrismaPg)({
+            connectionString: process.env.DATABASE_URL, max: 2,
+            connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000,
+        }, { schema: new URL(process.env.DATABASE_URL).searchParams.get('schema') ?? 'public' }),
+    } : undefined;
+    const prisma = new PrismaClient(options);
     try {
         const settings = await prisma.subscriptionSettings.findFirstOrThrow();
         assert.equal(settings.hwidSettings.enabled, true, 'HWID environment must seed the real database');
@@ -144,7 +150,14 @@ assert sys.argv[2] in json.load(open(sys.argv[1]))
 PY
     printf 'PASS subscription credentials are included in the protected panel backup\n'
     docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$(get subscriptionTokenUuid)" "$(compose ps --quiet remnawave)" node <<'JS'
-const {PrismaClient} = require('@prisma/client'); const prisma = new PrismaClient();
+const {PrismaClient,Prisma} = require('@prisma/client');
+const options = Number(Prisma?.prismaVersion?.client?.split('.')[0] ?? 0) >= 7 ? {
+    adapter: new (require('@prisma/adapter-pg').PrismaPg)({
+        connectionString: process.env.DATABASE_URL, max: 2,
+        connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000,
+    }, { schema: new URL(process.env.DATABASE_URL).searchParams.get('schema') ?? 'public' }),
+} : undefined;
+const prisma = new PrismaClient(options);
 prisma.apiTokens.delete({where:{uuid:process.env.REMNACUST_SUBSCRIPTION_TOKEN_UUID}})
     .finally(() => prisma.$disconnect()).catch(() => {console.error('FAIL token revocation fixture');process.exitCode=1;});
 JS

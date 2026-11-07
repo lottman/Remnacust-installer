@@ -1,6 +1,6 @@
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, Prisma } = require('@prisma/client');
 const jwt = require('jsonwebtoken');
 
 const SCOPES = Object.freeze([
@@ -53,7 +53,19 @@ async function provisionForInstall(prisma, uuid, secret, candidate) {
 }
 
 if (require.main === module || process.argv[1] === '-') {
-    const prisma = new PrismaClient();
+    const prisma = (() => {
+        try {
+            const options = Number(Prisma?.prismaVersion?.client?.split('.')[0] ?? 0) >= 7 ? {
+                adapter: new (require('/opt/app/node_modules/@prisma/adapter-pg').PrismaPg)({
+                    connectionString: process.env.DATABASE_URL, max: 2,
+                    connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000,
+                }, { schema: new URL(process.env.DATABASE_URL).searchParams.get('schema') ?? 'public' }),
+            } : undefined;
+            return new PrismaClient(options);
+        } catch {
+            throw new Error('Database initialization failed; verify DATABASE_URL');
+        }
+    })();
     provisionForInstall(prisma, process.env.REMNACUST_SUBSCRIPTION_TOKEN_UUID, process.env.APP_SECRET,
         process.env.REMNACUST_SUBSCRIPTION_REUSE_TOKEN)
         .then(token => process.stdout.write(token + '\n'))

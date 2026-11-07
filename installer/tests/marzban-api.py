@@ -17,7 +17,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('container'); parser.add_argument('url')
 args = parser.parse_args()
 created = subprocess.check_output(['docker', 'exec', args.container, 'node', '-e', '''
-const {PrismaClient}=require('@prisma/client'),jwt=require('jsonwebtoken');const p=new PrismaClient();
+const {PrismaClient,Prisma}=require('@prisma/client'),jwt=require('jsonwebtoken');
+const options = Number(Prisma?.prismaVersion?.client?.split('.')[0] ?? 0) >= 7 ? {
+    adapter: new (require('@prisma/adapter-pg').PrismaPg)({
+        connectionString: process.env.DATABASE_URL, max: 2,
+        connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000,
+    }, { schema: new URL(process.env.DATABASE_URL).searchParams.get('schema') ?? 'public' }),
+} : undefined;
+const p=new PrismaClient(options);
 (async()=>{const squad=await p.internalSquads.create({data:{name:'installer-migration-squad'}});const t=await p.apiTokens.create({data:{name:'installer-fixture',expireAt:new Date(Date.now()+3600000),scopes:['*']}});console.log(JSON.stringify({squad:squad.uuid,token:jwt.sign({uuid:t.uuid,username:null,role:'API'},process.env.APP_SECRET,{expiresIn:'1h'})}));})().finally(()=>p.$disconnect()).catch(()=>process.exitCode=1);
 '''], text=True)
 credentials = json.loads(created)

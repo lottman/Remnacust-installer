@@ -10,8 +10,8 @@
       "sha256": "6ee1a3aaecbd8b7b8ad87edb6229c165b1dd4a1161110004ad243a4fc0c68d8d"
     },
     "database.cjs": {
-      "bytes": 7970,
-      "sha256": "69e4b56c33bc83411ddb43be2b5e5174548a16528e6346e97ebf15b41fce8f6c"
+      "bytes": 8575,
+      "sha256": "e7b744a216187b9ef5a66c9a2e34c70ed4253bfbfdac8980da9c8399a4b3419b"
     },
     "deployment_layout.py": {
       "bytes": 17741,
@@ -54,8 +54,8 @@
       "sha256": "799455139cc53ec96bd310e814483044cb5c7f9265f0e208f38e2293c761dfd3"
     },
     "subscription.cjs": {
-      "bytes": 3356,
-      "sha256": "c00662ea23aa1c63b933aec487a04b17edff4a304262dd50a1ed869bc368ffe2"
+      "bytes": 4009,
+      "sha256": "9328ad8e144ca63ca23c694da89876de9599f6a36464a930da60cbe2ddd8ec15"
     },
     "subscription_connection.py": {
       "bytes": 7075,
@@ -87,5 +87,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.140"
+  "version": "1.2.141"
 }

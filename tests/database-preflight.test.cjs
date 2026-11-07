@@ -15,7 +15,7 @@ const name = '20260911203000_era_always_available_hosts';
 const sha = (sql) => crypto.createHash('sha256').update(sql).digest('hex');
 const applied = (checksum, migration_name = name) => ({ migration_name, checksum, finished_at: new Date(), rolled_back_at: null });
 
-async function preflight(rows, { sql = current, files = true, encrypted = false, secret = 'fixture-secret' } = {}) {
+async function preflight(rows, { sql = current, files = true, encrypted = false, secret = 'fixture-secret', prismaVersion = '7.10.1', databaseUrl = 'postgresql://fixture@127.0.0.1/fixture?schema=public' } = {}) {
     let stdout = '', stderr = '', disconnected = false;
     const queries = [];
     let password = 'fixture-protected-password';
@@ -40,12 +40,25 @@ async function preflight(rows, { sql = current, files = true, encrypted = false,
         },
         async $disconnect() { disconnected = true; },
     };
-    const process = { argv: ['node', '-', 'preflight'], env: { APP_SECRET: secret },
+    const adapters = [];
+    class PrismaPg {
+        constructor(config, settings) { adapters.push({ config, settings }); }
+    }
+    const process = { argv: ['node', '-', 'preflight'], env: { APP_SECRET: secret, DATABASE_URL: databaseUrl },
         stdout: { write: (value) => { stdout += value; } }, exitCode: 0 };
-    await vm.runInNewContext(source, { Buffer, process,
+    await vm.runInNewContext(source, { Buffer, URL, process,
         console: { error: (value) => { stderr += value; } },
         require: (module) => {
-            if (module === '/opt/app/node_modules/@prisma/client') return { PrismaClient: class { constructor() { return client; } } };
+            if (module === '/opt/app/node_modules/@prisma/client') return {
+                Prisma: { prismaVersion: { client: prismaVersion } },
+                PrismaClient: class {
+                    constructor(options) {
+                        assert.equal(options?.adapter instanceof PrismaPg, Number(prismaVersion.split('.')[0]) >= 7);
+                        return client;
+                    }
+                },
+            };
+            if (module === '/opt/app/node_modules/@prisma/adapter-pg') return { PrismaPg };
             if (module === 'node:fs') return { existsSync: () => files, readFileSync: () => Buffer.from(sql) };
             return require(module);
         },
@@ -53,8 +66,30 @@ async function preflight(rows, { sql = current, files = true, encrypted = false,
     assert.equal(disconnected, true);
     assert.ok(!stdout.includes('fixture-protected-password') && !stderr.includes('fixture-protected-password'));
     assert.ok(!stdout.includes(secret) && !stderr.includes(secret));
-    return { code: process.exitCode, stdout, stderr, queries };
+    return { code: process.exitCode, stdout, stderr, queries, adapters };
 }
+
+test('database maintenance supports legacy Prisma 6 and bounded PostgreSQL adapters in Prisma 7', async () => {
+    const legacyClient = await preflight([applied(sha(current))], { prismaVersion: '6.19.0' });
+    assert.equal(legacyClient.code, 0);
+    assert.equal(legacyClient.adapters.length, 0);
+    const currentClient = await preflight([applied(sha(current))]);
+    assert.equal(currentClient.code, 0);
+    assert.equal(currentClient.adapters.length, 1);
+    assert.equal(currentClient.adapters[0].config.max, 2);
+    assert.equal(currentClient.adapters[0].settings.schema, 'public');
+});
+
+test('malformed database settings cannot expose a password through initialization errors', async () => {
+    await assert.rejects(preflight([], {
+        databaseUrl: 'postgresql://fixture:private-password-marker@127.0.0.1:invalid/fixture',
+    }), error => {
+        assert.equal(error.message, 'Database initialization failed; verify DATABASE_URL');
+        assert.equal(error.input, undefined);
+        assert.ok(!String(error.stack).includes('private-password-marker'));
+        return true;
+    });
+});
 
 test('fixture proves the approved historical change removed comments only', () => {
     assert.equal(sha(current), '1903dab82af3f21623204385707350286f77118c86cb8b3d81e0c295a9dae07b');

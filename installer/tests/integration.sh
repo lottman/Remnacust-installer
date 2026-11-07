@@ -70,7 +70,14 @@ printf 'PASS real upstream -> custom migration preserves PostgreSQL 17, users, k
 compose stop remnawave >/dev/null
 docker inspect "$new_id" > "$WORK/container.before.json"; database_environment
 docker run --rm -i --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" --entrypoint node "$test_image" - <<'JS'
-const {PrismaClient}=require('@prisma/client'),crypto=require('crypto');const p=new PrismaClient();
+const {PrismaClient,Prisma}=require('@prisma/client'),crypto=require('crypto');
+const options = Number(Prisma?.prismaVersion?.client?.split('.')[0] ?? 0) >= 7 ? {
+    adapter: new (require('@prisma/adapter-pg').PrismaPg)({
+        connectionString: process.env.DATABASE_URL, max: 2,
+        connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000,
+    }, { schema: new URL(process.env.DATABASE_URL).searchParams.get('schema') ?? 'public' }),
+} : undefined;
+const p=new PrismaClient(options);
 (async()=>{const k=crypto.createHmac('sha256',process.env.APP_SECRET).update('xera-keyring-v1').digest();const iv=crypto.randomBytes(12),c=crypto.createCipheriv('aes-256-gcm',k,iv);const encrypted=Buffer.concat([c.update('fixture-password'),c.final()]);const value='xera1:'+Buffer.concat([iv,c.getAuthTag(),encrypted]).toString('base64');
 await p.$executeRawUnsafe('UPDATE users SET trojan_password=$1, ss_password=$1 WHERE username=$2',value,'installer_fixture');
 await p.$executeRawUnsafe('ALTER TABLE admin RENAME TO xera_admin');await p.$executeRawUnsafe('ALTER TABLE remnawave_settings RENAME TO xera_remnawave_settings');})().finally(()=>p.$disconnect()).catch(()=>process.exitCode=1);

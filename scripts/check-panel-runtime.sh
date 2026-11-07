@@ -59,6 +59,19 @@ check_roles
 printf 'PASS fresh panel database and all three application roles without restarts\n'
 docker exec -i "$name" node < "$project_root/scripts/check-panel-hwid.cjs"
 
+service_token_uuid=$(python3 -c 'import uuid; print(uuid.uuid4())')
+for attempt in 1 2;do
+    docker exec -i --env "REMNACUST_SUBSCRIPTION_TOKEN_UUID=$service_token_uuid" "$name" node - \
+        < "$project_root/installer/subscription.cjs" > "$fixture/service-token.txt"
+    chmod 600 "$fixture/service-token.txt"
+    docker exec -i --env "EXPECTED_TOKEN_UUID=$service_token_uuid" "$name" node -e '
+        const fs=require("node:fs"),jwt=require("jsonwebtoken");
+        const claims=jwt.verify(fs.readFileSync(0,"utf8").trim(),process.env.APP_SECRET,{algorithms:["HS256"]});
+        if(claims.role!=="API"||claims.uuid!==process.env.EXPECTED_TOKEN_UUID)process.exit(1);
+    ' < "$fixture/service-token.txt"
+done
+printf 'PASS subscription service token creation and retry with the image database client\n'
+
 if [[ -n $page_image ]];then
     docker exec -i "$name" sh -c 'cat > /tmp/subscription-gateway-fixture.cjs' < "$project_root/scripts/check-subscription-gateway.cjs"
     docker exec "$name" node /tmp/subscription-gateway-fixture.cjs prepare > "$fixture/gateway-state.json"
