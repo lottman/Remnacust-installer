@@ -25,7 +25,7 @@ image, distro, version, codename = SYSTEMS[args.os]
 images = ['mirror.gcr.io/library/' + image, image]
 node = shutil.which('node')
 if args.unit_tests and not node:
-    raise SystemExit('Node.js 24 is required for the userspace test matrix')
+    raise SystemExit('Node.js 26 is required for the userspace test matrix')
 for image in images:
     if subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=15).returncode == 0:
         break
@@ -45,9 +45,9 @@ if [[ $RUN_UNIT_TESTS == 1 ]]; then
         printf 'Acquire::https::CAInfo "/audit-tools/ca.crt";\n' > /etc/apt/apt.conf.d/90audit-ca
     fi
     apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o APT::Update::Error-Mode=any update -qq
-    apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends python3 openssl ca-certificates curl util-linux libstdc++6 git
+    apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends python3 openssl ca-certificates curl util-linux libstdc++6 libatomic1 git
     export PATH=/audit-tools:$PATH PYTHONDONTWRITEBYTECODE=1
-    node --version | grep -q '^v24\.'
+    node --version | grep -q '^v26\.'
     python3 -m unittest discover -s /source/installer/tests -p 'test_*.py'
 fi
 source /source/installer/installer.sh
