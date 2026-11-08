@@ -64,8 +64,7 @@ Current panel source was tested on PostgreSQL 14–18. This is the next-update m
 Prepare a hostname and DNS records. Subscriptions need a separate public address. Preserve SSH access; do not expose the API, database or cache to the entire internet.
 
 ```bash
-curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh
-sudo bash installer.sh
+curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
 ```
 
 The command downloads the latest stable installer. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.

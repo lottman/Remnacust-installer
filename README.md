@@ -64,8 +64,7 @@ docker compose up -d --no-build --pull never
 Подготовьте домен и его DNS-записи. Для подписок нужен отдельный публичный адрес. Сохраните SSH-доступ; API, БД и кеш не должны быть открыты всему интернету.
 
 ```bash
-curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh
-sudo bash installer.sh
+curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
 ```
 
 Команда скачивает последний стабильный установщик. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.

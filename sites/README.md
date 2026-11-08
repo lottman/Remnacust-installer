@@ -6,6 +6,16 @@ branded 404 page, local styles, a local script and original SVG illustrations. T
 accounts or uploads, and do not represent operating businesses. Minecraft content
 is an independent Java Edition planning guide, not an official hosting service.
 
+## Install a bundled website
+
+Download the latest stable installer and open its menu:
+
+```bash
+curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
+```
+
+Choose node installation and provide the node's domain. A website is selected at random; later updates preserve it. [Selfsteal setup](../docs/NODE-SELFSTEAL.en.md).
+
 ## Editing
 
 Edit HTML text and the theme's `assets/site.css` directly. `assets/base.css` is
