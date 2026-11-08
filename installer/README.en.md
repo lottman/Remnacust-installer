@@ -11,15 +11,15 @@ Installer 1.2.144 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/
 Download the latest stable installer and open its interactive menu:
 
 ```bash
-curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
 ```
 
 ## First installation
 
 ```bash
-sudo bash installer.sh install-panel
-sudo bash installer.sh install-node
-sudo bash installer.sh install-subscription-page
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-panel
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-node
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-subscription-page
 ```
 
 The command downloads the latest stable installer. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.
@@ -98,8 +98,8 @@ In the panel, subscription domains are under **Subscription → Settings → Sub
 sudo remnacust upgrade-panel
 sudo remnacust upgrade-node
 sudo remnacust upgrade-subscription-page --page-id ID
-sudo bash installer.sh migrate-remnawave-panel --container remnawave
-sudo bash installer.sh migrate-remnawave-node --container remnanode
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ migrate-remnawave-panel --container remnawave
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ migrate-remnawave-node --container remnanode
 ```
 
 Updates preserve configuration, mounts and secrets. The panel gets a consistent PostgreSQL backup before application shutdown. Node/Core replacement can interrupt connections; updating the panel alone does not update remote Core. Confirm the running managed Core version after an agent update.

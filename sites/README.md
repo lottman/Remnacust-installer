@@ -11,7 +11,7 @@ is an independent Java Edition planning guide, not an official hosting service.
 Download the latest stable installer and open its menu:
 
 ```bash
-curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
 ```
 
 Choose node installation and provide the node's domain. A website is selected at random; later updates preserve it. [Selfsteal setup](../docs/NODE-SELFSTEAL.en.md).

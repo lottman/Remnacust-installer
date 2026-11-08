@@ -64,17 +64,17 @@ docker compose up -d --no-build --pull never
 Подготовьте домен и его DNS-записи. Для подписок нужен отдельный публичный адрес. Сохраните SSH-доступ; API, БД и кеш не должны быть открыты всему интернету.
 
 ```bash
-curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
 ```
 
-Команда скачивает последний стабильный установщик. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
+Команда скачивает последний стабильный установщик. `@ install` открывает меню; для прямого выбора укажите `@ install-node`, `@ install-panel` или `@ install-subscription-page`. Загрузчик определяет опубликованный Latest и получает его официальный архив GitHub, сохраняя проверку помощников и ввод ответов в терминале. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
 
 Либо сразу выберите действие:
 
 ```bash
-sudo bash installer.sh install-panel
-sudo bash installer.sh install-node
-sudo bash installer.sh install-subscription-page
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-panel
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-node
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-subscription-page
 ```
 
 Панель отдельно спрашивает, устанавливать ли сайт подписки. Обязательные пустые поля запрашиваются повторно; после домена показывается подтверждение с default `y`. Для автоматизации указывайте все обязательные параметры, `--yes` и явный выбор `--subscription-page` / `--no-subscription-page`. Свой reverse proxy: `--proxy existing`.

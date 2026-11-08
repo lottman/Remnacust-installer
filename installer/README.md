@@ -9,7 +9,7 @@
 Скачать последний стабильный установщик и открыть его интерактивное меню:
 
 ```bash
-curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
 ```
 
 ## Основной домен подписки и .env
@@ -47,9 +47,9 @@ CLI сохраняет один `logs/installer-<компонент>.log` до �
 ## Установка
 
 ```bash
-sudo bash installer.sh install-panel
-sudo bash installer.sh install-node
-sudo bash installer.sh install-subscription-page
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-panel
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-node
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-subscription-page
 ```
 
 Команда скачивает последний стабильный установщик. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
@@ -133,8 +133,8 @@ sudo remnacust change-domain --component subscription-page --page-id ID --domain
 sudo remnacust upgrade-panel
 sudo remnacust upgrade-node
 sudo remnacust upgrade-subscription-page --page-id ID
-sudo bash installer.sh migrate-remnawave-panel --container remnawave
-sudo bash installer.sh migrate-remnawave-node --container remnanode
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ migrate-remnawave-panel --container remnawave
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ migrate-remnawave-node --container remnanode
 ```
 
 При обновлении сохраняются конфигурация, mounts и секреты. Панель получает согласованную копию PostgreSQL до остановки приложений. Обновление агента и бинарника Xray может прервать клиентские соединения; обновление одной панели не обновляет удалённый Core.

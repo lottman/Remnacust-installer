@@ -64,17 +64,17 @@ Current panel source was tested on PostgreSQL 14–18. This is the next-update m
 Prepare a hostname and DNS records. Subscriptions need a separate public address. Preserve SSH access; do not expose the API, database or cache to the entire internet.
 
 ```bash
-curl -fsSLo installer.sh https://github.com/lottman/Remnacust-installer/releases/latest/download/installer.sh && sudo bash installer.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
 ```
 
-The command downloads the latest stable installer. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.
+The command downloads the latest stable installer. `@ install` opens the menu; use `@ install-node`, `@ install-panel` or `@ install-subscription-page` to choose directly. The bootstrap resolves the published Latest release and downloads its official GitHub source archive, keeping helper checksums and terminal input intact. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.
 
 Or choose an action directly:
 
 ```bash
-sudo bash installer.sh install-panel
-sudo bash installer.sh install-node
-sudo bash installer.sh install-subscription-page
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-panel
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-node
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-subscription-page
 ```
 
 Panel installation asks separately whether to install the subscription website. Empty required answers are requested again; domain confirmation defaults to `y`. Automation must specify required inputs, `--yes` and `--subscription-page` or `--no-subscription-page`. Use `--proxy existing` for your own reverse proxy.
