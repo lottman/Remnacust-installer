@@ -30,8 +30,8 @@
       "sha256": "dce0cb295fcfac38a5c08698078b0076b11ebfc562d00a80804ac077bb7795c5"
     },
     "management.py": {
-      "bytes": 27767,
-      "sha256": "a1bc1ce2e04a375e88db7fe01f07e115b23b1ddf762497e9234a3b272b5cced4"
+      "bytes": 30443,
+      "sha256": "f984ce8e2d5640d02d69822fd3fb26d1e32458aef0dd29175495f37ce183f59a"
     },
     "marzban.py": {
       "bytes": 14142,
@@ -95,5 +95,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.145"
+  "version": "1.2.146"
 }

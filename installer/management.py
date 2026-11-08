@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import sys
 import time
 import urllib.error
@@ -34,6 +35,44 @@ def safe_file(value, optional=False):
     if path.exists() and (not path.is_file() or path.stat().st_size > 8 * 1024**2):
         raise ManagementError('Файл настройки слишком большой или имеет неверный тип')
     return path
+
+
+def socket_access(path):
+    import node_site
+    path = node_site._safe(Path(path), True)
+    info = path.stat()
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o001:
+        return None
+    if info.st_uid != os.geteuid():
+        raise ManagementError('Каталог сокетов принадлежит другому пользователю')
+    validate_socket_contents(path)
+    return {'path': str(path), 'before': mode, 'after': mode | 0o011, 'device': info.st_dev, 'inode': info.st_ino}
+
+
+def validate_socket_contents(path):
+    with os.scandir(path) as entries:
+        for number, entry in enumerate(entries):
+            info = entry.stat(follow_symlinks=False)
+            if number >= 10000 or stat.S_ISLNK(info.st_mode) or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode) or stat.S_ISSOCK(info.st_mode)):
+                raise ManagementError('Небезопасный состав каталога сокетов')
+            if not stat.S_ISSOCK(info.st_mode) and (info.st_mode & 0o077 or info.st_uid != os.geteuid()):
+                raise ManagementError('Служебные файлы каталога сокетов должны оставаться закрытыми (файлы 600, каталоги 700)')
+
+
+def apply_socket_access(access, restore=False):
+    if not access:
+        return
+    descriptor = os.open(access['path'], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        if (info.st_dev, info.st_ino) != (access['device'], access['inode']) or stat.S_IMODE(info.st_mode) not in (access['before'], access['after']):
+            raise ManagementError('Каталог сокетов изменился после подготовки')
+        if not restore:
+            validate_socket_contents(descriptor)
+        os.fchmod(descriptor, access['before'] if restore else access['after'])
+    finally:
+        os.close(descriptor)
 
 
 def deployment(root, component, page_id=None):
@@ -217,6 +256,15 @@ def prepare(root, component, hostname, page_id=None, tls_method=None):
             raise ManagementError('Не найден сохранённый каталог сокетов ноды; проверьте том /var/lib/remnacust/run')
         proxy_mounts = unit['after']['services'][proxy]['volumes']
         proxy_mounts[2] = copy.deepcopy(sockets[0])
+        socket_path = sockets[0]['source']
+        if sockets[0]['type'] == 'volume':
+            current = pages.inspect(item) or {}
+            matches = [mount['Source'] for mount in current.get('Mounts', []) if mount.get('Destination') == '/var/lib/remnacust/run' and mount.get('Source')]
+            if len(matches) != 1:
+                raise ManagementError('Не удалось проверить том сокетов ноды')
+            socket_path = matches[0]
+        if Path(socket_path).exists() or Path(socket_path).is_symlink():
+            plan['socketAccess'] = socket_access(socket_path)
         unit['addedProxy'] = True
         unit['state']['extraServices'] = [*state.get('extraServices', []), proxy]
     if proxy not in unit['after']['services']:
@@ -340,6 +388,7 @@ def rollback(path):
             target.unlink(missing_ok=True)
         else:
             runtime.write(target, base64.b64decode(value['before']).decode(), value['mode'])
+    apply_socket_access(plan.get('socketAccess'), restore=True)
     restore_processes(plan, original=True)
     plan['phase'] = 'rolled-back'
     runtime.write(path, plan)
@@ -366,6 +415,7 @@ def apply(path, certificate=None, key=None):
     plan['phase'] = 'applying'
     runtime.write(path, plan)
     try:
+        apply_socket_access(plan.get('socketAccess'))
         if plan['method'] != 'auto':
             try:
                 tls.copy_pair(plan['certificateDomain'], certificate, key, plan['directory'], plan['certificateSubscriptions'])

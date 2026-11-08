@@ -15,6 +15,33 @@ import subscription_pages as pages
 
 
 class ManagementTests(unittest.TestCase):
+    def test_private_socket_directory_gains_only_search_access_and_can_be_restored(self):
+        path = self.root / 'sockets'; path.mkdir(mode=0o700)
+        private = path / 'node-reconciliation.json'; private.write_text('private fixture'); private.chmod(0o600)
+        child = path / 'core-state'; child.mkdir(mode=0o700)
+        access = manage.socket_access(path)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+        manage.apply_socket_access(access)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o711)
+        self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(child.stat().st_mode & 0o777, 0o700)
+        manage.apply_socket_access(access, restore=True)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+
+    def test_readable_private_files_prevent_socket_access_change(self):
+        path = self.root / 'sockets'; path.mkdir(mode=0o700)
+        public = path / 'configuration.json'; public.write_text('private fixture'); public.chmod(0o644)
+        with self.assertRaises(ValueError): manage.socket_access(path)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+
+    def test_socket_directory_replacement_and_new_readable_files_are_rejected(self):
+        path = self.root / 'sockets'; path.mkdir(mode=0o700)
+        access = manage.socket_access(path)
+        file = path / 'configuration.json'; file.write_text('fixture'); file.chmod(0o644)
+        with self.assertRaises(ValueError): manage.apply_socket_access(access)
+        file.unlink(); path.rename(self.root / 'previous-sockets'); path.mkdir(mode=0o700)
+        with self.assertRaises(ValueError): manage.apply_socket_access(access)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
