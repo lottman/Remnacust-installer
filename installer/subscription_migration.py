@@ -104,7 +104,17 @@ def candidates(panel, containers, inventory=None, legacy_only=False):
 def command(base, *args, run=subprocess.run):
     result = run([*base, *args], text=True, capture_output=True, timeout=180)
     if result.returncode:
-        raise runtime.ConfigurationError('Команда Docker для страницы подписки не завершилась; секретный вывод скрыт')
+        operation = next((value for value in args if value in {'config', 'ps', 'inspect', 'up', 'run', 'stop', 'rm', 'pull', 'exec'}), 'docker')
+        failure = result.stderr or ''
+        reasons = (
+            ('no such service', 'сервис отсутствует в Compose'),
+            ('unknown flag', 'версия Docker Compose не поддерживает параметр'),
+            ('permission denied', 'доступ запрещён'),
+            ('Cannot connect to the Docker daemon', 'Docker недоступен'),
+            ('is not a valid project', 'некорректная конфигурация Compose'),
+        )
+        reason = next((text for marker, text in reasons if marker.lower() in failure.lower()), 'проверьте Docker и конфигурацию сервиса')
+        raise runtime.ConfigurationError(f'Команда Docker ({operation}) не завершилась, код {result.returncode}: {reason}. Секретный вывод скрыт')
     return result.stdout
 
 

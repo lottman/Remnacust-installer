@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "414bdb519e3554b72eb6c2fb39bb07a1e8e22615549376fd6b574e927d51262b",
+  "entry_sha256": "33b6bdb5f45a1b416b970dc0443a01c3ead9b3ac32cb5c7e889f4127010ace7a",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -30,8 +30,8 @@
       "sha256": "dce0cb295fcfac38a5c08698078b0076b11ebfc562d00a80804ac077bb7795c5"
     },
     "management.py": {
-      "bytes": 30443,
-      "sha256": "f984ce8e2d5640d02d69822fd3fb26d1e32458aef0dd29175495f37ce183f59a"
+      "bytes": 30502,
+      "sha256": "5c28b716fdcbb3f7571c79776a6163c68b0a3078a6ff51a6e52ba10dc0ee906a"
     },
     "marzban.py": {
       "bytes": 14142,
@@ -74,8 +74,8 @@
       "sha256": "14905a89ebc9d16dfab21af367dc21b6ca69606881d85612fcb441e41720a5b3"
     },
     "subscription_migration.py": {
-      "bytes": 12058,
-      "sha256": "c1680cb30fafa6e4ac1a390ccd1b39526793d086d312011f00ab61ab25eac5df"
+      "bytes": 12894,
+      "sha256": "1afcf2326fc7421845e9d468c0b01a4edf44a964ad3fecb723afa4269eba7163"
     },
     "subscription_pages.py": {
       "bytes": 29463,
@@ -95,5 +95,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.146"
+  "version": "1.2.147"
 }

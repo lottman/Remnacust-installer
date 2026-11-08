@@ -63,6 +63,33 @@ class NodeMigrationWizardTests(unittest.TestCase):
         self.assertNotIn('FALSE-SUCCESS', result.stdout)
         self.assertIn('Перенос ноды завершён, но настройка TLS/XHTTP не завершена', result.stderr)
 
+    def test_migration_offers_net_admin_and_applies_choice_to_candidate(self):
+        candidate = self.root / 'candidate.json'
+        candidate.write_text(json.dumps({'services': {'remnanode': {'image': 'node:fixture'}}}))
+        command = self.command({'apiPort': 7289, 'mainService': 'remnanode'}) + (
+            'node_effective_net_admin() { printf no; }; node_migration_wizard; '
+            'node_net_admin_wizard "$2/candidate.json"; printf "NET-ADMIN=%s" "$NODE_NET_ADMIN"')
+        code, output = self.terminal(command, [
+            ('IP/CIDR главного сервера: все входящие порты кроме SSH только от него (Enter — свой firewall): ', '\n'),
+            ('Настроить TLS/XHTTP на ноде? y/n [n]: ', 'n\n'),
+            ('Добавить NET_ADMIN контейнеру ноды? y/n [n]: ', 'y\n')])
+        self.assertEqual(code, 0, output)
+        self.assertIn('NET-ADMIN=true', output)
+        self.assertIn('NET_ADMIN', json.loads(candidate.read_text())['services']['remnanode']['cap_add'])
+
+    def test_install_confirms_wizard_domain_only_once_before_release(self):
+        command = ('source "$1"; WORK="$2"; HELPER="$(dirname "$1")/runtime.py"; ACTION=install-node; '
+                   'COMPONENT=node; PORT=7289; PANEL_IP=192.0.2.1; TLS_METHOD=existing; '
+                   'CERT_FILE=/fixture/cert; KEY_FILE=/fixture/key; REMNACUST_NODE_SECRET=fixture; VERSION=latest; '
+                   'installed_helper() { :; }; prepare_helpers_install() { :; }; resolve_release() { return 77; }; '
+                   'certificate_wizard; release_source')
+        code, output = self.terminal(command, [
+            ('Настроить TLS/XHTTP на ноде? y/n [n]: ', 'y\n'),
+            ('Домен ноды: ', 'edge.example.com\n'),
+            ('Использовать домен edge.example.com? y/n [y]: ', '\n')])
+        self.assertEqual(code, 77, output)
+        self.assertEqual(output.count('Использовать домен edge.example.com?'), 1, output)
+
 
 if __name__ == '__main__':
     unittest.main()

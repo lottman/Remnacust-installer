@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='3473444232bfdffdb4efbc568d882d341d815392bf7902383bb57e0318a2fa52'
+HELPER_BUNDLE_SHA256='c659f815ba8ac897634bb979e91577475608729019d15762888899e3d2234dd7'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -18,6 +18,7 @@ SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSC
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
 NODE_NET_ADMIN=false
 NODE_NET_ADMIN_ADDED=false
+NODE_DOMAIN_CONFIRMED=''
 NODE_MIGRATION_TLS=false
 ALLOW_DISRUPTION=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
@@ -1414,8 +1415,10 @@ node_migration_wizard() {
         choice=$(ask_yes_no "TLS/XHTTP уже настроен для $previous. Изменить настройки?") || return $?
         [[ $choice == yes ]] || return 0
         NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$previous") || return $?
+        NODE_DOMAIN_CONFIRMED=$NODE_DOMAIN
     elif [[ -n $NODE_DOMAIN ]]; then
         NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$NODE_DOMAIN") || return $?
+        NODE_DOMAIN_CONFIRMED=$NODE_DOMAIN
     fi
     certificate_wizard || return $?
     if [[ -n $NODE_DOMAIN ]]; then
@@ -1712,7 +1715,10 @@ release_source() {
     choose_version
     installed_helper
     if [[ $ACTION == install-panel ]]; then DOMAIN=$(ask_confirmed_domain 'Домен панели' "$DOMAIN") || return $?; fi
-    if [[ $ACTION == install-node && -n $NODE_DOMAIN ]]; then NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$NODE_DOMAIN") || return $?; fi
+    if [[ $ACTION == install-node && -n $NODE_DOMAIN && $NODE_DOMAIN_CONFIRMED != "$NODE_DOMAIN" ]]; then
+        NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$NODE_DOMAIN") || return $?
+        NODE_DOMAIN_CONFIRMED=$NODE_DOMAIN
+    fi
     if [[ $ACTION == install-node && -z ${REMNACUST_NODE_SECRET:-} ]]; then
         ask_node_secret || return 1
     fi
@@ -2339,7 +2345,10 @@ certificate_wizard() {
         fi
         if [[ -t 0 && -z $NODE_DOMAIN ]] && ! $YES; then
             choice=$(ask_yes_no 'Настроить TLS/XHTTP на ноде?')
-            case "$choice" in yes) NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды') || return $?;;no) ;;esac
+            case "$choice" in
+                yes) NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды') || return $?; NODE_DOMAIN_CONFIRMED=$NODE_DOMAIN;;
+                no) ;;
+            esac
         fi
         if [[ -z $NODE_DOMAIN ]]; then
             [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]] || die 'Для TLS ноды укажите --node-domain'
@@ -2592,12 +2601,15 @@ obtain_certificate() {
         fi
         step 'Сертификат Let’s Encrypt' acme_certbot "$CERTBOT" certonly --config-dir "$ACME_ROOT/config" --work-dir "$ACME_ROOT/work" --logs-dir "$ACME_ROOT/logs"             --non-interactive --agree-tos --email "$EMAIL" --cert-name "$domain" "${domains[@]}" "${auth[@]}" || cert_status=$?
         if $acme_open; then python3 -I "$HELPER_ROOT/node_firewall.py" acme-close || cert_status=1; fi
-        ((cert_status == 0)) || return "$cert_status"
+        if ((cert_status != 0)); then
+            info "Подробности ACME: $ACME_ROOT/logs/letsencrypt.log"
+            return "$cert_status"
+        fi
         lineage="$ACME_ROOT/config/live/$domain"
         CERT_FILE="$lineage/fullchain.pem"; KEY_FILE="$lineage/privkey.pem"
 }
 acme_certbot() {
-    if [[ $ACTION == change-domain ]]; then
+    if [[ $TLS_METHOD == http ]]; then
         python3 -I "$HELPER_ROOT/ufw_guard.py" --root "$ROOT" -- "$@"
     else "$@"; fi
 }

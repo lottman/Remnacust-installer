@@ -23,6 +23,15 @@ cp "$FIXTURE/cert" "$config/live/$domain/fullchain.pem"
 cp "$FIXTURE/key" "$config/live/$domain/privkey.pem"
 MOCK
 chmod +x "$ROOT/tools/certbot/bin/certbot"
+python3() {
+ if [[ ${1:-} == -I && ${2:-} == */ufw_guard.py ]]; then
+  printf '%s\n' "$*" >> "$fixture/ufw-guard-calls"
+  shift 2
+  [[ $1 == --root ]]; shift 2
+  [[ $1 == -- ]]; shift
+  "$@"
+ else command python3 "$@"; fi
+}
 port_free() { printf '%s\n' "$1" >> "$fixture/ports"; }
 COMPONENT=panel; PROXY=caddy; PORT=443; TLS_METHOD=auto
 if (certificate_preflight) > "$fixture/reserved-panel" 2>&1; then exit 1; fi
@@ -56,6 +65,18 @@ for method in http cloudflare gcore; do
  [[ ! -d $ROOT/node && ! -f $ROOT/registry/node.json ]]
 done
 printf 'PASS HTTP/Cloudflare/Gcore use separate ACME directories and issue before application creation\n'
+[[ $(wc -l < "$fixture/ufw-guard-calls") == 1 ]]
+printf 'PASS HTTP issuance uses firewall restoration guard; DNS issuance does not alter UFW\n'
+TLS_METHOD=http
+for action in install-node migrate-remnawave-node change-domain; do
+ ACTION=$action
+ acme_certbot /bin/true
+done
+[[ $(wc -l < "$fixture/ufw-guard-calls") == 4 ]]
+TLS_METHOD=cloudflare; ACTION=change-domain
+acme_certbot /bin/true
+[[ $(wc -l < "$fixture/ufw-guard-calls") == 4 ]]
+printf 'PASS HTTP installation, migration and domain change guard UFW; DNS domain changes do not\n'
 CERT_FILE="$fixture/cert"; KEY_FILE="$fixture/key"; DEPLOY="$fixture/deploy"; mkdir -p "$DEPLOY" "$ROOT/registry"
 STATE="$WORK/state.json"; printf '{"component":"panel","panelDomain":"node.example.com","nodeDomain":""}' > "$STATE"
 COMPONENT=panel; DOMAIN=node.example.com; NODE_DOMAIN=''; TLS_METHOD=existing; PROXY=caddy; EXTRAS=(caddy); APPS=(app)

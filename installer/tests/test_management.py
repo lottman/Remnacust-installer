@@ -222,6 +222,39 @@ class ManagementTests(unittest.TestCase):
         self.assertFalse((directory / 'nginx.conf').exists())
         self.assertFalse((directory / 'certs/fullchain.pem').exists())
 
+    def test_first_node_domain_does_not_inspect_a_service_missing_from_original_compose(self):
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture', number='7289')
+        runtime.write(directory / 'docker-compose.yml', config)
+        runtime.write(directory / '.env', 'SECRET_KEY=fixture\nNODE_PORT=7289\n')
+        runtime.write(self.root / 'registry/node.json', state)
+        def inspect(item):
+            self.assertIn(item['service'], config['services'])
+            return {'State': {'Running': True}}
+        with patch.object(pages, 'inspect', side_effect=inspect):
+            plan = runtime.load(manage.prepare(self.root, 'node', 'new.example.test', tls_method='http'))
+        self.assertTrue(plan['units'][0]['addedProxy'])
+        self.assertTrue(plan['units'][0]['running']['node-nginx'])
+
+    @unittest.skipUnless(os.environ.get('REMNACUST_TEST_REAL_COMPOSE') == '1', 'real Compose validation is opt-in')
+    def test_real_compose_validates_first_tls_configuration_without_inspecting_missing_proxy(self):
+        from subscription_migration import command
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'tlsregression', 'node:fixture', number='7289')
+        runtime.write(directory / 'docker-compose.yml', config)
+        runtime.write(directory / '.env', 'SECRET_KEY=fixture\nNODE_PORT=7289\n')
+        runtime.write(self.root / 'registry/node.json', state)
+        observed = []
+        def inspect(item):
+            services = command(manage.compose_base(item), 'config', '--services').splitlines()
+            self.assertIn(item['service'], services)
+            observed.append(item['service'])
+            return {'State': {'Running': True}}
+        with patch.object(manage, 'command', command), patch.object(pages, 'inspect', side_effect=inspect):
+            plan = runtime.load(manage.prepare(self.root, 'node', 'new.example.test', tls_method='http'))
+        self.assertEqual(observed, ['remnanode'])
+        self.assertIn('node-nginx', plan['units'][0]['after']['services'])
+
     def test_first_node_tls_uses_preserved_runtime_mount_and_selected_certificate_method(self):
         directory = self.root / 'node'; directory.mkdir()
         config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture')

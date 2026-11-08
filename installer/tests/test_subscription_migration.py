@@ -22,6 +22,17 @@ def container(image='remnawave/subscription-page:old', panel='http://remnawave:3
 
 
 class MigrationTests(unittest.TestCase):
+    def test_shared_docker_error_reports_operation_without_secret_output(self):
+        def run(args, **kwargs):
+            return subprocess.CompletedProcess(args, 1, '', 'no such service: node-nginx SECRET_KEY=fixture-private')
+        with self.assertRaises(runtime.ConfigurationError) as raised:
+            migration.command(['docker', 'compose'], 'ps', '--quiet', 'node-nginx', run=run)
+        message = str(raised.exception)
+        self.assertIn('(ps)', message)
+        self.assertIn('сервис отсутствует', message)
+        self.assertNotIn('fixture-private', message)
+        self.assertNotIn('страницы подписки', message)
+
     def test_already_custom_page_is_not_offered_for_repeat_migration(self):
         panel = container(project='panel')
         panel['Config']['Labels']['com.docker.compose.service'] = 'remnawave'

@@ -271,8 +271,11 @@ def prepare(root, component, hostname, page_id=None, tls_method=None):
         raise ManagementError('Reverse proxy не управляется этим установщиком. Сначала настройте его домен и сертификат отдельно')
     if proxy not in unit['services']:
         unit['services'].append(proxy)
-        current = pages.inspect({**item, 'service': proxy})
-        unit['running'][proxy] = bool(current and current.get('State', {}).get('Running')) if not unit.get('addedProxy') else unit['running'].get(item['service'], False)
+        if unit.get('addedProxy'):
+            unit['running'][proxy] = unit['running'].get(item['service'], False)
+        else:
+            current = pages.inspect({**item, 'service': proxy})
+            unit['running'][proxy] = bool(current and current.get('State', {}).get('Running'))
     unit['proxy'] = proxy
     proxy_path = directory / ('nginx.conf' if component == 'node' else 'Caddyfile')
     edit_file(plan, proxy_path, runtime.nginx_config(hostname) if unit.get('addedProxy') else proxy_text(safe_file(proxy_path).read_text(), old, hostname, 'nginx' if component == 'node' else 'caddy'))
