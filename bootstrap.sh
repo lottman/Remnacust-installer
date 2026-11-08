@@ -9,9 +9,29 @@ for tool in curl python3; do
 done
 work=$(mktemp -d /tmp/remnacust-bootstrap.XXXXXXXX)
 trap '[[ $work == /tmp/remnacust-bootstrap.* ]] && rm -rf -- "$work"' EXIT
-request=(--fail --silent --show-error --retry 3 --connect-timeout 15 --max-time 90 --proto '=https' --proto-redir '=https' --tlsv1.2)
+request=(--fail --silent --show-error --retry 1 --retry-max-time 15 --connect-timeout 5 --max-time 45 --proto '=https' --proto-redir '=https' --tlsv1.2)
+printf 'Проверка последнего выпуска…\n'
 tag=''
-if curl "${request[@]}" --max-time 20 --max-filesize 1048576 --output "$work/release.json" https://api.github.com/repos/lottman/Remnacust-installer/releases/latest 2>/dev/null; then
+if curl "${request[@]}" --retry 0 --max-time 8 --max-filesize 4096 --output "$work/channel.json" https://raw.githubusercontent.com/lottman/Remnacust-installer/main/release-channel.json 2>/dev/null; then
+    tag=$(python3 -I - "$work/channel.json" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+data = Path(sys.argv[1]).read_bytes()
+if len(data) > 4096:
+    raise SystemExit(1)
+channel = json.loads(data)
+if not isinstance(channel, dict) or type(channel.get('schema')) is not int or channel['schema'] != 1:
+    raise SystemExit(1)
+tag = channel.get('tag')
+if not isinstance(tag, str) or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
+    raise SystemExit(1)
+print(tag)
+PY
+    ) || tag=''
+fi
+if [[ -z $tag ]] && curl "${request[@]}" --retry 0 --max-time 8 --max-filesize 1048576 --output "$work/release.json" https://api.github.com/repos/lottman/Remnacust-installer/releases/latest 2>/dev/null; then
     tag=$(python3 -I - "$work/release.json" <<'PY'
 import json
 from pathlib import Path
@@ -29,7 +49,7 @@ PY
     ) || tag=''
 fi
 if [[ -z $tag ]]; then
-curl "${request[@]}" --head --http1.1 --max-time 30 --max-filesize 16384 --dump-header "$work/headers" --output /dev/null https://github.com/lottman/Remnacust-installer/releases/latest
+curl "${request[@]}" --retry 0 --head --http1.1 --max-time 8 --max-filesize 16384 --dump-header "$work/headers" --output /dev/null https://github.com/lottman/Remnacust-installer/releases/latest || { printf 'Не удалось получить сведения о выпуске. Попробуйте позже.\n' >&2; exit 1; }
 tag=$(python3 -I - "$work/headers" <<'PY'
 from pathlib import Path
 import re

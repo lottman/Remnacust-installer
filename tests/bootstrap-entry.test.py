@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import tarfile
 import tempfile
@@ -21,6 +22,10 @@ if os.environ.get('FAIL_DOWNLOAD') == '1':
 url = next(value for value in args if value.startswith('https://'))
 if url == 'https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh':
     sys.stdout.buffer.write(pathlib.Path(os.environ['BOOTSTRAP_SOURCE']).read_bytes())
+elif url == 'https://raw.githubusercontent.com/lottman/Remnacust-installer/main/release-channel.json':
+    if os.environ.get('CHANNEL_FAIL', '1') == '1':
+        raise SystemExit(22)
+    pathlib.Path(args[args.index('--output') + 1]).write_text(os.environ.get('CHANNEL_CONTENT', '{"schema":1,"tag":"v1.2.144"}'))
 elif url == 'https://github.com/lottman/Remnacust-installer/releases/latest':
     pathlib.Path(args[args.index('--dump-header') + 1]).write_bytes((root / 'headers').read_bytes())
 elif url == 'https://api.github.com/repos/lottman/Remnacust-installer/releases/latest':
@@ -99,6 +104,41 @@ class BootstrapTests(unittest.TestCase):
         result = self.run_bootstrap(('@', 'install-node', '--node-domain', 'node.example.test'), process_substitution=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'entry').read_text().splitlines(), ['install-node', '--node-domain', 'node.example.test'])
+
+    def test_raw_channel_does_not_call_api_or_github_release_page(self):
+        result = self.run_bootstrap(('@', '--help'), process_substitution=True, CHANNEL_FAIL='0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / 'calls').read_text()
+        self.assertNotIn('api.github.com', calls)
+        self.assertNotIn('github.com/lottman/Remnacust-installer/releases/latest', calls)
+
+    def test_invalid_raw_channel_uses_checked_fallback(self):
+        result = self.run_bootstrap(CHANNEL_FAIL='0', CHANNEL_CONTENT='{"schema":1,"tag":"../../evil"}', API_FAIL='0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('api.github.com', (self.root / 'calls').read_text())
+
+    def test_metadata_requests_have_no_retries_and_eight_second_bound(self):
+        result = self.run_bootstrap()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in (self.root / 'calls').read_text().splitlines()]
+        for call in calls:
+            if not any(url.endswith('/releases/latest') or url.endswith('/release-channel.json') for url in call):
+                continue
+            self.assertEqual(call[len(call) - 1 - call[::-1].index('--retry') + 1], '0')
+            self.assertEqual(call[len(call) - 1 - call[::-1].index('--max-time') + 1], '8')
+
+    def test_channel_publisher_only_accepts_published_matching_stable_release(self):
+        publish = runpy.run_path(str(SOURCE.parent / 'scripts/release-channel.py'))['stable_channel']
+        release = {'draft': False, 'prerelease': False, 'tag_name': 'v1.2.144'}
+        self.assertEqual(publish(release, '1.2.144\n'), {'schema': 1, 'tag': 'v1.2.144'})
+        for invalid, version in [(dict(release, draft=True), '1.2.144'),
+                                 (dict(release, prerelease=True), '1.2.144'),
+                                 (dict(release, draft=0), '1.2.144'),
+                                 (dict(release, tag_name='v1.2.144-rc1'), '1.2.144-rc1'),
+                                 (dict(release, tag_name='../../evil'), '../../evil'),
+                                 (release, '1.2.145'), (None, '1.2.144')]:
+            with self.subTest(invalid=invalid, version=version), self.assertRaises(ValueError):
+                publish(invalid, version)
 
     def test_installer_error_propagates(self):
         result = self.run_bootstrap(('@', '--help'), ENTRY_STATUS='17')
