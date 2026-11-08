@@ -65,5 +65,7 @@ with (args.output/filename).open('wb') as output, gzip.GzipFile(fileobj=output, 
         info.size, info.mode, info.mtime = len(content), (0o755 if name.endswith('.sh') else 0o644), 0
         archive.addfile(info, io.BytesIO(content))
 names = ['installer.sh', f'remnacust-source-{args.tag}.tar.gz', filename] + [a['name'] for a in assets['assets']]
+if (args.output/'Install.sh').is_file():
+    names.append('Install.sh')
 (args.output/'SHA256SUMS').write_text(''.join(images.digest_file(args.output/name)+'  '+name+'\n' for name in names))
 print('Validated both architectures for all components; runtime size:', (args.output/filename).stat().st_size)

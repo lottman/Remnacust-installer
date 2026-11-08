@@ -11,7 +11,7 @@ is an independent Java Edition planning guide, not an official hosting service.
 Download the latest stable installer and open its menu:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install
 ```
 
 Choose node installation and provide the node's domain. A website is selected at random; later updates preserve it. [Selfsteal setup](../docs/NODE-SELFSTEAL.en.md).

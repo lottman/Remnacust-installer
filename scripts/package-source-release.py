@@ -225,7 +225,11 @@ def package(root, tag, local_sources=None, check=False):
             member.size, member.mode, member.mtime = len(data), (0o755 if filename.endswith('.sh') else 0o644), 0
             archive.addfile(member, io.BytesIO(data))
     (destination/'installer.sh').write_bytes(files['installer/installer.sh'])
-    checksums = ''.join(f'{hashlib.sha256((destination/f).read_bytes()).hexdigest()}  {f}\n' for f in [name, 'installer.sh'])
+    public_files = [name, 'installer.sh']
+    if 'Install.sh' in files:
+        (destination/'Install.sh').write_bytes(files['Install.sh'])
+        public_files.append('Install.sh')
+    checksums = ''.join(f'{hashlib.sha256((destination/f).read_bytes()).hexdigest()}  {f}\n' for f in public_files)
     (destination/'SHA256SUMS').write_text(checksums, encoding='utf-8', newline='\n')
     print(f'PASS {tag}: {len(files)} pinned source files; release assets in {destination}')
     return destination

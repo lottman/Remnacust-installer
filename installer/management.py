@@ -170,8 +170,10 @@ def add_unit(plan, item, state):
     return unit
 
 
-def prepare(root, component, hostname, page_id=None):
+def prepare(root, component, hostname, page_id=None, tls_method=None):
     hostname = runtime.domain(hostname)
+    if tls_method is not None and (component != 'node' or tls_method not in ('http', 'existing', 'cloudflare', 'gcore')):
+        raise ManagementError('Недопустимый способ TLS для ноды')
     record, state, item = deployment(root, component, page_id)
     shared = component == 'subscription-page' and (item.get('companion') or (
         state.get('component') == 'panel' and state.get('directory') == item['directory'] and state.get('project') == item['project']))
@@ -185,7 +187,7 @@ def prepare(root, component, hostname, page_id=None):
     if not old and component != 'node':
         raise ManagementError('Исходный домен не зарегистрирован. Сначала перенесите или обновите установку')
     old = runtime.domain(old) if old else ''
-    if hostname == old:
+    if hostname == old and tls_method is None:
         raise ManagementError('Этот домен уже используется')
     backup = root / 'backups' / ('domain-' + component + '-' + uuid.uuid4().hex)
     backup.mkdir(mode=0o700, parents=True)
@@ -207,6 +209,14 @@ def prepare(root, component, hostname, page_id=None):
             if target == '/var/lib/remnacust/tls':
                 raise ManagementError('У ноды уже есть собственное подключение TLS. Настройте его домен вручную')
         mounts.append({'type': 'bind', 'source': str(directory / 'certs'), 'target': '/var/lib/remnacust/tls', 'read_only': True})
+        normalized_mounts = [mount if isinstance(mount, dict) else
+                             {'type': 'bind' if mount.startswith('/') else 'volume', 'source': mount.split(':')[0], 'target': mount.split(':')[1]}
+                             for mount in mounts if isinstance(mount, dict) or ':' in mount]
+        sockets = [mount for mount in normalized_mounts if mount.get('target') == '/var/lib/remnacust/run']
+        if len(sockets) != 1 or sockets[0].get('type') not in ('bind', 'volume') or not sockets[0].get('source') or (sockets[0]['type'] == 'bind' and not Path(sockets[0]['source']).is_absolute()):
+            raise ManagementError('Не найден сохранённый каталог сокетов ноды; проверьте том /var/lib/remnacust/run')
+        proxy_mounts = unit['after']['services'][proxy]['volumes']
+        proxy_mounts[2] = copy.deepcopy(sockets[0])
         unit['addedProxy'] = True
         unit['state']['extraServices'] = [*state.get('extraServices', []), proxy]
     if proxy not in unit['after']['services']:
@@ -248,6 +258,8 @@ def prepare(root, component, hostname, page_id=None):
     managed_component = 'panel' if item.get('companion') else component
     method = (state.get('tls', {}).get('method', 'http' if component == 'node' else 'auto')
               if component != 'subscription-page' or item.get('companion') else 'auto')
+    if tls_method is not None:
+        method = tls_method
     if method not in ('auto', 'http', 'existing', 'cloudflare', 'gcore') or (component == 'node' and method == 'auto'):
         raise ManagementError('Неизвестный способ TLS в реестре; конфигурация не изменена')
     plan.update(proxy=proxy, directory=str(directory), method=method, project=item['project'],
@@ -387,6 +399,9 @@ def apply(path, certificate=None, key=None):
         if plan['proxy'] == 'caddy':
             command(base, 'run', '--rm', '--no-deps', '--entrypoint', 'caddy', 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
         else:
+            if unit.get('addedProxy'):
+                import node_site
+                node_site.install_site(Path(plan['directory']), plan['domain'])
             command(base, 'run', '--rm', '--no-deps', '--entrypoint', 'nginx', 'node-nginx', '-t')
         restore_processes(plan)
         for name, state in plan['records'].items():
@@ -464,11 +479,12 @@ def main():
     parser.add_argument('operation', choices=['prepare', 'apply', 'complete', 'rollback', 'stop-proxy', 'info'])
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--component', choices=['panel', 'node', 'subscription-page'])
+    parser.add_argument('--tls-method', choices=['http', 'existing', 'cloudflare', 'gcore'])
     for name in ('page-id', 'domain', 'plan', 'certificate', 'key'):
         parser.add_argument('--' + name)
     args = parser.parse_args()
     if args.operation == 'prepare':
-        print(prepare(args.root, args.component, args.domain, args.page_id))
+        print(prepare(args.root, args.component, args.domain, args.page_id, args.tls_method))
     elif args.operation in ('apply', 'rollback', 'complete', 'stop-proxy'):
         import fcntl
         plan = safe_file(args.plan)

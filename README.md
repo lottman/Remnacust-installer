@@ -34,7 +34,7 @@ docker compose up -d --no-build --pull never
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.144) | 1.2.144 |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.145) | 1.2.145 |
 | [Панель / сайт подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.100) | 1.1.7.100 |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.26) | 1.1.26 |
 | [Core / редактор](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.16) | 1.1.16, Xray v26.10.31 |
@@ -45,7 +45,7 @@ docker compose up -d --no-build --pull never
 
 | Что | Минимум или ориентир |
 | --- | --- |
-| ОС установщика 1.2.144 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| ОС установщика 1.2.145 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Архитектура | Linux amd64 или arm64 |
 | Панель с БД и кешем | От 2 CPU, 2 GiB RAM, 20 GiB диска; рекомендуется 4 CPU / 4 GiB RAM и запас под копии |
 | Нода | От 1 CPU / 1 GiB RAM с запасом под соединения и правила Xray |
@@ -64,17 +64,17 @@ docker compose up -d --no-build --pull never
 Подготовьте домен и его DNS-записи. Для подписок нужен отдельный публичный адрес. Сохраните SSH-доступ; API, БД и кеш не должны быть открыты всему интернету.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install
 ```
 
-Команда скачивает последний стабильный установщик. `@ install` открывает меню; для прямого выбора укажите `@ install-node`, `@ install-panel` или `@ install-subscription-page`. Загрузчик определяет опубликованный Latest и получает его официальный архив GitHub, сохраняя проверку помощников и ввод ответов в терминале. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
+Команда загружает самодостаточный `Install.sh`. `@ install` открывает меню; для прямого выбора укажите `@ install-node`, `@ install-panel` или `@ install-subscription-page`. Проверенный комплект помощников уже встроен, ввод ответов работает в терминале. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
 
 Либо сразу выберите действие:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-panel
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-node
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-subscription-page
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-panel
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-node
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-subscription-page
 ```
 
 Панель отдельно спрашивает, устанавливать ли сайт подписки. Обязательные пустые поля запрашиваются повторно; после домена показывается подтверждение с default `y`. Для автоматизации указывайте все обязательные параметры, `--yes` и явный выбор `--subscription-page` / `--no-subscription-page`. Свой reverse proxy: `--proxy existing`.
@@ -111,7 +111,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/
 
 ## Системные пакеты и сертификаты
 
-Действия CLI сначала обновляют список пакетов и выполняют `apt-get upgrade -y --with-new-pkgs`, кроме проверки выпуска `--check-release` и фонового обновления панели её службой. Подтверждение APT автоматическое; вопросы dpkg о конфигурации, раскладке или перезапуске служб остаются оператору. `--yes` не выбирает эти настройки. Меню, справка, выход и `--dry-run` пакеты не меняют.
+Действия CLI сначала обновляют список пакетов и выполняют `apt-get upgrade -y --with-new-pkgs`, кроме проверки выпуска `--check-release` и фонового обновления панели её службой. Подтверждение APT автоматическое; вопросы dpkg о конфигурации и раскладке остаются оператору. `--yes` не выбирает эти настройки. Меню, справка, выход и `--dry-run` пакеты не меняют.
 
 Фоновое обновление панели не блокируется новыми системными пакетами: оно обновляет приложение, а обслуживание ОС откладывает до SSH с записью в журнале. Для остальных команд без терминала изменение пакетов по-прежнему требует SSH. Скрипт сам сервер не перезагружает, но пакеты могут перезапускать службы. Новое ядро Linux начинает работать после отдельной перезагрузки. Установленному старому агенту 1.2.137 потребуется разовое обновление установщика через SSH для получения этого исправления.
 
@@ -150,6 +150,10 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 
 [Параметры CLI](installer/README.md) · [Установка и обслуживание](docs/INSTALLER.md) · [Панель](https://github.com/lottman/Remnacust-panel) · [Нода](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.144.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
+Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.145.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
 
 Сохраняются лицензии и авторство компонентов. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Поддержка проекта](https://t.me/lottman).
+
+Перенос ноды использует существующий ключ, API-порт и состояние Xray. Мастер предлагает TLS/XHTTP и сайт, способ получения сертификата и необязательные настройки firewall. Уже настроенный TLS можно сохранить. Дополнительный TLS настраивается после переноса; его сбой не удаляет перенесённую ноду. Работающий профиль Xray сохраняется: соответствующий inbound задайте в панели, как при новой установке.
+
+NeedRestart показывает ожидающие перезапуска службы, но не перезапускает их и сервер автоматически. Вопросы настройки dpkg остаются интерактивными.

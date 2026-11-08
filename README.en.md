@@ -34,7 +34,7 @@ Checked on **November 7, 2026**:
 
 | Component | Version |
 | --- | --- |
-| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.144) | 1.2.144 |
+| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.145) | 1.2.145 |
 | [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.100) | 1.1.7.100 |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.26) | 1.1.26 |
 | [Core / editor](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.16) | 1.1.16, Xray v26.10.31 |
@@ -45,7 +45,7 @@ The installer version is not the panel version. Updating one component does not 
 
 | Item | Minimum or planning allocation |
 | --- | --- |
-| Installer 1.2.144 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| Installer 1.2.145 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Architecture | Linux amd64 or arm64 |
 | Panel with database/cache | At least 2 CPU, 2 GiB RAM and 20 GiB storage; 4 CPU / 4 GiB recommended, plus backup headroom |
 | Node | At least 1 CPU / 1 GiB RAM, with headroom for Xray connections/rules |
@@ -64,17 +64,17 @@ Current panel source was tested on PostgreSQL 14–18. This is the next-update m
 Prepare a hostname and DNS records. Subscriptions need a separate public address. Preserve SSH access; do not expose the API, database or cache to the entire internet.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install
 ```
 
-The command downloads the latest stable installer. `@ install` opens the menu; use `@ install-node`, `@ install-panel` or `@ install-subscription-page` to choose directly. The bootstrap resolves the published Latest release and downloads its official GitHub source archive, keeping helper checksums and terminal input intact. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.
+The command downloads the self-contained `Install.sh`. `@ install` opens the menu; use `@ install-node`, `@ install-panel` or `@ install-subscription-page` to choose directly. Verified helpers are already bundled and terminal input remains available. Press Enter at the version prompt to select Latest; `--version` is only needed to pin a specific release.
 
 Or choose an action directly:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-panel
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-node
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-subscription-page
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-panel
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-node
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-subscription-page
 ```
 
 Panel installation asks separately whether to install the subscription website. Empty required answers are requested again; domain confirmation defaults to `y`. Automation must specify required inputs, `--yes` and `--subscription-page` or `--no-subscription-page`. Use `--proxy existing` for your own reverse proxy.
@@ -111,7 +111,7 @@ Run `sudo remnacust configure-node-site` to choose another random theme, keeping
 
 ## System packages and certificates
 
-CLI actions first refresh package indexes and run `apt-get upgrade -y --with-new-pkgs`, except release verification (`--check-release`) and background panel updates launched by its service. APT confirmation is automatic; dpkg questions about configuration, keyboard layout or service restarts remain interactive. `--yes` does not choose these settings. Opening the menu, help, exit and `--dry-run` do not change packages.
+CLI actions first refresh package indexes and run `apt-get upgrade -y --with-new-pkgs`, except release verification (`--check-release`) and background panel updates launched by its service. APT confirmation is automatic; dpkg questions about configuration or keyboard layout remain interactive. `--yes` does not choose these settings. Opening the menu, help, exit and `--dry-run` do not change packages.
 
 Background panel updates are not blocked by pending OS packages: they update the application and log that OS maintenance is deferred to SSH. Other commands without a terminal still require SSH for package changes. The script never reboots the server automatically, but package upgrades can restart services. A new Linux kernel takes effect after a separate reboot. An already installed 1.2.137 agent needs a one-time installer update through SSH to receive this fix.
 
@@ -150,6 +150,10 @@ Restore retains the installed application version and restores the database with
 
 [CLI parameters](installer/README.en.md) · [Installation/maintenance](docs/INSTALLER.md) · [Panel](https://github.com/lottman/Remnacust-panel) · [Node](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.144.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
+Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.145.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
 
 Component licenses and attribution are preserved. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Project support](https://t.me/lottman).
+
+Node migration reuses the existing secret, API port and Xray state. The interactive wizard offers TLS/XHTTP and a website, certificate method, and optional firewall settings. Existing managed TLS can be retained. Additional TLS setup runs after the node has migrated; its failure does not erase the migrated node. The working Xray profile is retained; configure the corresponding inbound in the panel as for a fresh installation.
+
+NeedRestart lists pending service restarts. It does not restart services or reboot the server; dpkg configuration questions remain interactive.

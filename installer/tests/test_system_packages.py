@@ -80,7 +80,7 @@ class SystemPackageTests(unittest.TestCase):
         for call in self.calls():
             self.assertEqual(call['tty'], [True, True, True])
             self.assertEqual(call['frontend'], 'readline')
-            self.assertEqual(call['restart'], 'i')
+            self.assertEqual(call['restart'], 'l')
             self.assertIn('-y', call['args'])
             self.assertNotIn('APT::Get::Assume-Yes=false', call['args'])
             self.assertNotIn('--assume-no', call['args'])

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='af9e267e9068f83a3aa4e72faa20c4e5b857f42a81c2892803169fac55615690'
+HELPER_BUNDLE_SHA256='057580a617c028c4d92276ea79d0b550fc17d8ff28a43a5bb9ed437bf36d6269'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -18,6 +18,7 @@ SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSC
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
 NODE_NET_ADMIN=false
 NODE_NET_ADMIN_ADDED=false
+NODE_MIGRATION_TLS=false
 ALLOW_DISRUPTION=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
@@ -169,7 +170,7 @@ Remnacust · installer.sh
   --server-ip IP[,IP]        Публичные IP сервера для проверки A/AAAA (NAT)
   --port PORT               Порт панели на loopback / API ноды
   --proxy caddy|existing    Новый Caddy (по умолчанию) / собственный proxy
-  --node-domain DOMAIN      TLS и Nginx для XHTTP/self-steal на новой ноде
+  --node-domain DOMAIN      TLS и Nginx для XHTTP/self-steal при установке или переносе ноды
   --email EMAIL             Email для регистрации ACME (панель и нода)
   --tls-method METHOD       auto (Caddy), http (нода), cloudflare, gcore, existing
   --cert-file PATH          Готовый fullchain.pem для --tls-method existing
@@ -364,9 +365,9 @@ parse_args() {
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-subscription-page || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == upgrade-panel || $ACTION == migrate-remnawave-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна для новой панели или миграции Remnawave'
-    [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
+    [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $ACTION == migrate-remnawave-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки, переноса или обновления ноды'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
-    [[ $ACTION == install-* || $ACTION == change-domain || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Параметры TLS доступны при установке и смене домена; обновление сохраняет ваш proxy и сертификаты'
+    [[ $ACTION == install-* || $ACTION == migrate-remnawave-node || $ACTION == change-domain || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Параметры TLS доступны при установке, переносе ноды и смене домена; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
     [[ $ALLOW_DISRUPTION == false || $ACTION == upgrade-panel ]] || die '--allow-disruption доступен только для upgrade-panel'
     if [[ $ACTION != migrate-marzban-panel ]] && { $DRY_RUN || $PRESERVE_SUBHASH || [[ -n $MARZBAN_URL$DESTINATION_URL$INTERNAL_SQUAD ]]; }; then die 'Параметры Marzban предназначены только для migrate-marzban-panel'; fi
@@ -661,7 +662,7 @@ package_step_command() {
     if [[ ! -t 0 || ! -t 1 || ! -t 2 ]]; then
         if [[ $operation != update ]]; then
             plan=$(mktemp "${WORK:-${TMPDIR:-/tmp}}/remnacust-apt-plan.XXXXXXXX") || return $?
-            LC_ALL=C DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" --simulate > "$plan" 2>&1 || status=$?
+            LC_ALL=C DEBIAN_FRONTEND=readline NEEDRESTART_MODE=l "${apt_command[@]}" --simulate > "$plan" 2>&1 || status=$?
             if ((status)); then
                 cat -- "$plan" >&2; rm -f -- "$plan"
                 report_update_progress "$stage" "$title" failed
@@ -679,12 +680,12 @@ package_step_command() {
     if $OPERATION_LOG_ACTIVE && [[ -t 0 && -t 1 && -t 2 ]]; then
         command -v script >/dev/null || die 'Нужен util-linux (script) для интерактивного журнала APT'
         local package_command
-        printf -v package_command '%q ' env DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}"
+        printf -v package_command '%q ' env DEBIAN_FRONTEND=readline NEEDRESTART_MODE=l "${apt_command[@]}"
         script --quiet --return --flush --append --echo never --log-out "$LOG" --command "$package_command" || status=$?
     elif $OPERATION_LOG_ACTIVE; then
-        DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" 2>&1 | tee -a -- "$LOG" || status=$?
+        DEBIAN_FRONTEND=readline NEEDRESTART_MODE=l "${apt_command[@]}" 2>&1 | tee -a -- "$LOG" || status=$?
     else
-        DEBIAN_FRONTEND=readline NEEDRESTART_MODE=i "${apt_command[@]}" || status=$?
+        DEBIAN_FRONTEND=readline NEEDRESTART_MODE=l "${apt_command[@]}" || status=$?
     fi
     [[ -z ${LOG:-} ]] || printf 'APT %s: exit %s\n' "$operation" "$status" >> "$LOG"
     if ((status)); then
@@ -1350,18 +1351,20 @@ manage_component_action() {
         python3 -I "$HELPER_ROOT/management.py" info --root "$ROOT" --component "$requested_component" "${options[@]}"
         return
     fi
-    requested_domain=$(ask_confirmed_domain 'Новый домен (без https:// и пути)' "$requested_domain") || return $?
-    confirm "Сменить домен $requested_component на $requested_domain"
+    if ! $NODE_MIGRATION_TLS; then
+        requested_domain=$(ask_confirmed_domain 'Новый домен (без https:// и пути)' "$requested_domain") || return $?
+        confirm "Сменить домен $requested_component на $requested_domain"
+    elif [[ -n $TLS_METHOD ]]; then options+=(--tls-method "$TLS_METHOD"); fi
     DOMAIN_PLAN=$(python3 -I "$HELPER_ROOT/management.py" prepare --root "$ROOT" --component "$requested_component" --domain "$requested_domain" "${options[@]}") || return $?
     info "Копия настроек: ${DOMAIN_PLAN%/plan.json}"
-    method=$(domain_plan_value method)
+    method=$(domain_plan_value method) || return $?
     [[ -z $TLS_METHOD || $TLS_METHOD == "$method" ]] || die 'При смене домена сохраняется способ TLS. Для другого способа сначала настройте сертификат отдельно.'
     TLS_METHOD=$method
-    PROJECT=$(domain_plan_value project); DEPLOY=$(domain_plan_value directory)
-    COMPONENT=$(domain_plan_value tlsComponent); DOMAIN=$(domain_plan_value certificateDomain)
+    PROJECT=$(domain_plan_value project) || return $?; DEPLOY=$(domain_plan_value directory) || return $?
+    COMPONENT=$(domain_plan_value tlsComponent) || return $?; DOMAIN=$(domain_plan_value certificateDomain) || return $?
     PROXY=caddy; NODE_DOMAIN=''; [[ $COMPONENT != node ]] || NODE_DOMAIN=$DOMAIN
-    STATE="$WORK/domain-state.json"; domain_plan_value tlsState > "$STATE"
-    SUBSCRIPTION_URLS=$(domain_plan_value certificateSubscriptions)
+    STATE="$WORK/domain-state.json"; domain_plan_value tlsState > "$STATE" || return $?
+    SUBSCRIPTION_URLS=$(domain_plan_value certificateSubscriptions) || return $?
     SUBSCRIPTION_PAGE=false; [[ -z $SUBSCRIPTION_URLS ]] || SUBSCRIPTION_PAGE=true
     if [[ $TLS_METHOD == auto || $TLS_METHOD == http ]]; then check_dns "$requested_domain" || return 1; fi
     if [[ $TLS_METHOD == existing ]]; then
@@ -1381,7 +1384,7 @@ manage_component_action() {
             [[ -f $DNS_CREDENTIALS ]] || DNS_CREDENTIALS=$(ask_required 'Путь к INI DNS-провайдера (права 600)') || return $?
         fi
         if [[ $TLS_METHOD == http ]]; then
-            python3 -I "$HELPER_ROOT/management.py" stop-proxy --root "$ROOT" --plan "$DOMAIN_PLAN"
+            python3 -I "$HELPER_ROOT/management.py" stop-proxy --root "$ROOT" --plan "$DOMAIN_PLAN" || return $?
             [[ ! -f /etc/remnacust-node-firewall/state.json ]] || PANEL_IP=managed
         fi
         obtain_certificate || return $?
@@ -1392,13 +1395,47 @@ manage_component_action() {
     python3 -I "$HELPER_ROOT/management.py" apply --root "$ROOT" --plan "$DOMAIN_PLAN" "${certificate[@]}" || return $?
     if [[ $TLS_METHOD != auto ]]; then
         STATE="$ROOT/registry/$COMPONENT.json"
-        schedule_certificate_renewal
+        schedule_certificate_renewal || return $?
     fi
     info 'Проверяем новый HTTPS-адрес (до 2 минут для работающего Caddy).'
-    python3 -I "$HELPER_ROOT/management.py" complete --root "$ROOT" --plan "$DOMAIN_PLAN"
+    python3 -I "$HELPER_ROOT/management.py" complete --root "$ROOT" --plan "$DOMAIN_PLAN" || return $?
     info "Новый домен: https://$requested_domain"
     [[ $requested_component != node ]] || info 'Обновите адрес и SNI этой ноды в хостах панели; существующие ссылки клиента сами домен не меняют.'
     DOMAIN_PLAN=''
+}
+node_migration_wizard() {
+    local previous choice
+    [[ $ACTION == migrate-remnawave-node ]] || return 0
+    PORT=$(get apiPort)
+    info "Сохраняем ключ панели, порт API $PORT, конфигурацию Xray и данные ноды."
+    previous=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nodeDomain", ""))' "$STATE")
+    if [[ -n $previous && -z $NODE_DOMAIN$TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]]; then
+        if [[ ! -t 0 ]] || $YES; then return 0; fi
+        choice=$(ask_yes_no "TLS/XHTTP уже настроен для $previous. Изменить настройки?") || return $?
+        [[ $choice == yes ]] || return 0
+        NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$previous") || return $?
+    elif [[ -n $NODE_DOMAIN ]]; then
+        NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$NODE_DOMAIN") || return $?
+    fi
+    certificate_wizard || return $?
+    if [[ -n $NODE_DOMAIN ]]; then
+        NODE_MIGRATION_TLS=true
+        certificate_preflight || return $?
+        dns_preflight || return $?
+    fi
+}
+node_migration_finish() {
+    [[ $ACTION == migrate-remnawave-node ]] || return 0
+    if $NODE_MIGRATION_TLS; then
+        local ACTION=change-domain DOMAIN=$NODE_DOMAIN
+        info 'Нода перенесена. Настраиваем сайт и TLS/XHTTP с сохранением её данных.'
+        if ! manage_component_action; then
+            printf 'Перенос ноды завершён, но настройка TLS/XHTTP не завершена. Нода и исходные данные сохранены; подробности в журнале.\n' >&2
+            return 1
+        fi
+        STATE="$ROOT/registry/node.json"; load_state
+    fi
+    [[ -z $PANEL_IP ]] || node_acl
 }
 configure_node_site() {
     COMPONENT=node
@@ -2663,7 +2700,7 @@ node_acl() {
     info 'Отмена ограничения: python3 /etc/remnacust-node-firewall/guard.py remove'
 }
 deploy() {
-    [[ $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки или обновления ноды'
+    [[ $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $ACTION == migrate-remnawave-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки, переноса или обновления ноды'
     [[ $ACTION == install-* || -z $PORT ]] || die '--port задаёт порт новой установки. Обновление и миграция сохраняют фактический порт существующего контейнера.'
     if [[ $ACTION == install-* ]]; then
         info "$ACTION · новая установка $COMPONENT"
@@ -2723,6 +2760,7 @@ deploy() {
             ((${#detected[@]} != 1)) || CONTAINER=${detected[0]}
         fi
         find_existing
+        node_migration_wizard
         if [[ $COMPONENT == node ]]; then node_net_admin_wizard "$WORK/compose.after.json"; fi
         if [[ $COMPONENT == panel ]]; then
             database_environment; check_writers
@@ -2794,6 +2832,7 @@ PY
     helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     if [[ $ACTION != install-* ]]; then install_cli; fi
     CHANGED=false; trap - ERR
+    node_migration_finish
     if [[ $COMPONENT == panel ]] && python3 -c 'import json,sys;sys.exit(not json.load(open(sys.argv[1])).get("subscriptionMigration"))' "$STATE"; then
         step 'Перенос и проверка страницы подписки' subscription_migration_apply
         helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"

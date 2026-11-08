@@ -3,13 +3,13 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  bootstrap:
+  install-entry:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n bootstrap.sh && python3 -B tests/bootstrap-entry.test.py
-      - run: bash bootstrap.sh @ --help
+      - run: bash -n Install.sh && python3 -B scripts/build-install-entry.py --check && python3 -B tests/install-entry.test.py
+      - run: bash Install.sh @ --help
   os-userspace:
     runs-on: ubuntu-latest
     timeout-minutes: 20

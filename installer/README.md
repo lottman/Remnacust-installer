@@ -2,14 +2,14 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-**Установщик 1.2.144**: панель/страница 1.1.7.100, Node 1.1.26, Core 1.1.16 на стабильном Xray v26.10.31. Установщик поддерживает Ubuntu 22.04/24.04/26.04 LTS и Debian 12/13, Linux amd64/arm64. При установке Docker используется официальный репозиторий своей ОС. Для нового учёта автовыбора обновите ноды и подписки клиентов; исторический расход не перераспределяется. Версии, быстрый запуск и пути: [основной README](../README.md).
+**Установщик 1.2.145**: панель/страница 1.1.7.100, Node 1.1.26, Core 1.1.16 на стабильном Xray v26.10.31. Установщик поддерживает Ubuntu 22.04/24.04/26.04 LTS и Debian 12/13, Linux amd64/arm64. При установке Docker используется официальный репозиторий своей ОС. Для нового учёта автовыбора обновите ноды и подписки клиентов; исторический расход не перераспределяется. Версии, быстрый запуск и пути: [основной README](../README.md).
 
 ## Установка готового комплекта
 
 Скачать последний стабильный установщик и открыть его интерактивное меню:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install
 ```
 
 ## Основной домен подписки и .env
@@ -47,9 +47,9 @@ CLI сохраняет один `logs/installer-<компонент>.log` до �
 ## Установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-panel
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-node
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ install-subscription-page
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-panel
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-node
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install-subscription-page
 ```
 
 Команда скачивает последний стабильный установщик. В вопросе о версии нажмите Enter для Latest; `--version` нужен только для выбора конкретного выпуска.
@@ -58,7 +58,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/
 
 | Параметр | Назначение |
 | --- | --- |
-| `--version latest\|1.2.144` | Выпуск комплекта установщика. |
+| `--version latest\|1.2.145` | Выпуск комплекта установщика. |
 | `--domain DOMAIN` | Домен компонента без протокола, порта и пути. |
 | `--port PORT` | Loopback-порт панели или API-порт ноды. |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Явное определение существующей установки. |
@@ -133,8 +133,8 @@ sudo remnacust change-domain --component subscription-page --page-id ID --domain
 sudo remnacust upgrade-panel
 sudo remnacust upgrade-node
 sudo remnacust upgrade-subscription-page --page-id ID
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ migrate-remnawave-panel --container remnawave
-bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/bootstrap.sh) @ migrate-remnawave-node --container remnanode
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ migrate-remnawave-panel --container remnawave
+bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ migrate-remnawave-node --container remnanode
 ```
 
 При обновлении сохраняются конфигурация, mounts и секреты. Панель получает согласованную копию PostgreSQL до остановки приложений. Обновление агента и бинарника Xray может прервать клиентские соединения; обновление одной панели не обновляет удалённый Core.
@@ -173,3 +173,7 @@ Xray v26.10.31 выключает MPTCP по умолчанию и сохран�
 
 CVE-2026-98432 исправляется обновлением ядра хоста и загрузкой исправленного ядра; обновление Docker-образа этого не делает. Проверяйте статус конкретного пакета по бюллетеню дистрибутива. До подтверждения исправления MPTCP должен оставаться выключенным. После исправления его можно включить явно. Проверка слушателей: `sudo ss -Mlnp`; `uname -r` показывает запущенное ядро, но сам по себе не доказывает наличие исправления. [Xray](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31) · [Go Security Team](https://groups.google.com/g/golang-announce/c/PCoQcdxoScw/m/aD-MgXEvAAAJ).
 
+
+Перенос ноды использует существующий ключ, API-порт и состояние Xray. Мастер предлагает TLS/XHTTP и сайт, способ получения сертификата и необязательные настройки firewall. Уже настроенный TLS можно сохранить. Дополнительный TLS настраивается после переноса; его сбой не удаляет перенесённую ноду. Работающий профиль Xray сохраняется: соответствующий inbound задайте в панели, как при новой установке.
+
+NeedRestart показывает ожидающие перезапуска службы, но не перезапускает их и сервер автоматически. Вопросы настройки dpkg остаются интерактивными.

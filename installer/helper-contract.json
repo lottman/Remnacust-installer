@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "d64987d930164a80329da1c549145082952a7bb80a07b873806df476c1340885",
+  "entry_sha256": "414bdb519e3554b72eb6c2fb39bb07a1e8e22615549376fd6b574e927d51262b",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -30,8 +30,8 @@
       "sha256": "dce0cb295fcfac38a5c08698078b0076b11ebfc562d00a80804ac077bb7795c5"
     },
     "management.py": {
-      "bytes": 26295,
-      "sha256": "759bc27eb8638c8c76c3d73a621275b8d9b4f09daa8ea4ee1d88a2cffb434902"
+      "bytes": 27767,
+      "sha256": "a1bc1ce2e04a375e88db7fe01f07e115b23b1ddf762497e9234a3b272b5cced4"
     },
     "marzban.py": {
       "bytes": 14142,
@@ -95,5 +95,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.144"
+  "version": "1.2.145"
 }

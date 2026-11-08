@@ -189,10 +189,40 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual((directory / '.env').read_text(), 'SECRET_KEY=UNCHANGED\nNODE_PORT=2222\n')
         self.assertEqual(updated['apiPort'], 2222)
         self.assertEqual((directory / 'certs/fullchain.pem').read_bytes(), certificate.read_bytes())
+        self.assertTrue((directory / 'www/index.html').is_file())
         manage.rollback(plan)
         self.assertEqual(runtime.load(directory / 'docker-compose.yml'), config)
         self.assertFalse((directory / 'nginx.conf').exists())
         self.assertFalse((directory / 'certs/fullchain.pem').exists())
+
+    def test_first_node_tls_uses_preserved_runtime_mount_and_selected_certificate_method(self):
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture')
+        preserved = directory / '.remnacust-node-state-fixture/runtime'
+        config['services']['remnanode']['volumes'][0] = {'type': 'bind', 'source': str(preserved), 'target': '/var/lib/remnacust/run'}
+        runtime.write(directory / 'docker-compose.yml', config)
+        runtime.write(self.root / 'registry/node.json', state)
+        plan = runtime.load(manage.prepare(self.root, 'node', 'edge.example.test', tls_method='existing'))
+        self.assertEqual(plan['method'], 'existing')
+        mounts = plan['units'][0]['after']['services']['node-nginx']['volumes']
+        self.assertEqual(mounts[2]['source'], str(preserved))
+        self.assertEqual(plan['units'][0]['after']['services']['remnanode']['image'], 'node:fixture')
+
+    def test_node_tls_can_be_reconfigured_for_same_domain_with_explicit_method(self):
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture', node_domain='edge.example.test')
+        runtime.write(directory / 'docker-compose.yml', config)
+        runtime.write(directory / 'nginx.conf', runtime.nginx_config('edge.example.test'))
+        runtime.write(self.root / 'registry/node.json', state)
+        plan = runtime.load(manage.prepare(self.root, 'node', 'edge.example.test', tls_method='gcore'))
+        self.assertEqual(plan['method'], 'gcore')
+        self.assertNotIn('addedProxy', plan['units'][0])
+
+    def test_invalid_tls_method_does_not_modify_panel_or_node_registry(self):
+        before = (self.root / 'registry/panel.json').read_bytes()
+        with self.assertRaises(ValueError):
+            manage.prepare(self.root, 'panel', 'new.example.test', tls_method='existing')
+        self.assertEqual((self.root / 'registry/panel.json').read_bytes(), before)
 
     def test_separate_page_changes_only_its_domain(self):
         directory = self.root / 'page'; directory.mkdir()
