@@ -11,10 +11,13 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import socket
+import ssl
 import subprocess
 import tarfile
 import tempfile
 import threading
+import time
 import uuid
 from urllib.parse import urlsplit
 
@@ -736,11 +739,44 @@ def node_env(secret, number):
     return f"NODE_PORT={number}\nSECRET_KEY='{secret}'\n"
 
 
-def nginx_config(hostname):
+def wait_node_https(state, timeout=20):
+    if state.get('nodeSiteMode') != 'standalone':
+        return
+    hostname = domain(state['nodeDomain'])
+    number = port(state['nodeSitePort'])
+    certificate = Path(state['directory']) / 'certs/fullchain.pem'
+    if certificate.is_symlink() or not 0 < certificate.stat().st_size <= 131072:
+        fail('Небезопасный файл сертификата HTTPS-сайта')
+    content = certificate.read_text()
+    leaf = re.search(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', content, re.S)
+    if not leaf:
+        fail('Сертификат HTTPS-сайта не найден')
+    expected = hashlib.sha256(ssl.PEM_cert_to_DER_cert(leaf[0])).digest()
+    context = ssl.create_default_context(cafile=str(certificate))
+    context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(('127.0.0.1', number), timeout=min(2, max(.1, deadline-time.monotonic()))) as raw:
+                with context.wrap_socket(raw, server_hostname=hostname) as secured:
+                    if hashlib.sha256(secured.getpeercert(binary_form=True)).digest() != expected:
+                        fail('На порту сайта отвечает другой TLS-сервис')
+                    secured.sendall(f'GET / HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n'.encode())
+                    if 200 <= int(secured.recv(512).split()[1]) < 400:
+                        return
+        except (OSError, ValueError, IndexError):
+            pass
+        time.sleep(.2)
+    fail('HTTPS-сайт не подтвердил готовность; проверьте порт, сертификат и журнал node-nginx')
+
+
+def nginx_config(hostname, site_port=None):
     hostname = domain(hostname)
+    public = '' if site_port is None else f'    listen 0.0.0.0:{port(site_port)} ssl;\n    listen [::]:{port(site_port)} ssl;\n'
     return f'''server {{
     listen unix:/var/lib/remnacust/run/nginx.sock ssl proxy_protocol;
-    server_name {hostname};
+{public}    server_name {hostname};
     ssl_certificate /var/lib/remnacust/tls/fullchain.pem;
     ssl_certificate_key /var/lib/remnacust/tls/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -763,7 +799,15 @@ def nginx_config(hostname):
 '''
 
 
-def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010', panel_net_admin=False, node_net_admin=True):
+def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010', panel_net_admin=False, node_net_admin=True, node_site_mode='selfsteal', node_site_port='443', node_inbound_port='8443'):
+    if node_site_mode not in ('selfsteal', 'standalone'):
+        fail('Неизвестный режим сайта ноды')
+    if component == 'node' and node_site_mode == 'standalone' and not node_domain:
+        fail('Для отдельного HTTPS-сайта нужен домен ноды')
+    if component == 'node' and node_site_mode == 'standalone':
+        values = [port(value) for value in (number, node_site_port, node_inbound_port)]
+        if len(set(values)) != 3:
+            fail('Порты API, сайта и входа Xray должны отличаться')
     if panel_net_admin and component != 'panel':
         fail('Выбор NET_ADMIN панели доступен только для новой панели')
     directory = Path(directory).resolve()
@@ -837,6 +881,8 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
             state.update({'subscriptionPage': True, 'subscriptionPort': subscription_port,
                           'subscriptionTokenUuid': str(uuid.uuid4())})
             state['applications'].append('remnawave-subscription-page')
+    else:
+        state.update(nodeSiteMode=node_site_mode, nodeSitePort=port(node_site_port), nodeInboundPort=port(node_inbound_port))
     return result, state
 
 
@@ -1130,7 +1176,7 @@ def write_layout(state, config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'layout'])
+    parser.add_argument('operation', choices=['node-https', 'discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'layout'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
@@ -1139,13 +1185,17 @@ def main():
     parser.add_argument('--network', default='')
     parser.add_argument('--panel-net-admin', action='store_true')
     parser.add_argument('--node-no-net-admin', action='store_true')
+    parser.add_argument('--node-site-mode', choices=['selfsteal', 'standalone'], default='selfsteal')
+    parser.add_argument('--node-site-port', default='443'); parser.add_argument('--node-inbound-port', default='8443')
     parser.add_argument('--domain', default=''); parser.add_argument('--port', default='3000')
     parser.add_argument('--subscription-urls', default='')
     parser.add_argument('--subscription-image', default=''); parser.add_argument('--subscription-port', default='3010')
     parser.add_argument('--proxy', choices=['caddy', 'existing'], default='caddy')
     parser.add_argument('--node-domain', default=''); parser.add_argument('--key'); parser.add_argument('--version')
     args = parser.parse_args()
-    if args.operation == 'layout':
+    if args.operation == 'node-https':
+        wait_node_https(load(args.state))
+    elif args.operation == 'layout':
         write_layout(load(args.state), load(args.source))
     elif args.operation == 'node-capability':
         config = load(args.source)
@@ -1217,9 +1267,9 @@ def main():
             fail('Небезопасный каталог сокетов ноды')
         node_site.install_site(p, domain(args.domain))
         (p/'run').mkdir(exist_ok=True); (p/'run').chmod(0o755)
-        write(p/'nginx.conf', nginx_config(args.domain))
+        write(p/'nginx.conf', nginx_config(args.domain, args.node_site_port if args.node_site_mode == 'standalone' else None))
     elif args.operation == 'fresh':
-        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port, args.panel_net_admin, not args.node_no_net_admin)
+        config, state = fresh(args.component, args.directory, args.project, args.image, args.domain, args.port, args.proxy, args.node_domain, args.subscription_urls, args.subscription_image, args.subscription_port, args.panel_net_admin, not args.node_no_net_admin, args.node_site_mode, args.node_site_port, args.node_inbound_port)
         state['composeFiles'] = [str(Path(args.target).resolve())]
         state['composeEntryPoint'] = str(Path(args.target).resolve())
         write(args.target, config); write(args.state, state)

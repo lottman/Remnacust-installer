@@ -15,6 +15,61 @@ import subscription_pages as pages
 
 
 class ManagementTests(unittest.TestCase):
+    def test_standalone_website_listens_on_selected_port_without_proxy_protocol(self):
+        config = runtime.nginx_config('edge.example.test', 4433)
+        self.assertIn('listen 0.0.0.0:4433 ssl;', config)
+        self.assertIn('listen [::]:4433 ssl;', config)
+        self.assertIn('listen unix:/var/lib/remnacust/run/nginx.sock ssl proxy_protocol;', config)
+        self.assertNotIn('4433 ssl proxy_protocol', config)
+        with self.assertRaises(ValueError): runtime.nginx_config('edge.example.test', '443;bad')
+
+    def test_standalone_ports_are_recorded_and_must_be_distinct(self):
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture', number='7289', node_domain='edge.example.test', node_site_mode='standalone', node_site_port='4433', node_inbound_port='8444')
+        self.assertEqual((state['apiPort'], state['nodeSitePort'], state['nodeInboundPort']), (7289, 4433, 8444))
+        with self.assertRaises(ValueError):
+            runtime.fresh('node', directory, 'nodefixture', 'node:fixture', number='4433', node_site_mode='standalone', node_site_port='4433')
+
+    def test_first_node_standalone_domain_preserves_api_and_sets_public_site_port(self):
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture', number='7289')
+        runtime.write(directory / 'docker-compose.yml', config)
+        runtime.write(self.root / 'registry/node.json', state)
+        plan = runtime.load(manage.prepare(self.root, 'node', 'edge.example.test', tls_method='http', site_mode='standalone', site_port='4433', inbound_port='8444'))
+        record = plan['records'][str(self.root / 'registry/node.json')]
+        self.assertEqual((record['nodeSiteMode'], record['nodeSitePort'], record['nodeInboundPort'], record['apiPort']), ('standalone', 4433, 8444, 7289))
+        self.assertIn('listen 0.0.0.0:4433 ssl;', plan['files'][str(directory / 'nginx.conf')]['after'])
+
+    def test_standalone_firewall_and_proxy_roll_back_together(self):
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture', number='7289')
+        runtime.write(directory / 'docker-compose.yml', config)
+        runtime.write(directory / '.env', 'SECRET_KEY=fixture\nNODE_PORT=7289\n')
+        runtime.write(self.root / 'registry/node.json', state)
+        certificate, key = self.root / 'leaf.pem', self.root / 'key.pem'
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', str(key), '-out', str(certificate), '-days', '3', '-subj', '/CN=new.example.test', '-addext', 'subjectAltName=DNS:new.example.test'], capture_output=True, check=True)
+        for failure in ('none', 'firewall', 'https'):
+            plan = manage.prepare(self.root, 'node', 'new.example.test', site_mode='standalone', site_port='4433', inbound_port='8444')
+            calls = []
+            def firewall(port):
+                calls.append(port)
+                if failure == 'firewall' and port == 4433:
+                    raise RuntimeError('fixture firewall failure')
+            with patch.object(manage, 'set_site_firewall', side_effect=firewall):
+                if failure == 'firewall':
+                    with self.assertRaises(RuntimeError): manage.apply(plan, certificate, key)
+                else:
+                    manage.apply(plan, certificate, key)
+                    self.assertIn('node-nginx', runtime.load(self.root / 'registry/node.json')['ownedServices'])
+                    if failure == 'https':
+                        with patch.object(runtime, 'wait_node_https', side_effect=ValueError('fixture HTTPS failure')):
+                            with self.assertRaises(ValueError): manage.complete(plan)
+                    else:
+                        manage.rollback(plan)
+            self.assertEqual(calls, [4433, 0])
+            self.assertEqual(runtime.load(directory / 'docker-compose.yml'), config)
+            self.assertEqual(runtime.load(self.root / 'registry/node.json'), state)
+
     def test_private_socket_directory_gains_only_search_access_and_can_be_restored(self):
         path = self.root / 'sockets'; path.mkdir(mode=0o700)
         private = path / 'node-reconciliation.json'; private.write_text('private fixture'); private.chmod(0o600)
@@ -213,6 +268,7 @@ class ManagementTests(unittest.TestCase):
         updated = runtime.load(self.root / 'registry/node.json')
         self.assertEqual(updated['nodeDomain'], 'new.example.test')
         self.assertIn('node-nginx', updated['extraServices'])
+        self.assertIn('node-nginx', updated['ownedServices'])
         self.assertEqual((directory / '.env').read_text(), 'SECRET_KEY=UNCHANGED\nNODE_PORT=2222\n')
         self.assertEqual(updated['apiPort'], 2222)
         self.assertEqual((directory / 'certs/fullchain.pem').read_bytes(), certificate.read_bytes())

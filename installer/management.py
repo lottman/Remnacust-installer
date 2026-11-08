@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import signal
 import stat
+import subprocess
 import sys
 import time
 import urllib.error
@@ -209,11 +210,20 @@ def add_unit(plan, item, state):
     return unit
 
 
-def prepare(root, component, hostname, page_id=None, tls_method=None):
+def prepare(root, component, hostname, page_id=None, tls_method=None, site_mode=None, site_port=None, inbound_port=None):
     hostname = runtime.domain(hostname)
     if tls_method is not None and (component != 'node' or tls_method not in ('http', 'existing', 'cloudflare', 'gcore')):
         raise ManagementError('Недопустимый способ TLS для ноды')
     record, state, item = deployment(root, component, page_id)
+    if site_mode is not None and (component != 'node' or site_mode not in ('selfsteal', 'standalone')):
+        raise ManagementError('Недопустимый режим сайта ноды')
+    mode = site_mode or state.get('nodeSiteMode', 'selfsteal')
+    if component == 'node' and mode not in ('selfsteal', 'standalone'):
+        raise ManagementError('Неизвестный режим сайта в настройках ноды')
+    https_port = runtime.port(site_port if site_port is not None else state.get('nodeSitePort', 443))
+    xray_port = runtime.port(inbound_port if inbound_port is not None else state.get('nodeInboundPort', 8443))
+    if component == 'node' and mode == 'standalone' and len({runtime.port(state['apiPort']), https_port, xray_port}) != 3:
+        raise ManagementError('Порты API, сайта и входа Xray должны отличаться')
     shared = component == 'subscription-page' and (item.get('companion') or (
         state.get('component') == 'panel' and state.get('directory') == item['directory'] and state.get('project') == item['project']))
     if shared:
@@ -226,12 +236,17 @@ def prepare(root, component, hostname, page_id=None, tls_method=None):
     if not old and component != 'node':
         raise ManagementError('Исходный домен не зарегистрирован. Сначала перенесите или обновите установку')
     old = runtime.domain(old) if old else ''
-    if hostname == old and tls_method is None:
+    if hostname == old and tls_method is None and site_mode is None:
         raise ManagementError('Этот домен уже используется')
     backup = root / 'backups' / ('domain-' + component + '-' + uuid.uuid4().hex)
     backup.mkdir(mode=0o700, parents=True)
     plan = {'root': str(root), 'component': component, 'old': old, 'domain': hostname,
             'files': {}, 'records': {}, 'units': [], 'phase': 'prepared', 'backup': str(backup)}
+    if component == 'node' and site_mode is not None:
+        previous_site_port = runtime.port(state.get('nodeSitePort', 443)) if state.get('nodeSiteMode') == 'standalone' else 0
+        next_site_port = https_port if mode == 'standalone' else 0
+        if previous_site_port != next_site_port:
+            plan['siteFirewall'] = {'before': previous_site_port, 'after': next_site_port}
     effective = state if component != 'subscription-page' or item.get('companion') else {
         **item, 'component': 'subscription-page', 'mainService': item['service'], 'applications': [item['service']],
         'extraServices': ['caddy'] if (Path(item['directory']) / 'Caddyfile').exists() else []}
@@ -278,7 +293,13 @@ def prepare(root, component, hostname, page_id=None, tls_method=None):
             unit['running'][proxy] = bool(current and current.get('State', {}).get('Running'))
     unit['proxy'] = proxy
     proxy_path = directory / ('nginx.conf' if component == 'node' else 'Caddyfile')
-    edit_file(plan, proxy_path, runtime.nginx_config(hostname) if unit.get('addedProxy') else proxy_text(safe_file(proxy_path).read_text(), old, hostname, 'nginx' if component == 'node' else 'caddy'))
+    if component == 'node' and (unit.get('addedProxy') or site_mode is not None):
+        if not unit.get('addedProxy') and safe_file(proxy_path).read_text() != runtime.nginx_config(old, state.get('nodeSitePort', 443) if state.get('nodeSiteMode') == 'standalone' else None):
+            raise ManagementError('Конфигурация Nginx изменена вручную; смените её порты вручную или восстановите управляемый вариант')
+        text = runtime.nginx_config(hostname, https_port if mode == 'standalone' else None)
+    else:
+        text = proxy_text(safe_file(proxy_path).read_text(), old, hostname, 'nginx' if component == 'node' else 'caddy')
+    edit_file(plan, proxy_path, text)
     updated = copy.deepcopy(state)
     if component == 'panel':
         updated['panelDomain'] = hostname
@@ -291,7 +312,10 @@ def prepare(root, component, hostname, page_id=None, tls_method=None):
         configure_environment(plan, unit, [n for n in state['applications'] if n != 'remnawave-subscription-page'], values)
     elif component == 'node':
         updated['nodeDomain'] = hostname
+        updated.update(nodeSiteMode=mode, nodeSitePort=https_port, nodeInboundPort=xray_port)
         updated['extraServices'] = unit['state'].get('extraServices', [])
+        if unit.get('addedProxy'):
+            updated['ownedServices'] = list(dict.fromkeys([*state.get('ownedServices', state['applications']), 'node-nginx']))
     elif item.get('companion'):
         urls = [replace_host(url, old, hostname) for url in state['subscriptionUrls']]
         updated['subscriptionUrls'] = urls
@@ -374,10 +398,19 @@ def restore_processes(plan, original=False):
                 pages.ready({**item, 'service': name})
 
 
+def set_site_firewall(port):
+    try:
+        subprocess.run([sys.executable, '-I', str(Path(__file__).with_name('node_firewall.py')), 'site', '--https-port', str(port)], check=True, timeout=300)
+    except subprocess.SubprocessError:
+        raise ManagementError('Не удалось настроить доступ к HTTPS-сайту; проверьте firewall и приватный журнал') from None
+
+
 def rollback(path):
     plan = runtime.load(path)
     if plan['phase'] in ('complete', 'rolled-back', 'prepared'):
         return
+    if plan.get('siteFirewallApplied'):
+        set_site_firewall(plan['siteFirewall']['before'])
     for unit in plan['units']:
         if unit.get('addedProxy'):
             candidate = Path(plan['backup']) / ('candidate-' + str(plan['units'].index(unit)) + '.json')
@@ -457,6 +490,10 @@ def apply(path, certificate=None, key=None):
                 node_site.install_site(Path(plan['directory']), plan['domain'])
             command(base, 'run', '--rm', '--no-deps', '--entrypoint', 'nginx', 'node-nginx', '-t')
         restore_processes(plan)
+        if plan.get('siteFirewall'):
+            plan['siteFirewallApplied'] = True
+            runtime.write(path, plan)
+            set_site_firewall(plan['siteFirewall']['after'])
         for name, state in plan['records'].items():
             runtime.write(name, state)
         for unit in plan['units']:
@@ -477,6 +514,9 @@ def description(root, component, page_id=None):
 
 def verify_https(plan):
     unit = plan['units'][0]
+    if plan['component'] == 'node' and unit['running'].get('node-nginx'):
+        runtime.wait_node_https(plan['tlsState'])
+        return
     if plan['proxy'] != 'caddy' or not unit['running'].get('caddy'):
         return
     panel = plan['component'] == 'panel'
@@ -533,11 +573,13 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--component', choices=['panel', 'node', 'subscription-page'])
     parser.add_argument('--tls-method', choices=['http', 'existing', 'cloudflare', 'gcore'])
+    parser.add_argument('--site-mode', choices=['selfsteal', 'standalone'])
+    parser.add_argument('--site-port'); parser.add_argument('--inbound-port')
     for name in ('page-id', 'domain', 'plan', 'certificate', 'key'):
         parser.add_argument('--' + name)
     args = parser.parse_args()
     if args.operation == 'prepare':
-        print(prepare(args.root, args.component, args.domain, args.page_id, args.tls_method))
+        print(prepare(args.root, args.component, args.domain, args.page_id, args.tls_method, args.site_mode, args.site_port, args.inbound_port))
     elif args.operation in ('apply', 'rollback', 'complete', 'stop-proxy'):
         import fcntl
         plan = safe_file(args.plan)

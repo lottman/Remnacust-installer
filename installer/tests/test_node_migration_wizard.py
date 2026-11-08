@@ -11,8 +11,9 @@ class NodeMigrationWizardTests(unittest.TestCase):
     terminal = test_input.InputWorkflowTests.terminal
     def command(self, state=None):
         (self.root / 'node.json').write_text(json.dumps(state or {'apiPort': 7289}))
+        mode = '' if state and state.get('nodeDomain') else 'selfsteal'
         return ('source "$1"; WORK="$2"; STATE="$2/node.json"; ACTION=migrate-remnawave-node; '
-                'COMPONENT=node; HELPER="$(dirname "$1")/runtime.py"; '
+                f'COMPONENT=node; NODE_SITE_MODE="{mode}"; HELPER="$(dirname "$1")/runtime.py"; '
                 'certificate_preflight() { printf CERTIFICATE-CHECKED; }; dns_preflight() { printf DNS-CHECKED; }; ')
 
     def test_migration_asks_for_xhttp_and_certificate_with_existing_api_port(self):
@@ -79,7 +80,7 @@ class NodeMigrationWizardTests(unittest.TestCase):
 
     def test_install_confirms_wizard_domain_only_once_before_release(self):
         command = ('source "$1"; WORK="$2"; HELPER="$(dirname "$1")/runtime.py"; ACTION=install-node; '
-                   'COMPONENT=node; PORT=7289; PANEL_IP=192.0.2.1; TLS_METHOD=existing; '
+                   'COMPONENT=node; NODE_SITE_MODE=selfsteal; PORT=7289; PANEL_IP=192.0.2.1; TLS_METHOD=existing; '
                    'CERT_FILE=/fixture/cert; KEY_FILE=/fixture/key; REMNACUST_NODE_SECRET=fixture; VERSION=latest; '
                    'installed_helper() { :; }; prepare_helpers_install() { :; }; resolve_release() { return 77; }; '
                    'certificate_wizard; release_source')
@@ -89,6 +90,49 @@ class NodeMigrationWizardTests(unittest.TestCase):
             ('Использовать домен edge.example.com? y/n [y]: ', '\n')])
         self.assertEqual(code, 77, output)
         self.assertEqual(output.count('Использовать домен edge.example.com?'), 1, output)
+
+    def test_install_and_migration_ask_separate_website_and_xray_ports(self):
+        for action in ('install-node', 'migrate-remnawave-node'):
+            command = (self.command() + f'ACTION={action}; NODE_SITE_MODE=""; PORT=7289; PANEL_IP=192.0.2.1; '
+                       'TLS_METHOD=existing; CERT_FILE=/fixture/cert; KEY_FILE=/fixture/key; '
+                       'certificate_wizard; printf "PORTS=%s|%s|%s|%s" "$PORT" "$NODE_SITE_MODE" "$NODE_SITE_PORT" "$NODE_INBOUND_PORT"')
+            code, output = self.terminal(command, [
+                ('Настроить TLS/XHTTP на ноде? y/n [n]: ', 'y\n'),
+                ('Домен ноды: ', 'edge.example.com\n'),
+                ('Использовать домен edge.example.com? y/n [y]: ', '\n'),
+                ('Режим сайта [1]: ', '\n'),
+                ('Порт HTTPS-сайта [443]: ', '4433\n'),
+                ('Порт входа Xray в профиле панели [8443]: ', '8444\n')])
+            self.assertEqual(code, 0, output)
+            self.assertIn('PORTS=7289|standalone|4433|8444', output)
+
+    def test_rediscovery_preserves_site_ports_only_for_same_installation(self):
+        deploy = self.root / 'deployment'
+        deploy.mkdir()
+        compose = deploy / 'compose.json'
+        config = {'services': {'remnanode': {'image': 'ghcr.io/remnawave/node:latest'}}}
+        compose.write_text(json.dumps(config))
+        container = {'Id': 'fixture', 'Config': {'Env': ['NODE_PORT=7289', 'SECRET_KEY=fixture-only'], 'Labels': {
+            'com.docker.compose.project': 'fixture-node', 'com.docker.compose.service': 'remnanode',
+            'com.docker.compose.project.working_dir': str(deploy), 'com.docker.compose.project.config_files': str(compose)}}}
+        (self.root / 'inspect.json').write_text(json.dumps([container]))
+        (self.root / 'config.json').write_text(json.dumps(config))
+        (self.root / 'registry').mkdir()
+        for project, expected in [('fixture-node', True), ('another-node', False)]:
+            (self.root / 'registry/node.json').write_text(json.dumps({'project': project, 'directory': str(deploy),
+                'nodeDomain': 'edge.example.com', 'nodeSiteMode': 'standalone', 'nodeSitePort': 4433, 'nodeInboundPort': 8444}))
+            script = '''source "$1"
+ROOT="$2"; WORK="$2"; HELPER="$3"; COMPONENT=node; CONTAINER=fixture; IMAGE=new
+docker() { if [[ $1 == inspect ]]; then cat "$WORK/inspect.json"; else printf fixture; fi; }
+compose() { cat "$WORK/config.json"; }
+capture_running_apps() { RUNNING_APPS=(remnanode); }
+find_existing
+'''
+            result = subprocess.run(['bash', '-c', script, 'test', str(test_input.INSTALLER), str(self.root), str(Path(test_input.INSTALLER).with_name('runtime.py'))], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            state = json.loads((self.root / 'state.json').read_text())
+            for key, value in [('nodeSiteMode', 'standalone'), ('nodeSitePort', 4433), ('nodeInboundPort', 8444)]:
+                self.assertEqual(state.get(key), value if expected else None)
 
 
 if __name__ == '__main__':

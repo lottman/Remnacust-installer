@@ -1,5 +1,5 @@
 {
-  "entry_sha256": "33b6bdb5f45a1b416b970dc0443a01c3ead9b3ac32cb5c7e889f4127010ace7a",
+  "entry_sha256": "14d0b9ab4c8c463610cd14b77dd240d86a076a3f7e4aff6c7ce4ab072f39b024",
   "files": {
     "LICENSE": {
       "bytes": 33878,
@@ -30,16 +30,16 @@
       "sha256": "dce0cb295fcfac38a5c08698078b0076b11ebfc562d00a80804ac077bb7795c5"
     },
     "management.py": {
-      "bytes": 30502,
-      "sha256": "5c28b716fdcbb3f7571c79776a6163c68b0a3078a6ff51a6e52ba10dc0ee906a"
+      "bytes": 33717,
+      "sha256": "79eb9530cb11bbd412c1d6879a673ce450b42ae28c3995876c03209b92e6d9d5"
     },
     "marzban.py": {
       "bytes": 14142,
       "sha256": "2d5f3bbba656c009fe9f2472fc10f44f85ce7a70799fffb9a929784836e40262"
     },
     "node_firewall.py": {
-      "bytes": 8323,
-      "sha256": "6a0a19d79bc16e96919a5c4f79a95533f9203f3f154e191d6fa1083cd8919a86"
+      "bytes": 15008,
+      "sha256": "b91eb7941b3e8b9db2cc375254f2288b32434d1126cc119e93ba6296368fb5b3"
     },
     "node_site.py": {
       "bytes": 33741,
@@ -54,8 +54,8 @@
       "sha256": "d9d1d35c135c65446c44e54afe65705e1ded4f915e7dcdd218e940183721e9d0"
     },
     "runtime.py": {
-      "bytes": 73826,
-      "sha256": "ded77b13db4a7386cc2ad321c22c761768fd50d972e29d80872ad570cca3b3e6"
+      "bytes": 77138,
+      "sha256": "e58af71921676820972f756f9f33e8c3469740d70e1d42fd79adba978a9abdf6"
     },
     "stable_entry.py": {
       "bytes": 411,
@@ -95,5 +95,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.147"
+  "version": "1.2.148"
 }

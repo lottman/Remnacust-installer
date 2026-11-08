@@ -75,3 +75,33 @@ for name in ['shared','foreign']:
             assert a[key]==b[key],(name,key)
 PY
 printf 'PASS real Docker preserves shared proxy/database and unrelated project without restarting them\n'
+
+export REMNACUST_ROOT="$fixture/node-root"
+node_project="$token-node"
+mkdir -p "$REMNACUST_ROOT/registry" "$REMNACUST_ROOT/node/www"
+printf 'owner website\n' > "$REMNACUST_ROOT/node/www/index.html"
+if ! docker image inspect nginx:1.28-alpine >/dev/null 2>&1; then
+    docker image inspect mirror.gcr.io/library/nginx:1.28-alpine >/dev/null 2>&1 || docker pull mirror.gcr.io/library/nginx:1.28-alpine >/dev/null
+    docker tag mirror.gcr.io/library/nginx:1.28-alpine nginx:1.28-alpine
+fi
+node_app=$(docker run -d --network none --label "com.docker.compose.project=$node_project" --label com.docker.compose.service=remnanode --label io.remnacust.installer-managed=node alpine:3.22 sh -c 'trap "exit 0" TERM; while true; do sleep 1; done')
+containers+=("$node_app")
+node_proxy=$(docker run -d --network none --label "com.docker.compose.project=$node_project" --label com.docker.compose.service=node-nginx --label io.remnacust.installer-managed=node nginx:1.28-alpine)
+containers+=("$node_proxy")
+node_other=$(docker run -d --network none --label "com.docker.compose.project=$node_project" --label com.docker.compose.service=other-nginx nginx:1.28-alpine)
+containers+=("$node_other")
+docker inspect "$node_other" > "$fixture/node-other.before.json"
+python3 - "$REMNACUST_ROOT" "$node_project" <<'PY'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1]);project=sys.argv[2]
+state={'component':'node','directory':str(root/'node'),'project':project,'mainService':'remnanode','applications':['remnanode'],'extraServices':['node-nginx'],'ownedServices':['remnanode'],'composeFiles':[],'nodeSiteMode':'selfsteal'}
+(root/'registry/node.json').write_text(json.dumps(state))
+PY
+bash "$installer" uninstall-node --yes
+! docker inspect "$node_app" >/dev/null 2>&1
+! docker inspect "$node_proxy" >/dev/null 2>&1
+docker inspect "$node_other" > "$fixture/node-other.after.json"
+cmp "$fixture/node-other.before.json" "$fixture/node-other.after.json"
+grep -qx 'owner website' "$REMNACUST_ROOT/node/www/index.html"
+printf 'PASS real node uninstall removes managed Nginx with legacy metadata, preserving foreign Nginx and website files\n'

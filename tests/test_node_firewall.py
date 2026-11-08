@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import unittest
+import tempfile
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('guard', Path(__file__).parents[1] / 'installer/node_firewall.py')
@@ -16,6 +17,46 @@ spec.loader.exec_module(guard)
 
 
 class PolicyValidation(unittest.TestCase):
+    def test_public_site_only_opens_selected_tcp_port_in_input_chain(self):
+        policy = guard.render('192.0.2.1', [72], [], 4433)
+        incoming, forwarding = policy.split('chain forward', 1)
+        self.assertIn('tcp dport 4433 accept', incoming)
+        self.assertNotIn('dport 4433', forwarding)
+        self.assertNotIn('tcp dport 4433 accept', guard.render('192.0.2.1', [72], []))
+        for port in (-1, 65536, True, '443'):
+            with self.assertRaises(ValueError): guard.render('192.0.2.1', [72], [], port)
+
+    def test_ufw_site_profile_is_scoped_and_does_not_enable_firewall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / 'website'
+            calls = []
+            with patch.object(guard.shutil, 'which', return_value='/usr/sbin/ufw'), patch.object(guard, 'run', side_effect=lambda *args, **kwargs: calls.append(args)):
+                guard.site_access(4433, profile)
+                self.assertIn('ports=4433/tcp\n', profile.read_text())
+                guard.site_access(9443, profile)
+                self.assertIn('ports=9443/tcp\n', profile.read_text())
+                guard.site_access(0, profile)
+                self.assertFalse(profile.exists())
+            self.assertTrue(all('enable' not in args and 'disable' not in args and '22' not in args for args in calls))
+            self.assertIn(('/usr/sbin/ufw', 'app', 'update', 'Remnacust Node HTTPS'), calls)
+
+    def test_ufw_site_profile_rejects_unmanaged_content_and_restores_failed_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / 'website'
+            with patch.object(guard.shutil, 'which', return_value='/usr/sbin/ufw'), patch.object(guard, 'run') as run:
+                profile.write_text('owner content')
+                with self.assertRaises(ValueError): guard.site_access(4433, profile)
+                run.assert_not_called()
+                profile.unlink()
+                guard.site_access(4433, profile)
+                original = profile.read_bytes()
+                profile.chmod(0o666)
+                with self.assertRaises(ValueError): guard.site_access(9443, profile)
+                profile.chmod(0o600)
+                run.side_effect = [None, RuntimeError('fixture'), None]
+                with self.assertRaises(RuntimeError): guard.site_access(9443, profile)
+                self.assertEqual(profile.read_bytes(), original)
+
     def test_acme_window_is_fixed_to_port_80_and_expires(self):
         calls = []
         def fake_run(*args, **kwargs):
@@ -30,6 +71,85 @@ class PolicyValidation(unittest.TestCase):
         self.assertIn('15m', add[0])
         self.assertNotIn('443', add[0])
         self.assertEqual(len([args for args, _ in calls if args[:3] == ('nft', 'delete', 'element')]), 2)
+
+    def test_ufw_control_ports_are_source_scoped_and_undoable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / 'control'
+            calls = []
+            with patch.object(guard.shutil, 'which', return_value='/usr/sbin/ufw'), patch.object(guard, 'run', side_effect=lambda *args, **kwargs: calls.append(args)):
+                undo = guard.control_access('192.0.2.1', [8443, 2222], profile)
+                self.assertIn('ports=2222,8443/tcp\n', profile.read_text())
+                self.assertIn(('/usr/sbin/ufw', 'allow', 'from', '192.0.2.1/32', 'to', 'any', 'app', 'Remnacust Node Control'), calls)
+                old = profile.read_bytes()
+                restore = guard.control_access('2001:db8::1', [7289], profile)
+                self.assertIn(('/usr/sbin/ufw', '--force', 'delete', 'allow', 'from', '192.0.2.1/32', 'to', 'any', 'app', 'Remnacust Node Control'), calls)
+                restore()
+                self.assertEqual(profile.read_bytes(), old)
+                undo()
+                self.assertFalse(profile.exists())
+            self.assertTrue(all('enable' not in args and 'disable' not in args and '22' not in args for args in calls))
+
+    def test_ufw_control_removal_requires_exact_owned_source_and_ports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / 'control'
+            with patch.object(guard.shutil, 'which', return_value='/usr/sbin/ufw'), patch.object(guard, 'run') as run:
+                guard.control_access('192.0.2.1', [2222, 8443], profile)
+                original = profile.read_bytes()
+                run.reset_mock()
+                for panel, ports in [('192.0.2.2', [2222, 8443]), ('192.0.2.1', [7289])]:
+                    with self.assertRaises(ValueError): guard.control_access(panel, ports, profile, remove=True)
+                    self.assertEqual(profile.read_bytes(), original)
+                    run.assert_not_called()
+                restore = guard.control_access('192.0.2.1', [2222, 8443], profile, remove=True)
+                self.assertFalse(profile.exists())
+                restore()
+                self.assertEqual(profile.read_bytes(), original)
+
+    def test_ufw_control_rejects_unsafe_profiles_and_restores_failed_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / 'control'
+            with patch.object(guard.shutil, 'which', return_value='/usr/sbin/ufw'), patch.object(guard, 'run') as run:
+                for ports in ([], [0], [65536], [True], [2222, 8443, 9443]):
+                    with self.assertRaises(ValueError): guard.control_access('192.0.2.1', ports, profile)
+                run.assert_not_called()
+                profile.write_text('owner content')
+                with self.assertRaises(ValueError): guard.control_access('192.0.2.1', [2222], profile)
+                run.assert_not_called()
+                profile.unlink()
+                guard.control_access('192.0.2.1', [2222], profile)
+                old = profile.read_bytes()
+                run.side_effect = [None, None, RuntimeError('fixture'), None, None, None]
+                with self.assertRaises(RuntimeError): guard.control_access('192.0.2.2', [7289], profile)
+                self.assertEqual(profile.read_bytes(), old)
+
+    def test_failed_control_rollback_still_restores_nft_and_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'guard'
+            root.mkdir(mode=0o700)
+            unit = Path(directory) / 'guard.service'
+            for name, value in [('guard.py', 'old helper'), ('state.json', '{}')]: (root / name).write_text(value)
+            unit.write_text('old unit')
+            before = {path: path.read_bytes() for path in [root / 'guard.py', root / 'state.json', unit]}
+            restored = []
+            def table(value):
+                restored.append(value)
+                if len(restored) == 1: raise RuntimeError('apply failure')
+            def undo(): raise RuntimeError('control rollback failure')
+            with patch.object(guard, 'ROOT', root), patch.object(guard, 'UNIT', unit), patch.object(guard, 'discover', return_value=([72], [])), patch.object(guard, 'control_access', return_value=undo), patch.object(guard, 'replace_table', side_effect=table), patch.object(guard, 'run', return_value=subprocess.CompletedProcess([], 0, 'old nft rules', '')):
+                with self.assertRaisesRegex(RuntimeError, 'control rollback failure'):
+                    guard.apply('192.0.2.1', 443, [2222], directory)
+            self.assertEqual(restored[-1], 'old nft rules')
+            for path, content in before.items(): self.assertEqual(path.read_bytes(), content)
+
+    def test_control_uninstall_ignores_another_installation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'guard'
+            root.mkdir(mode=0o700)
+            (root / 'state.json').write_text('{"panel":"192.0.2.1","controlPorts":[2222],"ownerRoot":"/other-installation"}')
+            with patch.object(guard, 'ROOT', root), patch.object(sys, 'argv', ['guard.py', 'remove-control', '--api-port', '2222', '--owner-root', directory]), patch.object(guard, 'control_access') as control, patch.object(guard, 'run') as run:
+                guard.main()
+                control.assert_not_called()
+                run.assert_not_called()
 
     def test_acme_window_fails_closed_if_firewall_cannot_be_inspected(self):
         with patch.object(guard, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'denied')):
@@ -125,6 +245,10 @@ class PolicyValidation(unittest.TestCase):
             ns(backend, sys.executable, '-c', probe, '10.203.1.2', '9090')
             guard.replace_table(guard.render('10.203.0.2', [22, 2222], ['docker0']))
             self.assertIn('unrelated_sentinel', call('nft', 'list', 'tables').stdout)
+            guard.replace_table(guard.render('10.203.0.2', [22, 2222], ['docker0'], 443))
+            ns(other, sys.executable, '-c', probe, '10.203.1.1', '443')
+            with self.assertRaises(subprocess.CalledProcessError):
+                ns(other, sys.executable, '-c', probe, '10.203.1.1', '80')
             guard.replace_table('')
             ns(other, sys.executable, '-c', probe, '10.203.1.1', '443')
             self.assertIn('unrelated_sentinel', call('nft', 'list', 'tables').stdout)

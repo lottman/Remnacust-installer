@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='c659f815ba8ac897634bb979e91577475608729019d15762888899e3d2234dd7'
+HELPER_BUNDLE_SHA256='664287d5ed0f7e19350af0e7e4a6010107be55b7b93a46265a03f5bd15300683'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -19,6 +19,7 @@ PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
 NODE_NET_ADMIN=false
 NODE_NET_ADMIN_ADDED=false
 NODE_DOMAIN_CONFIRMED=''
+NODE_SITE_MODE='' NODE_SITE_PORT='' NODE_INBOUND_PORT=''
 NODE_MIGRATION_TLS=false
 ALLOW_DISRUPTION=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
@@ -163,6 +164,9 @@ Remnacust · installer.sh
   --project-name NAME       Имя новой установки Compose
   --domain DOMAIN           Домен установки / новый домен для change-domain
   --net-admin               Добавить NET_ADMIN новой панели или устанавливаемой/обновляемой ноде
+  --node-site-mode          standalone (отдельный HTTPS) или selfsteal (сокет за Xray)
+  --node-site-port          Порт отдельного HTTPS-сайта (по умолчанию 443)
+  --node-inbound-port       Порт входа Xray для настройки профиля панели (по умолчанию 8443)
   --no-net-admin            Новая панель/нода без NET_ADMIN; при обновлении включённое право сохраняется
   --subscription-urls URLS  Один или два адреса сайта подписки через запятую; первый — основной
   --subscription-page       Установить сайт подписки / перенести найденный при миграции
@@ -333,9 +337,10 @@ parse_args() {
         case "$1" in
             manage-panel|manage-node|configure-node-site|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --page-id|--page-operation|--panel-url|--panel-token-file|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --node-site-mode|--node-site-port|--node-inbound-port|--page-id|--page-operation|--panel-url|--panel-token-file|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
+                    --node-site-mode) NODE_SITE_MODE=$2;; --node-site-port) NODE_SITE_PORT=$2;; --node-inbound-port) NODE_INBOUND_PORT=$2;;
                     --page-id) PAGE_ID=$2;; --page-operation) PAGE_OPERATION=$2;; --panel-url) PAGE_PANEL_URL=$2;; --panel-token-file) PAGE_TOKEN_FILE=$2;;
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
                     --container) CONTAINER=$2;; --project-name) PROJECT=$2;; --domain) DOMAIN=$2;; --port) PORT=$2;; --proxy) PROXY=$2; PROXY_SET=true;;
@@ -368,6 +373,12 @@ parse_args() {
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == upgrade-panel || $ACTION == migrate-remnawave-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна для новой панели или миграции Remnawave'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $ACTION == migrate-remnawave-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки, переноса или обновления ноды'
     [[ -z $TLS_METHOD || $TLS_METHOD =~ ^(auto|http|cloudflare|gcore|existing)$ ]] || die 'Способ TLS: auto, http, cloudflare, gcore или existing'
+    [[ -z $NODE_SITE_MODE || $NODE_SITE_MODE == selfsteal || $NODE_SITE_MODE == standalone ]] || die 'Режим сайта: selfsteal или standalone'
+    local website_port
+    for website_port in "${NODE_SITE_PORT:-443}" "${NODE_INBOUND_PORT:-8443}"; do
+        [[ $website_port =~ ^[0-9]{1,5}$ ]] && ((10#$website_port >= 1 && 10#$website_port <= 65535)) || die 'Порт должен быть от 1 до 65535'
+    done
+    [[ -z $NODE_SITE_MODE$NODE_SITE_PORT$NODE_INBOUND_PORT || $ACTION == install-node || $ACTION == migrate-remnawave-node || ( $ACTION == change-domain && $COMPONENT == node ) ]] || die 'Параметры сайта ноды доступны при установке, переносе и смене домена ноды'
     [[ $ACTION == install-* || $ACTION == migrate-remnawave-node || $ACTION == change-domain || -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_DOMAIN ]] || die 'Параметры TLS доступны при установке, переносе ноды и смене домена; обновление сохраняет ваш proxy и сертификаты'
     [[ $QUOTA_MODE == remaining || $QUOTA_MODE == total ]] || die 'Quota: remaining или total'
     [[ $ALLOW_DISRUPTION == false || $ACTION == upgrade-panel ]] || die '--allow-disruption доступен только для upgrade-panel'
@@ -928,7 +939,7 @@ find_existing() {
 import json,sys
 p=sys.argv[1];new=json.load(open(p));old=json.load(open(sys.argv[2]))
 if new['project']==old['project'] and new['directory']==old['directory']:
- for key in ['nodeDomain','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls','subscriptionPage','subscriptionPort','subscriptionTokenUuid','subscriptionMigration','composeEntryPoint']:
+ for key in ['nodeDomain','nodeSiteMode','nodeSitePort','nodeInboundPort','panelDomain','proxy','apiPort','extraServices','version','image','ownedServices','tls','subscriptionUrls','subscriptionPage','subscriptionPort','subscriptionTokenUuid','subscriptionMigration','composeEntryPoint']:
   if key in old and (key != 'apiPort' or key not in new) and (key != 'composeEntryPoint' or old[key] in new.get('composeFiles',[])):new[key]=old[key]
  json.dump(new,open(p,'w'),indent=2)
 PY
@@ -1356,6 +1367,9 @@ manage_component_action() {
         requested_domain=$(ask_confirmed_domain 'Новый домен (без https:// и пути)' "$requested_domain") || return $?
         confirm "Сменить домен $requested_component на $requested_domain"
     elif [[ -n $TLS_METHOD ]]; then options+=(--tls-method "$TLS_METHOD"); fi
+    if [[ $requested_component == node && -n $NODE_SITE_MODE ]]; then
+        options+=(--site-mode "$NODE_SITE_MODE" --site-port "${NODE_SITE_PORT:-443}" --inbound-port "${NODE_INBOUND_PORT:-8443}")
+    fi
     DOMAIN_PLAN=$(python3 -I "$HELPER_ROOT/management.py" prepare --root "$ROOT" --component "$requested_component" --domain "$requested_domain" "${options[@]}") || return $?
     info "Копия настроек: ${DOMAIN_PLAN%/plan.json}"
     method=$(domain_plan_value method) || return $?
@@ -1410,7 +1424,7 @@ node_migration_wizard() {
     PORT=$(get apiPort)
     info "Сохраняем ключ панели, порт API $PORT, конфигурацию Xray и данные ноды."
     previous=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nodeDomain", ""))' "$STATE")
-    if [[ -n $previous && -z $NODE_DOMAIN$TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]]; then
+    if [[ -n $previous && -z $NODE_DOMAIN$TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_SITE_MODE$NODE_SITE_PORT$NODE_INBOUND_PORT ]]; then
         if [[ ! -t 0 ]] || $YES; then return 0; fi
         choice=$(ask_yes_no "TLS/XHTTP уже настроен для $previous. Изменить настройки?") || return $?
         [[ $choice == yes ]] || return 0
@@ -1418,6 +1432,9 @@ node_migration_wizard() {
         NODE_DOMAIN_CONFIRMED=$NODE_DOMAIN
     elif [[ -n $NODE_DOMAIN ]]; then
         NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$NODE_DOMAIN") || return $?
+        NODE_DOMAIN_CONFIRMED=$NODE_DOMAIN
+    elif [[ -n $previous ]]; then
+        NODE_DOMAIN=$(ask_confirmed_domain 'Домен ноды' "$previous") || return $?
         NODE_DOMAIN_CONFIRMED=$NODE_DOMAIN
     fi
     certificate_wizard || return $?
@@ -1438,7 +1455,7 @@ node_migration_finish() {
         fi
         STATE="$ROOT/registry/node.json"; load_state
     fi
-    [[ -z $PANEL_IP ]] || node_acl
+    node_acl
 }
 configure_node_site() {
     COMPONENT=node
@@ -2231,6 +2248,7 @@ fresh_files() {
     local -a capability_options=()
     if [[ $COMPONENT == panel ]] && $PANEL_NET_ADMIN; then capability_options=(--panel-net-admin); fi
     if [[ $COMPONENT == node ]] && ! $NODE_NET_ADMIN; then capability_options=(--node-no-net-admin); fi
+    if [[ $COMPONENT == node ]]; then capability_options+=(--node-site-mode "${NODE_SITE_MODE:-selfsteal}" --node-site-port "${NODE_SITE_PORT:-443}" --node-inbound-port "${NODE_INBOUND_PORT:-8443}"); fi
     [[ $COMPONENT != panel || -z $SUBSCRIPTION_URLS ]] || subscription_options=(--subscription-urls "$SUBSCRIPTION_URLS")
     if [[ $COMPONENT == panel ]] && $SUBSCRIPTION_PAGE; then
         subscription_options+=(--subscription-image "$SUBSCRIPTION_IMAGE" --subscription-port "$SUBSCRIPTION_PORT")
@@ -2323,6 +2341,38 @@ tls_helper() {
     [[ -f $script ]] || die 'В выбранном выпуске нет настройки TLS. Используйте latest.'
     python3 "$script" "$@"
 }
+node_site_wizard() {
+    [[ -n $NODE_DOMAIN ]] || return 0
+    local choice
+    if [[ -n $STATE && -f $STATE ]]; then
+        [[ -n $NODE_SITE_PORT ]] || NODE_SITE_PORT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("nodeSitePort",443))' "$STATE") || return $?
+        [[ -n $NODE_INBOUND_PORT ]] || NODE_INBOUND_PORT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("nodeInboundPort",8443))' "$STATE") || return $?
+    fi
+    if [[ -z $NODE_SITE_MODE && -t 0 && ( $ACTION == install-node || $ACTION == migrate-remnawave-node ) ]] && ! $YES; then
+        printf '\n  Сайт ноды\n  1  Отдельный HTTPS-сайт\n  2  Selfsteal через Xray\n'
+        choice=$(ask 'Режим сайта' 1) || return $?
+        case "$choice" in 1) NODE_SITE_MODE=standalone;; 2) NODE_SITE_MODE=selfsteal;; *) die 'Выберите 1 или 2';; esac
+    fi
+    NODE_SITE_MODE=${NODE_SITE_MODE:-selfsteal}
+    [[ $NODE_SITE_MODE == selfsteal || $NODE_SITE_MODE == standalone ]] || die 'Режим сайта: selfsteal или standalone'
+    if [[ $NODE_SITE_MODE == standalone ]]; then
+        helper validate --port "${PORT:-2222}" >/dev/null || return $?
+        if [[ -t 0 ]] && ! $YES; then
+            while true; do
+                NODE_SITE_PORT=$(ask 'Порт HTTPS-сайта' "${NODE_SITE_PORT:-443}") || return $?
+                NODE_INBOUND_PORT=$(ask 'Порт входа Xray в профиле панели' "${NODE_INBOUND_PORT:-8443}") || return $?
+                if helper validate --port "$NODE_SITE_PORT" >/dev/null && helper validate --port "$NODE_INBOUND_PORT" >/dev/null &&
+                   [[ $((10#$NODE_SITE_PORT)) != $((10#${PORT:-2222})) && $((10#$NODE_INBOUND_PORT)) != $((10#${PORT:-2222})) && $((10#$NODE_SITE_PORT)) != $((10#$NODE_INBOUND_PORT)) ]]; then break; fi
+                printf '  Порты API, сайта и входа Xray должны быть разными числами от 1 до 65535.\n' >&2
+            done
+        fi
+        NODE_SITE_PORT=${NODE_SITE_PORT:-443}; NODE_INBOUND_PORT=${NODE_INBOUND_PORT:-8443}
+        helper validate --port "$NODE_SITE_PORT" >/dev/null || return $?
+        helper validate --port "$NODE_INBOUND_PORT" >/dev/null || return $?
+        NODE_SITE_PORT=$((10#$NODE_SITE_PORT)); NODE_INBOUND_PORT=$((10#$NODE_INBOUND_PORT))
+        [[ $NODE_SITE_PORT != "$((10#${PORT:-2222}))" && $NODE_INBOUND_PORT != "$((10#${PORT:-2222}))" && $NODE_SITE_PORT != "$NODE_INBOUND_PORT" ]] || die 'Порты API, сайта и входа Xray должны отличаться'
+    fi
+}
 certificate_wizard() {
     local choice domain suggested
     if [[ $COMPONENT == panel ]]; then
@@ -2351,10 +2401,11 @@ certificate_wizard() {
             esac
         fi
         if [[ -z $NODE_DOMAIN ]]; then
-            [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL ]] || die 'Для TLS ноды укажите --node-domain'
+            [[ -z $TLS_METHOD$CERT_FILE$KEY_FILE$DNS_CREDENTIALS$EMAIL$NODE_SITE_PORT$NODE_INBOUND_PORT && $NODE_SITE_MODE != standalone ]] || die 'Для TLS и сайта ноды укажите --node-domain'
             return 0
         fi
         domain=$NODE_DOMAIN; suggested=http
+        node_site_wizard || return $?
     fi
     if [[ -z $TLS_METHOD ]]; then
         if [[ -t 0 ]] && ! $YES; then
@@ -2404,6 +2455,14 @@ certificate_wizard() {
     fi
 }
 certificate_preflight() {
+    if [[ $COMPONENT == node && $TLS_METHOD == http && ( $((10#${NODE_SITE_PORT:-443})) == 80 || $((10#${NODE_INBOUND_PORT:-8443})) == 80 ) ]]; then
+        die 'HTTP-01 использует TCP 80. Выберите другой порт сайта/входа Xray или DNS-сертификат.'
+    fi
+    if [[ $COMPONENT == node && ${NODE_SITE_MODE:-selfsteal} == standalone ]]; then
+        local current_site=''
+        if [[ -n $STATE && -f $STATE ]]; then current_site=$(python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));print(s.get("nodeSitePort",443) if s.get("nodeSiteMode")=="standalone" else "")' "$STATE"); fi
+        [[ $current_site == "$NODE_SITE_PORT" ]] || port_free "$NODE_SITE_PORT" || return $?
+    fi
     if [[ $COMPONENT == node && -n $PANEL_IP && $TLS_METHOD == http ]]; then
         info 'Для HTTP-01 TCP 80 временно открывается во время выпуска и продления сертификата; затем снова закрывается.'
     fi
@@ -2624,7 +2683,7 @@ configure_certificate() {
     tls_helper record --state "$STATE" --method "$TLS_METHOD" --certificate "$CERT_FILE" --key "$KEY_FILE"
     helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
     if [[ $COMPONENT == node ]]; then
-        helper node-proxy --directory "$DEPLOY" --domain "$domain"
+        helper node-proxy --directory "$DEPLOY" --domain "$domain" --node-site-mode "${NODE_SITE_MODE:-selfsteal}" --node-site-port "${NODE_SITE_PORT:-443}"
         step 'Проверка Nginx' compose run --rm --no-deps --entrypoint nginx node-nginx -t
     else step 'Проверка Caddy' compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; fi
     schedule_certificate_renewal
@@ -2705,10 +2764,27 @@ try {
     info "Непрерывность работы нод подтверждена: $count."
 }
 node_acl() {
+    local https_port=0
+    if [[ -n $STATE && -f $STATE ]]; then
+        https_port=$(python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));print(s.get("nodeSitePort",443) if s.get("nodeSiteMode")=="standalone" else 0)' "$STATE") || return $?
+    fi
+    if [[ $https_port != 0 || ( -n $NODE_SITE_MODE && ( -f /etc/ufw/applications.d/remnacust-node-site || -f /etc/remnacust-node-firewall/state.json ) ) ]]; then
+        python3 -I "$HELPER_ROOT/node_firewall.py" site --https-port "$https_port" || return $?
+    fi
+    if [[ $PANEL_IP == managed ]]; then PANEL_IP=$(python3 -c 'import json;print(json.load(open("/etc/remnacust-node-firewall/state.json"))["panel"])') || return $?; fi
     [[ -n $PANEL_IP ]] || { info "Ограничьте TCP $PORT адресом панели в firewall провайдера"; return; }
     command -v nft >/dev/null || package_step 'Сетевая защита ноды' install --no-install-recommends nftables || return $?
-    python3 -I "$HELPER_ROOT/node_firewall.py" apply --panel "$PANEL_IP"
-    info "Все входящие порты и ping разрешены только от $PANEL_IP; SSH сохранён. Клиенты VPN должны идти через главный сервер."
+    local api_port inbound_port
+    api_port=$(get apiPort)
+    inbound_port=$(python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));print(s.get("nodeInboundPort",8443) if s.get("nodeSiteMode")=="standalone" else "")' "$STATE") || return $?
+    local -a control_options=(--api-port "$api_port")
+    [[ -z $inbound_port ]] || control_options+=(--inbound-port "$inbound_port")
+    python3 -I "$HELPER_ROOT/node_firewall.py" apply --panel "$PANEL_IP" --https-port "$https_port" --owner-root "$ROOT" "${control_options[@]}"
+    if [[ $https_port == 0 ]]; then
+        info "Все входящие порты и ping разрешены только от $PANEL_IP; SSH сохранён. Клиенты VPN должны идти через главный сервер."
+    else
+        info "HTTPS сайта TCP $https_port доступен посетителям; остальные порты и ping только от $PANEL_IP. SSH сохранён."
+    fi
     info 'Отмена ограничения: python3 /etc/remnacust-node-firewall/guard.py remove'
 }
 deploy() {
@@ -2818,6 +2894,9 @@ PY
         step 'Запуск обновлённых приложений' compose up -d --no-deps --no-build --pull never "${START_APPS[@]}"
     fi
     step 'Проверка готовности приложений' wait_ready
+    if [[ $COMPONENT == node ]] && python3 -c 'import json,sys;sys.exit(json.load(open(sys.argv[1])).get("nodeSiteMode")!="standalone")' "$STATE"; then
+        step 'Проверка HTTPS-сайта' helper node-https --state "$STATE"
+    fi
     if [[ $COMPONENT == node ]] && $NODE_NET_ADMIN; then
         local actual_capability
         actual_capability=$(node_effective_net_admin "$(compose ps --all --quiet "$(get mainService)")") || actual_capability=unknown
@@ -2958,6 +3037,14 @@ PY
         completion_row 'Подключение:' 'Ноды → создать/редактировать → адрес, порт ноды и профиль'
         completion_row 'SSH:' 'Отдельный порт доступа к серверу; установщик его не меняет'
         [[ -z $node_domain ]] || completion_row 'TLS/XHTTP домен:' "$node_domain"
+        local site_mode site_port inbound_port
+        site_mode=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("nodeSiteMode","selfsteal"))' "$STATE")
+        if [[ $site_mode == standalone ]]; then
+            site_port=$(get nodeSitePort); inbound_port=$(get nodeInboundPort)
+            completion_row 'HTTPS-сайт:' "https://$node_domain:$site_port/"
+            completion_row 'Вход Xray в панели:' "TCP $inbound_port — задайте этот порт в профиле"
+            completion_row 'REALITY target:' "127.0.0.1:$site_port · xver: 0"
+        fi
         if [[ $ACTION == install-node ]]; then completion_row 'Ключ ноды:' "$directory/.env · SECRET_KEY"
         else completion_row 'Ключ ноды:' 'Сохранён из прежнего контейнера · SECRET_KEY в Compose'; fi
     fi
@@ -3115,7 +3202,8 @@ if project:
  same_record=record.get('project')==project
  owned=record.get('ownedServices') if same_record else None
  if owned is not None and (not isinstance(owned,list) or any(not isinstance(v,str) or not v or v.startswith('-') for v in owned)):raise SystemExit('Неверный список собственных сервисов в записи установки')
- if owned is not None:selected=[c for c in peers if service(c) in owned]
+ if owned is not None:
+  selected=[c for c in peers if service(c) in owned or (kind=='node' and service(c)=='node-nginx' and service(c) in record.get('extraServices',[]) and labels(c).get('io.remnacust.installer-managed')=='node')]
  elif project==expected:selected=peers
  else:
   app_images={image(c) for c in anchors}
@@ -3165,6 +3253,20 @@ print('Данные и прежний каталог: '+s['directory'])
 print('Повторная установка: remnacust install-'+s['component'])
 PY
     info "$COMPONENT удалён. Копия описаний контейнеров: $snapshot"
+    if [[ $COMPONENT == node ]] && python3 -c 'import json,sys;sys.exit(json.load(open(sys.argv[1])).get("nodeSiteMode")!="standalone")' "$WORK/uninstall-state.json"; then
+        python3 -I "$HELPER_ROOT/node_firewall.py" site --https-port 0 || return $?
+    fi
+    if [[ $COMPONENT == node ]]; then
+        local renewal_project removed_api_port
+        removed_api_port=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("apiPort",""))' "$WORK/uninstall-state.json") || return $?
+        if [[ -n $removed_api_port ]]; then
+            python3 -I "$HELPER_ROOT/node_firewall.py" remove-control --api-port "$removed_api_port" --owner-root "$ROOT" || return $?
+        fi
+        renewal_project=$(python3 -c 'import json,re,sys;p=json.load(open(sys.argv[1]))["project"];assert re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}",p);print(p)' "$WORK/uninstall-state.json") || return $?
+        if [[ -f /etc/systemd/system/remnacust-acme-$renewal_project.timer && ! -L /etc/systemd/system/remnacust-acme-$renewal_project.timer ]]; then
+            systemctl disable --now "remnacust-acme-$renewal_project.timer" || return $?
+        fi
+    fi
 }
 remove_container_ids() {
     # IDs are immutable; never remove by a name that another process can reuse.

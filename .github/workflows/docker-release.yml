@@ -39,7 +39,7 @@ jobs:
           node-version: 26.13.0
       - name: Load Docker test images from public mirror
         run: |
-          for image in alpine:3.22 postgres:18.4 node:24.22.1-trixie-slim; do
+          for image in alpine:3.22 postgres:18.4 node:24.22.1-trixie-slim nginx:1.28-alpine; do
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
@@ -47,6 +47,7 @@ jobs:
         run: |
           bash -n installer/installer.sh
           sudo env "PATH=$PATH" "REMNACUST_NODE_SOURCE=$REMNACUST_NODE_SOURCE" bash tests/installer.test.sh
+          sudo python3 -B installer/tests/node_https_nginx.integration.py
           bash installer/tests/database-network-docker.sh
           bash installer/tests/net-admin-docker.sh
           python3 installer/tests/image-cleanup-docker.py

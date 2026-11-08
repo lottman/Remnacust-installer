@@ -53,6 +53,11 @@ def c(n,project,service,image,running=True,role=''):
  return {'Id':format(n,'064x'),'Name':'/'+project+'-'+service+'-'+str(n),'Config':{'Image':image,'Labels':{'com.docker.compose.project':project,'com.docker.compose.service':service,'com.docker.compose.project.working_dir':str(p/'lost-directory'),'com.docker.compose.project.config_files':str(p/'lost-directory/docker-compose.yml')},'Env':['INSTANCE_TYPE='+role] if role else []},'State':{'Running':running}}
 own=[c(1,'remnacust-panel','remnawave','ghcr.io/lottman/remnacust-panel:1.1.2',False),c(2,'remnacust-panel','remnawave-db','postgres:18.4'),c(3,'remnacust-panel','caddy','caddy:2-alpine')]
 foreign=c(9,'other-project','postgres','postgres:18.4')
+if case=='node-legacy-owned':
+ own=[c(1,'node-project','remnanode','ghcr.io/lottman/remnacust-node:1.1.26'),c(2,'node-project','node-nginx','nginx:1.28-alpine'),c(3,'node-project','other-nginx','nginx:1.28-alpine')]
+ own[1]['Config']['Labels']['io.remnacust.installer-managed']='node'
+ directory=root/'node';(directory/'www').mkdir(parents=True);(directory/'www/index.html').write_text('owner website')
+ (root/'registry/node.json').write_text(json.dumps({'component':'node','directory':str(directory),'project':'node-project','mainService':'remnanode','applications':['remnanode'],'extraServices':['node-nginx'],'ownedServices':['remnanode'],'composeFiles':[],'nodeSiteMode':'selfsteal'}))
 if case=='infra':own=own[1:]
 if case=='migrated':
  own=[c(1,'upstream','remnawave','ghcr.io/lottman/remnacust-panel:1.1.2'),c(2,'upstream','processor','ghcr.io/lottman/remnacust-panel:1.1.2',role='processor'),c(3,'upstream','caddy','caddy:2-alpine'),c(4,'upstream','database','postgres:17.6')]
@@ -167,3 +172,15 @@ bash "$installer/installer.sh" uninstall-panel --yes > "$fixture/output"
 unset MOCK_REMOVED_RACE
 printf 'PASS actual inventory verifies success when Docker reports an already-removed container\n'
 check_no_compose_or_network
+prepare_case node-legacy-owned
+bash "$installer/installer.sh" uninstall-node --yes > "$fixture/output"
+python3 - "$fixture" "$REMNACUST_ROOT" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]);root=Path(sys.argv[2])
+assert sorted(int(c['Id'],16) for c in json.load(open(p/'containers.json')))==[3,9]
+assert (root/'node/www/index.html').read_text()=='owner website'
+assert json.load(open(root/'registry/node.json'))['uninstalled']
+PY
+check_no_compose_or_network
+printf 'PASS node uninstall removes added managed Nginx with legacy ownership metadata, preserving foreign proxy and website files\n'

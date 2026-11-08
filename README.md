@@ -34,7 +34,7 @@ docker compose up -d --no-build --pull never
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.147) | 1.2.147 |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.148) | 1.2.148 |
 | [Панель / сайт подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.100) | 1.1.7.100 |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.26) | 1.1.26 |
 | [Core / редактор](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.16) | 1.1.16, Xray v26.10.31 |
@@ -45,7 +45,7 @@ docker compose up -d --no-build --pull never
 
 | Что | Минимум или ориентир |
 | --- | --- |
-| ОС установщика 1.2.147 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| ОС установщика 1.2.148 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Архитектура | Linux amd64 или arm64 |
 | Панель с БД и кешем | От 2 CPU, 2 GiB RAM, 20 GiB диска; рекомендуется 4 CPU / 4 GiB RAM и запас под копии |
 | Нода | От 1 CPU / 1 GiB RAM с запасом под соединения и правила Xray |
@@ -107,7 +107,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/
 
 При установке ноды с собственным доменом случайно выбирается один из 20 многостраничных сайтов: обувь, кофе, книги, Minecraft и другие темы. Страницы, инструменты и графика работают без внешних CDN. Выбор сохраняется при обновлениях; собственные правки не заменяются. Файлы находятся в `/opt/remnacust/node/www/`.
 
-Для другого варианта выполните `sudo remnacust configure-node-site`. Прежний сайт сохраняется в `backups/node-sites/`. [Установка, настройка selfsteal и восстановление](docs/NODE-SELFSTEAL.md). Нужен подходящий активный профиль Xray; наличие файлов само по себе не открывает публичный HTTPS.
+При установке и переносе выберите режим сайта: отдельный HTTPS с собственным портом либо selfsteal за Xray. Для отдельного сайта скрипт спрашивает порт сайта и порт входа Xray в панели; порт API остаётся отдельным. Открывается только выбранный TCP-порт сайта, остальные ограничения сохраняются. Действующий профиль панели автоматически не переписывается.
+
+При установленном UFW доступ к API и выбранному TCP-входу Xray разрешается только от IP/CIDR главного сервера. Удаление ноды убирает её управляемый контейнер Nginx и собственные исключения firewall, сохраняя другие прокси, файлы сайта и сертификаты.
+
+Для другого варианта выполните `sudo remnacust configure-node-site`. Прежний сайт сохраняется в `backups/node-sites/`. [Установка, настройка selfsteal и восстановление](docs/NODE-SELFSTEAL.md). В режиме selfsteal публичному HTTPS нужен подходящий активный профиль Xray; отдельный сайт работает самостоятельно.
 
 ## Системные пакеты и сертификаты
 
@@ -152,7 +156,7 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 
 [Параметры CLI](installer/README.md) · [Установка и обслуживание](docs/INSTALLER.md) · [Панель](https://github.com/lottman/Remnacust-panel) · [Нода](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.147.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
+Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.148.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
 
 Сохраняются лицензии и авторство компонентов. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Поддержка проекта](https://t.me/lottman).
 
