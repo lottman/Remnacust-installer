@@ -86,8 +86,16 @@ async function verify() {
     const neutral = await page('/' + state.user.shortUuid + '/json', undefined, state.cdn.uuid, state.cdn.requestHeaderName);
     assert.equal(neutral.status, 200, 'The individual neutral header resolves an unchanged subscription URL');
     assert.ok(Array.isArray(JSON.parse(neutral.body)));
-    assert.equal((await page('/' + state.user.shortUuid + '/json', undefined, state.cdn.uuid, 'X-000000000000000000000000')).status, 404, 'A neutral header name must match its domain ID');
-    assert.equal((await page('/' + state.user.shortUuid + '/json', undefined, crypto.randomUUID())).status, 404, 'Unknown CDN headers cannot silently fall back to the main domain');
+    const denied = [
+        await page('/' + state.user.shortUuid + '/json', undefined, state.cdn.uuid, 'X-000000000000000000000000'),
+        await page('/' + state.user.shortUuid + '/json', undefined, crypto.randomUUID()),
+        await page('/cdn/' + crypto.randomUUID() + '/' + state.user.shortUuid + '/json'),
+    ];
+    for (const result of denied) {
+        assert.equal(result.status, 403, 'Domain access policy rejects an unknown or mismatched CDN identity');
+        assert.equal(result.body.length, 0, 'Denied requests expose no subscription content');
+        assert.equal(result.headers.location, undefined, 'Denied requests do not redirect or fall back');
+    }
     assert.equal((await page(prefix + '/' + state.user.shortUuid + '/json', undefined, crypto.randomUUID())).status, 404, 'Conflicting path and header IDs are rejected');
     const html = await page(prefix + '/' + state.user.shortUuid, 'Mozilla/5.0');
     assert.equal(html.status, 200);
@@ -98,7 +106,6 @@ async function verify() {
     const file = await page(prefix + '/geofiles/' + state.file.id + '/' + state.file.filename);
     assert.equal(file.status, 200, 'Geofiles retain the gateway even when origin Host differs');
     assert.deepEqual(file.body, bytes);
-    assert.equal((await page('/cdn/' + crypto.randomUUID() + '/' + state.user.shortUuid + '/json')).status, 404);
     assert.equal((await api('subscription-domains')).status, 401);
     assert.equal((await api('users/' + state.user.id, 'DELETE', undefined, state.admin)).status, 204);
     assert.equal((await api('subscription-domains/' + state.cdn.uuid, 'DELETE', undefined, state.admin)).status, 204);
