@@ -91,21 +91,21 @@ class InputWorkflowTests(unittest.TestCase):
     def test_domain_confirmation_defaults_to_yes_and_normalizes_case(self):
         command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
                    'value=$(ask_confirmed_domain "Домен сайта"); printf "DOMAIN=%s" "$value"')
-        code, output = self.terminal(command, [('Домен сайта: ', ' Fivp.Top \n'),
-                                              ('Использовать домен Fivp.Top? y/n [y]: ', '\n')])
+        code, output = self.terminal(command, [('Домен сайта: ', ' Example.Test \n'),
+                                              ('Использовать домен Example.Test? y/n [y]: ', '\n')])
         self.assertEqual(code, 0, output)
-        self.assertIn('DOMAIN=fivp.top', output)
+        self.assertIn('DOMAIN=example.test', output)
 
     def test_domain_rejection_reprompts_instead_of_using_the_typo(self):
         command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
                    'value=$(ask_confirmed_domain "Домен сайта"); printf "DOMAIN=%s" "$value"')
-        code, output = self.terminal(command, [('Домен сайта: ', 'fivp.tip\n'),
-                                              ('Использовать домен fivp.tip? y/n [y]: ', 'n\n'),
-                                              ('Домен сайта: ', 'fivp.top\n'),
-                                              ('Использовать домен fivp.top? y/n [y]: ', 'y\n')])
+        code, output = self.terminal(command, [('Домен сайта: ', 'exampel.test\n'),
+                                              ('Использовать домен exampel.test? y/n [y]: ', 'n\n'),
+                                              ('Домен сайта: ', 'example.test\n'),
+                                              ('Использовать домен example.test? y/n [y]: ', 'y\n')])
         self.assertEqual(code, 0, output)
-        self.assertIn('DOMAIN=fivp.top', output)
-        self.assertNotIn('DOMAIN=fivp.tip', output)
+        self.assertIn('DOMAIN=example.test', output)
+        self.assertNotIn('DOMAIN=exampel.test', output)
 
     def test_domain_validation_repeats_and_confirmation_eof_cancels(self):
         command = ('source "$1"; HELPER="$(dirname "$1")/runtime.py"; '
@@ -413,7 +413,7 @@ class InputWorkflowTests(unittest.TestCase):
         directory = self.root / 'subscription-page'; directory.mkdir()
         compose = directory / 'docker-compose.yml'; compose.write_text('{"services":{"subscription-page":{"image":"fixture"}}}')
         item = {'directory': str(directory), 'project': 'remnacust-subscription-page', 'service': 'subscription-page',
-                'composeFiles': [str(compose)], 'domain': 'fivp.tip'}
+                'composeFiles': [str(compose)], 'domain': 'exampel.test'}
         identity = hashlib.sha256(('\0'.join(str(item[k]) for k in ('directory', 'project', 'service'))).encode()).hexdigest()[:24]
         registry = self.root / 'registry/subscription-pages'; registry.mkdir(parents=True)
         (registry / (identity + '.json')).write_text(json.dumps(item))
@@ -427,7 +427,7 @@ class InputWorkflowTests(unittest.TestCase):
         code, output = self.terminal(command, [])
         self.assertEqual(code, 0, output)
         self.assertIn('OPENED-MANAGEMENT', output)
-        self.assertIn('fivp.tip', output)
+        self.assertIn('exampel.test', output)
         self.assertNotIn('UNEXPECTED-DOWNLOAD', output)
 
     def test_new_page_can_use_another_port_without_stopping_the_existing_service(self):
