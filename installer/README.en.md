@@ -2,9 +2,9 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-Stable bundle: Installer **1.2.152**, Panel/website **1.1.7.106**, Node **1.1.27**, Core **1.1.17** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.153**, Panel/website **1.1.7.107**, Node **1.1.27**, Core **1.1.17** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
 
-Installer 1.2.152 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.153 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## Install ready components
 
@@ -28,7 +28,7 @@ Required empty answers are requested again. Domain confirmation defaults to `y`;
 
 | Option | Purpose |
 | --- | --- |
-| `--version latest\|1.2.152` | Installer bundle release, not the panel version |
+| `--version latest\|1.2.153` | Installer bundle release, not the panel version |
 | `--domain DOMAIN` | Component hostname without scheme, port or path |
 | `--port PORT` | Panel loopback port or node API port |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Identify an existing installation |
@@ -104,7 +104,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/
 
 Updates preserve configuration, mounts and secrets. The panel gets a consistent PostgreSQL backup before application shutdown. Node/Core replacement can interrupt connections; updating the panel alone does not update remote Core. Confirm the running managed Core version after an agent update.
 
-Older Remnawave websites are discovered and migration is offered separately. Domains, port, prefix and panel connection are retained. A Remnacust image is not offered again as a third-party migration. A Compose project name alone does not identify the image. Marzban migration is API-based; follow the [user migration guide](https://github.com/lottman/Remnacust-panel/blob/main/docs/USER-MIGRATION.md).
+Older Remnawave websites are discovered and migration is offered separately. Domains, port, prefix and panel connection are retained. Previously registered Remnacust pages use normal upgrades; unregistered earlier Remnacust images can be adopted through the migration wizard. A Compose project name alone does not identify the image. Marzban migration is API-based; follow the [user migration guide](https://github.com/lottman/Remnacust-panel/blob/main/docs/USER-MIGRATION.md).
 
 `normalize-layout --component panel|node` normalizes older working paths. `cleanup-backups` moves recognized configuration copies into backup storage. External paths and cross-filesystem moves remain subject to safety checks.
 
@@ -148,4 +148,4 @@ NeedRestart lists pending service restarts. It does not restart services or rebo
 
 ### Migrate an existing Remnawave subscription page
 
-On the server hosting that page, choose **Migration → Subscription page from Remnawave**, or run `sudo remnacust migrate-remnawave-subscription-page`. Use `--container NAME` or `--directory /opt/subscription-page` to select a specific Compose deployment. The installer preserves its panel URL, API token, ports, networks, mounts and running/stopped state; it does not update the panel. Other services in the project remain running. A failed readiness check restores the previous page configuration. Unknown custom images and containers without their original Compose files require manual migration. Afterwards use `upgrade-subscription-page`; use `configure-subscription-page` to change the panel connection.
+On the server hosting that page, choose **Migration → Subscription page from Remnawave**, or run `sudo remnacust migrate-remnawave-subscription-page`. Use `--container NAME` or `--directory /opt/subscription-page` to select a specific Compose deployment. The installer preserves its panel URL, API token, ports, networks, mounts and running/stopped state; it does not update the panel. Other services in the project remain running. A failed readiness check restores the previous page configuration. Official Remnawave and earlier Remnacust images are recognized, including digest-pinned images in the old /opt/remnawave directory. Existing .env values are preserved; the panel URL and API token are requested only when missing or malformed. If no source is found without an explicit --container/--directory, the new-install wizard opens. An explicitly selected unknown source is not changed. Afterwards use `upgrade-subscription-page`; use `configure-subscription-page` to change the panel connection.

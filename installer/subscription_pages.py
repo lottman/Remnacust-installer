@@ -18,7 +18,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runtime
 import subscription_connection as connection
-from subscription_migration import compose_base, command, descriptor, candidates
+from subscription_migration import compose_base, command, descriptor, candidates, panel_origin
 
 
 def identity(item):
@@ -115,6 +115,22 @@ def legacy_page_image(value):
     return isinstance(value, str) and value.split('@')[0].rsplit(':', 1)[0] in LEGACY_PAGE_IMAGES
 
 
+def supported_page_image(value):
+    return legacy_page_image(value) or (isinstance(value, str) and
+        value.split('@')[0].rsplit(':', 1)[0] == 'ghcr.io/lottman/remnacust-subscription-page')
+
+
+def page_connection_required(current):
+    environment = runtime.environment(current)
+    if not panel_origin(environment.get('REMNAWAVE_PANEL_URL', '')):
+        return True
+    try:
+        connection.validate_token(environment.get('REMNAWAVE_API_TOKEN', ''))
+    except ValueError:
+        return True
+    return False
+
+
 def migration_candidates(root, container=None, directory=None):
     if container and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', container):
         raise ValueError('INVALID_CONTAINER')
@@ -132,7 +148,7 @@ def migration_candidates(root, container=None, directory=None):
         if container and container != current.get('Name', '').lstrip('/') and not (
                 re.fullmatch('[a-f0-9]{12,64}', container) and cid.startswith(container)):
             continue
-        if not legacy_page_image(current.get('Config', {}).get('Image')):
+        if not supported_page_image(current.get('Config', {}).get('Image')):
             continue
         item = descriptor(current)
         if not item or (directory and Path(item['directory']) != Path(directory)):
@@ -158,22 +174,24 @@ def migration_candidates(root, container=None, directory=None):
             compose_base(item)
         except (OSError, ValueError):
             continue
-        result.append({**item, 'id': identity(item), 'container': cid})
+        result.append({**item, 'id': identity(item), 'container': cid,
+                       'needsConnection': page_connection_required(current)})
     return sorted(result, key=lambda item: (item['project'], item['service'], item['container']))
 
 
-def migrate(root, container, image, version, release):
+def migrate(root, container, image, version, release, panel_connection=None):
     choices = migration_candidates(root, container=container)
     if len(choices) != 1:
         raise ValueError('PAGE_MIGRATION_SOURCE')
     item = choices[0]
     page = item.pop('id')
+    item.pop('needsConnection', None)
     previous = records(root).get(page)
     if previous:
         if previous['composeFiles'] != item['composeFiles']:
             raise ValueError('PAGE_OWNER_COMPOSE_MISMATCH')
         item = {**previous, **item}
-    upgrade(root, page, image, version, release, migration_item=item)
+    upgrade(root, page, image, version, release, panel_connection=panel_connection, migration_item=item)
     return page
 
 
@@ -438,23 +456,27 @@ def upgrade(root, page, image, version, release, panel_connection=None, migratio
     before = copy.deepcopy(config)
     target = config['services'][item['service']]
     current = inspect(item)
+    legacy_migration = False
     if migration_item is not None:
         if (not current or current.get('Id') != item.pop('container', None) or
-                not legacy_page_image(current.get('Config', {}).get('Image'))):
+                not supported_page_image(current.get('Config', {}).get('Image'))):
             raise ValueError('PAGE_MIGRATION_SOURCE')
+        legacy_migration = legacy_page_image(current['Config']['Image'])
+        if panel_connection is None and page_connection_required(current):
+            raise ValueError('PAGE_CONNECTION_REQUIRED')
+    current_version = ((current or {}).get('Config', {}).get('Labels') or {}).get('org.opencontainers.image.version', '')
+    if not legacy_migration and re.fullmatch(r'\d+(?:\.\d+){2,3}', current_version) and re.fullmatch(r'\d+(?:\.\d+){2,3}', version):
+        if tuple(map(int, current_version.split('.'))) > tuple(map(int, version.split('.'))):
+            raise ValueError('PAGE_DOWNGRADE_BLOCKED')
     env_edits = {}
-    if panel_connection is None:
+    if panel_connection is None or migration_item is not None:
         target['image'] = image
         target.pop('build', None)
-    else:
+    if panel_connection is not None:
         endpoint, token = panel_connection
         endpoint, network = connection.resolve(root, endpoint, inspect)
         connection.probe((current or {}).get('Config', {}).get('Image') or target.get('image'), endpoint, token, network, current, command)
         env_edits = connection.edit(config, item, endpoint, token, network)
-    current_version = ((current or {}).get('Config', {}).get('Labels') or {}).get('org.opencontainers.image.version', '')
-    if migration_item is None and re.fullmatch(r'\d+(?:\.\d+){2,3}', current_version) and re.fullmatch(r'\d+(?:\.\d+){2,3}', version):
-        if tuple(map(int, current_version.split('.'))) > tuple(map(int, version.split('.'))):
-            raise ValueError('PAGE_DOWNGRADE_BLOCKED')
     was_running = bool(current and current.get('State', {}).get('Running'))
     backup = root / 'backups' / ('subscription-page-' + uuid.uuid4().hex)
     backup.mkdir(mode=0o700, parents=True)
@@ -473,7 +495,7 @@ def upgrade(root, page, image, version, release, panel_connection=None, migratio
     panel_path = root / 'registry/panel.json'
     original_panel = runtime.load(panel_path) if panel_path.exists() else None
     try:
-        runtime.commit_compose(backup / 'state.json', backup / 'candidate.json', backup, version, release, **({'preserve_release': True} if panel_connection is not None else {}))
+        runtime.commit_compose(backup / 'state.json', backup / 'candidate.json', backup, version, release, **({'preserve_release': True} if panel_connection is not None and migration_item is None else {}))
         changed = True
         connection.write_edits(env_edits)
         updated = runtime.load(backup / 'state.json')
@@ -580,7 +602,10 @@ def main():
     if args.operation == 'migration-candidates':
         print(json.dumps(migration_candidates(args.root, args.container, args.directory), ensure_ascii=False))
     elif args.operation == 'migrate':
-        print(migrate(args.root, args.container, args.image, args.version, args.release))
+        if bool(args.panel_url) != bool(args.token_file):
+            raise ValueError('PAGE_CONNECTION_REQUIRED')
+        selected_connection = (args.panel_url, connection.read_token(args.token_file)) if args.panel_url else None
+        print(migrate(args.root, args.container, args.image, args.version, args.release, panel_connection=selected_connection))
     elif args.operation == 'list':
         print(json.dumps(listing(args.root), ensure_ascii=False))
     elif args.operation == 'existing-target':
@@ -615,6 +640,7 @@ if __name__ == '__main__':
         main()
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
         messages = {
+            'PAGE_CONNECTION_REQUIRED': 'В прежней странице нет подключения к панели. Укажите адрес панели и приватный файл API-токена; существующая страница не изменена.',
             'PANEL_ACCESS_FAILED': 'Проверка подключения к панели не пройдена. Проверьте HTTPS-адрес, доступность, версию панели и права токена страницы подписки. Настройки не изменены.',
             'TOKEN_FILE_MUST_BE_PRIVATE': 'Файл API-токена должен принадлежать root и иметь права 0600. Токен не показан.',
             'INVALID_TOKEN_FILE': 'Укажите обычный приватный файл API-токена размером не более 16 KiB.',

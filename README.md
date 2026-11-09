@@ -34,8 +34,8 @@ docker compose up -d --no-build --pull never
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.152) | 1.2.152 |
-| [Панель / сайт подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.106) | 1.1.7.106 |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.153) | 1.2.153 |
+| [Панель / сайт подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.107) | 1.1.7.107 |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.27) | 1.1.27 |
 | [Core / редактор](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.17) | 1.1.17, Xray v26.11.9 |
 
@@ -45,7 +45,7 @@ docker compose up -d --no-build --pull never
 
 | Что | Минимум или ориентир |
 | --- | --- |
-| ОС установщика 1.2.152 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| ОС установщика 1.2.153 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Архитектура | Linux amd64 или arm64 |
 | Панель с БД и кешем | От 2 CPU, 2 GiB RAM, 20 GiB диска; рекомендуется 4 CPU / 4 GiB RAM и запас под копии |
 | Нода | От 1 CPU / 1 GiB RAM с запасом под соединения и правила Xray |
@@ -156,7 +156,7 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 
 [Параметры CLI](installer/README.md) · [Установка и обслуживание](docs/INSTALLER.md) · [Панель](https://github.com/lottman/Remnacust-panel) · [Нода](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.152.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
+Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.153.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
 
 Сохраняются лицензии и авторство компонентов. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Поддержка проекта](https://t.me/lottman).
 
@@ -166,4 +166,4 @@ NeedRestart показывает ожидающие перезапуска сл�
 
 ### Перенос установленной страницы Remnawave
 
-На сервере со страницей выберите **Перенос → Страница подписки из Remnawave** либо выполните `sudo remnacust migrate-remnawave-subscription-page`. Для точного выбора доступны `--container ИМЯ` или `--directory /opt/subscription-page`. Сохраняются адрес панели, API-токен, порты, сети, подключённые файлы и состояние запуска. Панель не обновляется, остальные сервисы проекта не перезапускаются. Если проверка готовности не прошла, восстанавливается прежняя конфигурация страницы. Неизвестные кастомные образы и контейнеры без исходных Compose-файлов требуют ручного переноса. После переноса используйте `upgrade-subscription-page`, а для смены подключения — `configure-subscription-page`.
+На сервере со страницей выберите **Перенос → Страница подписки из Remnawave** либо выполните `sudo remnacust migrate-remnawave-subscription-page`. Для точного выбора доступны `--container ИМЯ` или `--directory /opt/subscription-page`. Сохраняются адрес панели, API-токен, порты, сети, подключённые файлы и состояние запуска. Панель не обновляется, остальные сервисы проекта не перезапускаются. Если проверка готовности не прошла, восстанавливается прежняя конфигурация страницы. Распознаются официальные образы Remnawave и прежние Remnacust, включая образы по digest в старом каталоге /opt/remnawave. Заполненный .env сохраняется; адрес панели и API-токен запрашиваются только при отсутствии или неверном формате. При отсутствии источника без явного --container/--directory открывается мастер новой установки. Явно указанный неизвестный источник не изменяется. После переноса используйте `upgrade-subscription-page`, а для смены подключения — `configure-subscription-page`.

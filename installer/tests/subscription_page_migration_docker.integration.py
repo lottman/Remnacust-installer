@@ -14,6 +14,7 @@ project = 'rc-page-migrate-' + suffix
 old = 'remnawave/subscription-page:fixture-' + suffix
 new = 'rc-page-migration:good-' + suffix
 bad = 'rc-page-migration:bad-' + suffix
+custom_image = 'ghcr.io/lottman/remnacust-subscription-page:fixture-' + suffix
 
 
 def docker(*args):
@@ -33,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='rc-page-migration-') as folder:
         'proxy': {'image': old, 'command': ['node', '-e', 'setInterval(()=>{},1000)']}},
         'networks': {'default': {'internal': True}}}
     compose.write_text(json.dumps(config))
-    environment = b'REMNAWAVE_PANEL_URL=https://panel.example.test\nREMNAWAVE_API_TOKEN=fixture-private-token\n'
+    environment = b'REMNAWAVE_PANEL_URL=https://panel.example.test\nREMNAWAVE_API_TOKEN=fixture.private.token\n'
     (directory / '.env').write_bytes(environment)
     (directory / '.env').chmod(0o600)
     custom = b'{"theme":"keep-owner-content"}'
@@ -91,8 +92,20 @@ with tempfile.TemporaryDirectory(prefix='rc-page-migration-') as folder:
         assert (directory / '.env').read_bytes() == environment
         assert (directory / 'custom.json').read_bytes() == custom
         assert docker(*base, 'ps', '-q', 'proxy') == proxy
-        print('PASS real Docker migration: legacy version namespace, running/stopped, isolated service, env/mount preservation and failed-health rollback')
+        dockerfile.write_text('FROM ' + old + '\nLABEL org.opencontainers.image.version="1.1.7.4"\n')
+        docker('build', '--network=none', '--pull=false', '-t', custom_image, str(root))
+        config = pages.runtime.load(compose)
+        config['services']['page']['image'] = custom_image
+        pages.runtime.write(compose, config)
+        docker(*base, 'up', '-d', '--no-deps', '--pull', 'never', 'page')
+        original_ready(pages.selected(root, page), timeout=8)
+        pages.migrate(root, source(), new, '1.1.7.106', 'v1.2.152')
+        assert pages.inspect(pages.selected(root, page))['Config']['Image'] == new
+        assert (directory / '.env').read_bytes() == environment
+        assert (directory / 'custom.json').read_bytes() == custom
+        assert json.loads(docker('inspect', proxy))[0]['State']['StartedAt'] == proxy_started
+        print('PASS real Docker migration: early custom adoption and legacy version namespace, running/stopped, isolated service, env/mount preservation and failed-health rollback')
     finally:
         subprocess.run(['docker', *base, '--profile', '*', 'down', '--volumes', '--remove-orphans'], capture_output=True, timeout=90)
-        for image in (bad, new, old):
+        for image in (custom_image, bad, new, old):
             subprocess.run(['docker', 'image', 'rm', image], capture_output=True, timeout=30)

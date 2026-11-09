@@ -6,6 +6,7 @@ trap '[[ $fixture == /tmp/remnacust-detection.* ]] && rm -rf -- "$fixture"' EXIT
 source "$project/installer.sh"
 ROOT="$fixture/root"; WORK="$fixture/work"; LOG="$fixture/log"
 mkdir -p "$WORK" "$ROOT/registry" "$ROOT/panel"
+docker() { return 1; }
 ! component_installed panel
 printf 'FROM scratch\n' > "$ROOT/panel/Dockerfile"
 component_installed panel

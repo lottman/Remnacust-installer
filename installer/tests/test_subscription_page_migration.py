@@ -22,14 +22,14 @@ class PageMigrationTests(unittest.TestCase):
         self.compose = self.directory / 'docker-compose.yml'
         self.config = {'services': {
             'page': {'image': 'remnawave/subscription-page:3.4.8', 'environment': {
-                'REMNAWAVE_PANEL_URL': 'https://panel.example.test', 'REMNAWAVE_API_TOKEN': 'fixture-private-token'},
+                'REMNAWAVE_PANEL_URL': 'https://panel.example.test', 'REMNAWAVE_API_TOKEN': 'fixture.private.token'},
                 'ports': ['127.0.0.1:3010:3010'], 'volumes': ['./custom.json:/app/custom.json:ro']},
             'proxy': {'image': 'caddy:2.9', 'environment': {'UNCHANGED': 'yes'}}}}
         runtime.write(self.compose, self.config)
         self.env = self.directory / '.env'; self.env.write_text('EXISTING=retained\n')
         self.custom = self.directory / 'custom.json'; self.custom.write_text('{"theme":"retained"}')
         self.current = {'Id': 'a' * 64, 'Name': '/legacy-page-1', 'State': {'Running': True},
-                        'Config': {'Image': 'remnawave/subscription-page:3.4.8', 'Env': ['REMNAWAVE_API_TOKEN=fixture-private-token'], 'Labels': {
+                        'Config': {'Image': 'remnawave/subscription-page:3.4.8', 'Env': ['REMNAWAVE_PANEL_URL=https://panel.example.test', 'REMNAWAVE_API_TOKEN=fixture.private.token'], 'Labels': {
                             'org.opencontainers.image.version': '3.4.8',
                             'com.docker.compose.project': 'legacy', 'com.docker.compose.service': 'page',
                             'com.docker.compose.project.working_dir': str(self.directory),
@@ -51,7 +51,7 @@ class PageMigrationTests(unittest.TestCase):
             choices = pages.migration_candidates(self.root)
         self.assertEqual(len(choices), 1)
         self.assertEqual(choices[0]['container'], self.current['Id'])
-        self.assertNotIn('fixture-private-token', json.dumps(choices))
+        self.assertNotIn('fixture.private.token', json.dumps(choices))
         self.assertFalse((self.root / 'registry').exists())
 
     def test_explicit_source_filters_do_not_choose_another_page(self):
@@ -64,10 +64,10 @@ class PageMigrationTests(unittest.TestCase):
             command.assert_not_called()
 
     def test_unknown_and_custom_images_cannot_bypass_downgrade_guard(self):
-        for image in ['evil.test/subscription-page:3.4.8', 'ghcr.io/lottman/remnacust-subscription-page:9.9.9']:
+        for image, error in [('evil.test/subscription-page:3.4.8', 'PAGE_MIGRATION_SOURCE'), ('ghcr.io/lottman/remnacust-subscription-page:9.9.9', 'PAGE_DOWNGRADE_BLOCKED')]:
             self.current['Config']['Image'] = image
-            with patch.object(pages, 'command', side_effect=self.command):
-                with self.assertRaisesRegex(ValueError, 'PAGE_MIGRATION_SOURCE'):
+            with patch.object(pages, 'command', side_effect=self.command), patch.object(pages, 'inspect', return_value=self.current):
+                with self.assertRaisesRegex(ValueError, error):
                     pages.migrate(self.root, self.current['Id'], 'page:new', '1.1.7.106', 'v1.2.152')
             self.assertEqual(runtime.load(self.compose), self.config)
             self.assertFalse((self.root / 'registry').exists())
@@ -85,6 +85,37 @@ class PageMigrationTests(unittest.TestCase):
         self.assertIn(page, pages.records(self.root))
         self.assertTrue(any('up' in call and '--no-deps' in call and call[-1] == 'page' for call in self.calls))
         self.assertFalse(any('down' in call or 'rm' in call for call in self.calls))
+
+    def test_unregistered_early_custom_digest_is_adopted_without_local_panel(self):
+        self.current['Config']['Image'] = 'ghcr.io/lottman/remnacust-subscription-page@sha256:' + 'e' * 64
+        self.current['Config']['Labels']['org.opencontainers.image.version'] = '1.1.7.4'
+        with patch.object(pages, 'command', side_effect=self.command), patch.object(pages, 'inspect', return_value=self.current), patch.object(pages, 'ready'):
+            choice = pages.migration_candidates(self.root)[0]
+            self.assertFalse(choice['needsConnection'])
+            page = pages.migrate(self.root, self.current['Id'], 'page:new', '1.1.7.106', 'v1.2.152')
+        self.assertIn(page, pages.records(self.root))
+        self.assertFalse((self.root / 'registry/panel.json').exists())
+        self.assertEqual(runtime.load(self.compose)['services']['proxy'], self.config['services']['proxy'])
+
+    def test_missing_connection_requires_wizard_input_before_any_write(self):
+        self.current['Config']['Env'] = []
+        with patch.object(pages, 'command', side_effect=self.command), patch.object(pages, 'inspect', return_value=self.current):
+            self.assertTrue(pages.migration_candidates(self.root)[0]['needsConnection'])
+            with self.assertRaisesRegex(ValueError, 'PAGE_CONNECTION_REQUIRED'):
+                pages.migrate(self.root, self.current['Id'], 'page:new', '1.1.7.106', 'v1.2.152')
+        self.assertFalse((self.root / 'backups').exists())
+        self.assertEqual(runtime.load(self.compose), self.config)
+
+    def test_missing_connection_is_probed_and_updated_together_with_image(self):
+        self.current['Config']['Env'] = []
+        with patch.object(pages, 'command', side_effect=self.command), patch.object(pages, 'inspect', return_value=self.current), patch.object(pages, 'ready'), patch.object(pages.connection, 'probe') as probe:
+            pages.migrate(self.root, self.current['Id'], 'page:new', '1.1.7.106', 'v1.2.152', panel_connection=('https://new-panel.example.test', 'fixture.new.token'))
+        probe.assert_called_once()
+        after = runtime.load(self.compose)
+        self.assertEqual(after['services']['page']['image'], 'page:new')
+        self.assertEqual(after['services']['page']['environment']['REMNAWAVE_PANEL_URL'], 'https://new-panel.example.test')
+        self.assertEqual(after['x-remnacust-release']['version'], '1.1.7.106')
+        self.assertEqual(after['services']['proxy'], self.config['services']['proxy'])
 
     def test_stopped_page_is_not_started(self):
         self.current['State']['Running'] = False

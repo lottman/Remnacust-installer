@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='f45a60167d64d5913c90a5dc1651dd44a8e74a90956d241f46666892b29d94e4'
+HELPER_BUNDLE_SHA256='59f69a69bee237d50f35be43e25bf53de1b0eee2478604c9c0121a7d598c3fc2'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -2075,15 +2075,22 @@ PY
 }
 
 migrate_subscription_page_action() {
-    installed_helper; lock_operation
-    local script="$HELPER_ROOT/subscription_pages.py" count index=1 selected_container
-    local -a selectors=()
+    installed_helper
+    local script="$HELPER_ROOT/subscription_pages.py" count index=1 selected_container needs_connection endpoint token_file result
+    local -a selectors=() connection_options=()
     [[ -z $CONTAINER ]] || selectors+=(--container "$CONTAINER")
     [[ -z $DIRECTORY ]] || selectors+=(--directory "$DIRECTORY")
     [[ -z $COMPOSE_FILE$PROJECT ]] || die 'Выберите существующую страницу через --container или --directory; её Compose-проект сохраняется.'
     python3 -I "$script" migration-candidates --root "$ROOT" "${selectors[@]}" > "$WORK/page-migration-candidates.json" || return $?
     count=$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/page-migration-candidates.json")
-    ((count > 0)) || die 'Не найдена страница Remnawave под управлением Compose. Укажите --container или --directory; для уже перенесённой страницы используйте upgrade-subscription-page.'
+    if ((count == 0)); then
+        [[ -z $CONTAINER$DIRECTORY ]] || die 'Указанный источник не распознан; его контейнеры и файлы не изменены. Проверьте --container/--directory либо выберите install-subscription-page для новой установки.'
+        info 'Страница для переноса не найдена. Открываем мастер установки: укажите панель, API-токен, домен и порт. Существующие контейнеры и файлы не перезаписываются.'
+        ACTION=install-subscription-page
+        subscription_page_action
+        return $?
+    fi
+    lock_operation
     python3 - "$WORK/page-migration-candidates.json" <<'PYMIGRATE'
 import json,sys
 for number,item in enumerate(json.load(open(sys.argv[1])),1):
@@ -2098,11 +2105,22 @@ PYMIGRATE
         done
     fi
     selected_container=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[int(sys.argv[2])-1]["container"])' "$WORK/page-migration-candidates.json" "$index")
+    needs_connection=$(python3 -c 'import json,sys;print("yes" if json.load(open(sys.argv[1]))[int(sys.argv[2])-1].get("needsConnection") else "no")' "$WORK/page-migration-candidates.json" "$index")
     prepare_host; choose_version
     confirm "Перенести выбранную страницу подписки на Remnacust ($VERSION); подключение к панели и настройки сохраняются"
     release_source; select_subscription_image
     step 'Готовый образ сайта подписки' prepare_subscription_image
-    step 'Перенос страницы подписки' python3 -I "$script" migrate --root "$ROOT" --container "$selected_container" --image "$SUBSCRIPTION_IMAGE" --version "$SUBSCRIPTION_IMAGE_VERSION" --release "$TAG"
+    if [[ $needs_connection == yes || -n $PAGE_PANEL_URL$PAGE_TOKEN_FILE ]]; then
+        info 'Укажите подключение страницы к панели; изменения будут применены только после проверки адреса и API-токена.'
+        endpoint=$(subscription_panel_endpoint) || return $?
+        token_file="$WORK/page-migration-token.txt"
+        subscription_page_token "$endpoint" "$token_file" || return $?
+        connection_options=(--panel-url "$endpoint" --token-file "$token_file")
+    fi
+    result=0
+    step 'Перенос страницы подписки' python3 -I "$script" migrate --root "$ROOT" --container "$selected_container" --image "$SUBSCRIPTION_IMAGE" --version "$SUBSCRIPTION_IMAGE_VERSION" --release "$TAG" "${connection_options[@]}" || result=$?
+    [[ -z ${token_file:-} ]] || rm -f -- "$token_file"
+    ((result == 0)) || return "$result"
     install_cli
     info 'Страница перенесена. Домен, API-токен, сети, тома и состояние запуска сохранены. Панель не обновлялась.'
     if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi

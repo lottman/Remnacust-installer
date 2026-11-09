@@ -35,6 +35,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_page.
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_migration.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_pages.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_page_migration.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_page_wizard.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_legacy_subscription_pages.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_connection.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_subscription_domain.py"
