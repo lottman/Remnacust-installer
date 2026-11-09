@@ -34,10 +34,10 @@ Checked on **November 7, 2026**:
 
 | Component | Version |
 | --- | --- |
-| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.148) | 1.2.148 |
-| [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.100) | 1.1.7.100 |
-| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.26) | 1.1.26 |
-| [Core / editor](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.16) | 1.1.16, Xray v26.10.31 |
+| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.149) | 1.2.149 |
+| [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.103) | 1.1.7.103 |
+| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.27) | 1.1.27 |
+| [Core / editor](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.17) | 1.1.17, Xray v26.11.9 |
 
 The installer version is not the panel version. Updating one component does not automatically replace the others. Pinned sources: [component-sources.json](component-sources.json). A README update does not create a new application release.
 
@@ -45,7 +45,7 @@ The installer version is not the panel version. Updating one component does not 
 
 | Item | Minimum or planning allocation |
 | --- | --- |
-| Installer 1.2.148 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| Installer 1.2.149 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Architecture | Linux amd64 or arm64 |
 | Panel with database/cache | At least 2 CPU, 2 GiB RAM and 20 GiB storage; 4 CPU / 4 GiB recommended, plus backup headroom |
 | Node | At least 1 CPU / 1 GiB RAM, with headroom for Xray connections/rules |
@@ -156,7 +156,7 @@ Restore retains the installed application version and restores the database with
 
 [CLI parameters](installer/README.en.md) · [Installation/maintenance](docs/INSTALLER.md) · [Panel](https://github.com/lottman/Remnacust-panel) · [Node](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.148.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
+Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.149.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
 
 Component licenses and attribution are preserved. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Project support](https://t.me/lottman).
 
