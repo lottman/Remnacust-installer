@@ -2,9 +2,9 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-Stable bundle: Installer **1.2.151**, Panel/website **1.1.7.105**, Node **1.1.27**, Core **1.1.17** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.152**, Panel/website **1.1.7.106**, Node **1.1.27**, Core **1.1.17** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
 
-Installer 1.2.151 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.152 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## Install ready components
 
@@ -28,7 +28,7 @@ Required empty answers are requested again. Domain confirmation defaults to `y`;
 
 | Option | Purpose |
 | --- | --- |
-| `--version latest\|1.2.151` | Installer bundle release, not the panel version |
+| `--version latest\|1.2.152` | Installer bundle release, not the panel version |
 | `--domain DOMAIN` | Component hostname without scheme, port or path |
 | `--port PORT` | Panel loopback port or node API port |
 | `--directory PATH`, `--container NAME`, `--compose-file PATH` | Identify an existing installation |
@@ -145,3 +145,7 @@ Installer changes, helper contracts and packaged artifacts must be checked toget
 Node migration reuses the existing secret, API port and Xray state. The interactive wizard offers TLS/XHTTP and a website, certificate method, and optional firewall settings. Existing managed TLS can be retained. Additional TLS setup runs after the node has migrated; its failure does not erase the migrated node. The working Xray profile is retained; configure the corresponding inbound in the panel as for a fresh installation.
 
 NeedRestart lists pending service restarts. It does not restart services or reboot the server; dpkg configuration questions remain interactive.
+
+### Migrate an existing Remnawave subscription page
+
+On the server hosting that page, choose **Migration → Subscription page from Remnawave**, or run `sudo remnacust migrate-remnawave-subscription-page`. Use `--container NAME` or `--directory /opt/subscription-page` to select a specific Compose deployment. The installer preserves its panel URL, API token, ports, networks, mounts and running/stopped state; it does not update the panel. Other services in the project remain running. A failed readiness check restores the previous page configuration. Unknown custom images and containers without their original Compose files require manual migration. Afterwards use `upgrade-subscription-page`; use `configure-subscription-page` to change the panel connection.

@@ -106,28 +106,28 @@ cp "$fixture/good-release.json" "$fixture/release.json"
 
 source "$project/installer.sh"
 show_menu > "$fixture/menu"
-for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel status; do grep -q "$action" "$fixture/menu"; done
+for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-remnawave-subscription-page migrate-marzban-panel status; do grep -q "$action" "$fixture/menu"; done
 ! grep -q upgrade-core "$fixture/menu"
 DIRECTORY="$fixture/existing"; mkdir -p "$DIRECTORY"; touch "$DIRECTORY/.env"
 show_menu > "$fixture/existing-menu"
 cmp <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/menu") <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/existing-menu")
 pass 'all commands always visible, upgrade-core removed'
 (component_installed() { return 0; }; show_menu) > "$fixture/installed-menu"
-for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel; do grep -q "$action" "$fixture/installed-menu"; done
+for action in install-panel install-node upgrade-panel upgrade-node uninstall-panel uninstall-node migrate-remnawave-panel migrate-remnawave-node migrate-remnawave-subscription-page migrate-marzban-panel; do grep -q "$action" "$fixture/installed-menu"; done
 grep -Eq '^[[:space:]]*1[[:space:]]+.*install-panel' "$fixture/installed-menu"
-grep -Eq '^[[:space:]]*14[[:space:]]+.*uninstall-panel' "$fixture/installed-menu"
-grep -q 'Обновить: пункт 4; удалить: пункт 14' "$fixture/installed-menu"
-grep -q 'Обновить: пункт 5; удалить: пункт 15' "$fixture/installed-menu"
-diff -u <(printf '%s\n' {1..16} 0) <(awk '/^[[:space:]]*[0-9]+[[:space:]]/ {print $1}' "$fixture/menu")
+grep -Eq '^[[:space:]]*15[[:space:]]+.*uninstall-panel' "$fixture/installed-menu"
+grep -q 'Обновить: пункт 4; удалить: пункт 15' "$fixture/installed-menu"
+grep -q 'Обновить: пункт 5; удалить: пункт 16' "$fixture/installed-menu"
+diff -u <(printf '%s\n' {1..17} 0) <(awk '/^[[:space:]]*[0-9]+[[:space:]]/ {print $1}' "$fixture/menu")
 pass 'installed components keep installation and deletion commands visible with stable numbers'
 (ask() { printf 0; }; command() { return 1; }; ACTION=''; main) > "$fixture/no-tools-menu"
 cmp <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/menu") <(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$fixture/no-tools-menu")
 pass 'menu and exit do not need Docker or network'
 
 menu_actions=(install-panel install-node install-subscription-page upgrade-panel upgrade-node \
-    upgrade-subscription-page migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel \
+    upgrade-subscription-page migrate-remnawave-panel migrate-remnawave-node migrate-marzban-panel migrate-remnawave-subscription-page \
     --check-release status manage-subscription-page logs uninstall-panel uninstall-node uninstall-subscription-page)
-for number in {1..16}; do
+for number in {1..17}; do
     (
         ask_menu_choice() { printf '%s' "$number"; }
         service_menu() { ACTION=logs; COMPONENT=node; }
@@ -136,7 +136,7 @@ for number in {1..16}; do
         interactive_menu > "$fixture/selection-menu"
     )
     [[ $(head -n 1 "$fixture/selected-action") == "${menu_actions[number-1]}" ]]
-    if [[ $number == 13 ]]; then
+    if [[ $number == 14 ]]; then
         grep -qx -- '--component' "$fixture/selected-action"
         grep -qx node "$fixture/selected-action"
     fi

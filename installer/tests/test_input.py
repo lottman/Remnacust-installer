@@ -248,7 +248,7 @@ class InputWorkflowTests(unittest.TestCase):
                 plain = re.sub(r'\x1b\[[0-9;]*m', '', output)
                 self.assertTrue(all(len(line) <= width for line in plain.splitlines()), plain)
                 self.assertEqual([int(number) for number in re.findall(r'^\s+(\d+)  ', plain, re.M)],
-                                 [*range(1, 17), 0])
+                                 [*range(1, 18), 0])
 
     def test_missing_page_update_and_uninstall_use_the_same_gray_as_missing_panel(self):
         command = 'source "$1"; COLUMNS=88; component_installed() { return 1; }; subscription_page_installed() { return 1; }; show_menu'
@@ -535,7 +535,7 @@ main "$@"
         code, output = self.terminal('bash "$1"', [('Действие: ', paste), ('Действие: ', '0\n')], script=self.menu_fixture())
         self.assertEqual(code, 0, output)
         self.assertEqual(output.count('Установка и обслуживание'), 1, output)
-        self.assertEqual(output.count('Выберите номер от 0 до 16.'), 1, output)
+        self.assertEqual(output.count('Выберите номер от 0 до 17.'), 1, output)
         self.assertNotIn('UNEXPECTED-ACTION', output)
 
     def test_return_from_action_does_not_execute_leftover_paste(self):

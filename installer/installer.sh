@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='39914b96b22508f6febf25af6a1a4a949f89fdfbbc708fb55ec3681686a3b2d0'
+HELPER_BUNDLE_SHA256='f45a60167d64d5913c90a5dc1651dd44a8e74a90956d241f46666892b29d94e4'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -140,6 +140,7 @@ Remnacust · installer.sh
   uninstall-subscription-page Удалить выбранную страницу; сохранить настройки и данные
   migrate-remnawave-panel    Переход существующей панели на Remnacust
   migrate-remnawave-node     Переход существующей ноды на Remnacust
+  migrate-remnawave-subscription-page Перенос страницы подписки с сохранением настроек
   migrate-marzban-panel      Перенос пользователей Marzban через API
   --check-release           Скачать и проверить выпуск без установки
   status                    Состояние установленных компонентов
@@ -211,8 +212,8 @@ HELP
 show_menu() {
     local panel_note='' node_note='' panel_upgrade='Не установлена' node_upgrade='Не установлена' page_upgrade='Не установлена'
     local panel_available=false node_available=false page_available=false panel_install=true node_install=true service_available=false service_note='Компоненты не установлены'
-    if component_installed panel; then panel_available=true; panel_install=false; panel_note='Уже установлена. Обновить: пункт 4; удалить: пункт 14.'; panel_upgrade=''; fi
-    if component_installed node; then node_available=true; node_install=false; node_note='Уже установлена. Обновить: пункт 5; удалить: пункт 15.'; node_upgrade=''; fi
+    if component_installed panel; then panel_available=true; panel_install=false; panel_note='Уже установлена. Обновить: пункт 4; удалить: пункт 15.'; panel_upgrade=''; fi
+    if component_installed node; then node_available=true; node_install=false; node_note='Уже установлена. Обновить: пункт 5; удалить: пункт 16.'; node_upgrade=''; fi
     if subscription_page_installed; then page_available=true; page_upgrade=''; fi
     if $panel_available || $node_available || $page_available; then service_available=true; service_note=''; fi
     terminal_banner
@@ -229,16 +230,17 @@ show_menu() {
     terminal_action 7 'Панель из Remnawave' migrate-remnawave-panel
     terminal_action 8 'Нода из Remnawave' migrate-remnawave-node
     terminal_action 9 'Пользователи из Marzban' migrate-marzban-panel
+    terminal_action 10 'Страница подписки из Remnawave' migrate-remnawave-subscription-page
     terminal_section 'Обслуживание'
-    terminal_action 10 'Проверить выпуск' --check-release
-    terminal_action 11 'Состояние компонентов' status
-    terminal_action 12 'Управление компонентами' ''
-    terminal_action 13 'Логи, запуск и резервные копии' '' "$service_note" "$service_available"
+    terminal_action 11 'Проверить выпуск' --check-release
+    terminal_action 12 'Состояние компонентов' status
+    terminal_action 13 'Управление компонентами' ''
+    terminal_action 14 'Логи, запуск и резервные копии' '' "$service_note" "$service_available"
     terminal_section 'Удаление'
     terminal_text 'Данные, тома, настройки и резервные копии сохраняются.' '      ' '      ' "$DIM"
-    terminal_action 14 'Удалить панель' uninstall-panel "$panel_upgrade" "$panel_available"
-    terminal_action 15 'Удалить ноду' uninstall-node "$node_upgrade" "$node_available"
-    terminal_action 16 'Удалить страницу подписки' uninstall-subscription-page "$page_upgrade" "$page_available"
+    terminal_action 15 'Удалить панель' uninstall-panel "$panel_upgrade" "$panel_available"
+    terminal_action 16 'Удалить ноду' uninstall-node "$node_upgrade" "$node_available"
+    terminal_action 17 'Удалить страницу подписки' uninstall-subscription-page "$page_upgrade" "$page_available"
     terminal_rule
     terminal_action 0 Выход ''
     printf '\n'
@@ -335,7 +337,7 @@ terminal_action() {
 parse_args() {
     while (($#)); do
         case "$1" in
-            manage-panel|manage-node|configure-node-site|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
+            manage-panel|manage-node|configure-node-site|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-remnawave-subscription-page|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
             --node-site-mode|--node-site-port|--node-inbound-port|--page-id|--page-operation|--panel-url|--panel-token-file|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
@@ -1519,7 +1521,7 @@ interactive_menu() {
     while true; do
         ACTION=''; COMPONENT=''
         show_menu
-        choice=$(ask_menu_choice 16) || return $?
+        choice=$(ask_menu_choice 17) || return $?
         case "$choice" in
             1) ACTION=install-panel;;
             2) ACTION=install-node;;
@@ -1530,13 +1532,14 @@ interactive_menu() {
             7) ACTION=migrate-remnawave-panel;;
             8) ACTION=migrate-remnawave-node;;
             9) ACTION=migrate-marzban-panel;;
-            10) ACTION=--check-release;;
-            11) ACTION=status;;
-            12) management_menu || return $?;;
-            13) service_menu || return $?;;
-            14) ACTION=uninstall-panel;;
-            15) ACTION=uninstall-node;;
-            16) ACTION=uninstall-subscription-page;;
+            10) ACTION=migrate-remnawave-subscription-page;;
+            11) ACTION=--check-release;;
+            12) ACTION=status;;
+            13) management_menu || return $?;;
+            14) service_menu || return $?;;
+            15) ACTION=uninstall-panel;;
+            16) ACTION=uninstall-node;;
+            17) ACTION=uninstall-subscription-page;;
             0) return 0;;
         esac
         [[ -n $ACTION ]] || { discard_pending_input; continue; }
@@ -1610,6 +1613,7 @@ PY
         normalize-layout) installed_helper; lock_operation; python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "${COMPONENT:-panel}";;
         cleanup-backups) cleanup_backups_action;;
         install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page) subscription_page_action;;
+        migrate-remnawave-subscription-page) migrate_subscription_page_action;;
         migrate-marzban-panel) migrate_marzban;;
         install-*|upgrade-*|migrate-*) deploy;;
         *) service_action;;
@@ -2068,6 +2072,40 @@ PY
         else die 'Нужен REMNACUST_SUBSCRIPTION_TOKEN или локальная панель (--panel-url auto)'; fi
     fi
     chmod 600 "$token_file"
+}
+
+migrate_subscription_page_action() {
+    installed_helper; lock_operation
+    local script="$HELPER_ROOT/subscription_pages.py" count index=1 selected_container
+    local -a selectors=()
+    [[ -z $CONTAINER ]] || selectors+=(--container "$CONTAINER")
+    [[ -z $DIRECTORY ]] || selectors+=(--directory "$DIRECTORY")
+    [[ -z $COMPOSE_FILE$PROJECT ]] || die 'Выберите существующую страницу через --container или --directory; её Compose-проект сохраняется.'
+    python3 -I "$script" migration-candidates --root "$ROOT" "${selectors[@]}" > "$WORK/page-migration-candidates.json" || return $?
+    count=$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/page-migration-candidates.json")
+    ((count > 0)) || die 'Не найдена страница Remnawave под управлением Compose. Укажите --container или --directory; для уже перенесённой страницы используйте upgrade-subscription-page.'
+    python3 - "$WORK/page-migration-candidates.json" <<'PYMIGRATE'
+import json,sys
+for number,item in enumerate(json.load(open(sys.argv[1])),1):
+    print(f"  {number}. {item['project']}/{item['service']} · {item['directory']}")
+PYMIGRATE
+    if ((count > 1)); then
+        [[ -t 0 ]] || die 'Найдено несколько страниц; укажите точный --container или --directory.'
+        while true; do
+            index=$(ask_required 'Номер страницы для переноса') || return $?
+            if [[ $index =~ ^[0-9]{1,3}$ ]] && ((10#$index >= 1 && 10#$index <= count)); then index=$((10#$index)); break; fi
+            printf '  Выберите номер от 1 до %s.\n' "$count" >&2
+        done
+    fi
+    selected_container=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[int(sys.argv[2])-1]["container"])' "$WORK/page-migration-candidates.json" "$index")
+    prepare_host; choose_version
+    confirm "Перенести выбранную страницу подписки на Remnacust ($VERSION); подключение к панели и настройки сохраняются"
+    release_source; select_subscription_image
+    step 'Готовый образ сайта подписки' prepare_subscription_image
+    step 'Перенос страницы подписки' python3 -I "$script" migrate --root "$ROOT" --container "$selected_container" --image "$SUBSCRIPTION_IMAGE" --version "$SUBSCRIPTION_IMAGE_VERSION" --release "$TAG"
+    install_cli
+    info 'Страница перенесена. Домен, API-токен, сети, тома и состояние запуска сохранены. Панель не обновлялась.'
+    if [[ ${REMNACUST_MENU_COMPLETION_FD:-} == 3 ]]; then printf 'completed\n' >&3; fi
 }
 
 subscription_page_action() {

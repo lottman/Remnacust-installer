@@ -20,11 +20,11 @@ IMAGE=nginx:1.28-alpine; PROXY=caddy; TLS_METHOD=existing; PORT=43874
 CERT_FILE="$fixture/cert"; KEY_FILE="$fixture/key"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" -days 3 -subj /CN=panel.example.com -addext subjectAltName=DNS:panel.example.com >/dev/null 2>&1
 certificate_preflight
-# This fixture publishes TLS on 43876, so host listeners on 80/443 are irrelevant.
-# Keep the production port check intact and bypass only those two unused bindings.
+# This fixture replaces the application and publishes only a Docker-allocated TLS port.
+# The production check remains intact for bindings used outside this fixture.
 original_port_check=$(declare -f port_free)
 eval "${original_port_check/port_free/fixture_port_free}"
-port_free() { [[ $1 == 80 || $1 == 443 ]] || fixture_port_free "$1"; }
+port_free() { [[ $1 == 80 || $1 == 443 || $1 == "$PORT" ]] || fixture_port_free "$1"; }
 fresh_files
 tls_helper copy --domain "$DOMAIN" --certificate "$CERT_FILE" --key "$KEY_FILE" --directory "$DEPLOY"
 tls_helper record --state "$STATE" --method existing --certificate "$CERT_FILE" --key "$KEY_FILE"
@@ -33,17 +33,19 @@ printf '{"response":{"isLoginAllowed":false,"isRegisterAllowed":true}}' > "$fixt
 python3 - "$DEPLOY/docker-compose.yml" "$fixture/www" <<'PY'
 import json,sys
 p=sys.argv[1];c=json.load(open(p));c['services']={'caddy':c['services']['caddy'],'remnawave':{'image':'python:3.12-alpine','command':['python','-m','http.server','3000','--directory','/www'],'volumes':[sys.argv[2]+':/www:ro']}}
-c['services']['caddy']['ports']=['127.0.0.1:43876:443'];json.dump(c,open(p,'w'))
+c['services']['caddy']['ports']=['127.0.0.1::443'];json.dump(c,open(p,'w'))
 PY
 compose up -d >/dev/null
+HTTPS_PORT=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "443/tcp") 0).HostPort}}' "$(compose ps --quiet caddy)")
+[[ $HTTPS_PORT =~ ^[0-9]{1,5}$ ]]
 for i in {1..30}; do
- if curl --fail --silent --noproxy '*' --cacert "$CERT_FILE" --resolve "$DOMAIN:43876:127.0.0.1" "https://$DOMAIN:43876/" > "$WORK/page"; then break; fi
+ if curl --fail --silent --noproxy '*' --cacert "$CERT_FILE" --resolve "$DOMAIN:$HTTPS_PORT:127.0.0.1" "https://$DOMAIN:$HTTPS_PORT/" > "$WORK/page"; then break; fi
  sleep 1
 done
 [[ -s $WORK/page ]]
-DOMAIN=panel.example.com:43876; HTTPS_TIMEOUT=1
+DOMAIN=panel.example.com:$HTTPS_PORT; HTTPS_TIMEOUT=1
 if (wait_panel_https) > "$WORK/untrusted" 2>&1; then printf 'FAIL untrusted certificate accepted\n'; exit 1; fi
-curl() { command curl --cacert "$CERT_FILE" --resolve 'panel.example.com:43876:127.0.0.1' "$@"; }
+curl() { command curl --cacert "$CERT_FILE" --resolve "panel.example.com:$HTTPS_PORT:127.0.0.1" "$@"; }
 HTTPS_TIMEOUT=15; wait_panel_https
 printf '<html>wrong backend</html>' > "$fixture/www/api/auth/status"
 HTTPS_TIMEOUT=1
@@ -55,12 +57,12 @@ unset -f curl; DOMAIN=panel.example.com
 printf 'PASS HTTPS readiness checks actual Caddy TLS, certificate trust and panel API response\n'
 app_id=$(compose ps --quiet remnawave); proxy_id=$(compose ps --quiet caddy)
 started=$(docker inspect --format '{{.State.StartedAt}}' "$proxy_id")
-fingerprint() { openssl s_client -connect 127.0.0.1:43876 -servername "$DOMAIN" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256; }
+fingerprint() { openssl s_client -connect 127.0.0.1:$HTTPS_PORT -servername "$DOMAIN" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256; }
 before=$(fingerprint)
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" -days 3 -subj /CN=panel.example.com -addext subjectAltName=DNS:panel.example.com >/dev/null 2>&1
 renew_certificate
 after=$(fingerprint)
 [[ $before != "$after" && $(compose ps --quiet remnawave) == "$app_id" && $(compose ps --quiet caddy) == "$proxy_id" ]]
 [[ $(docker inspect --format '{{.State.StartedAt}}' "$proxy_id") == "$started" ]]
-curl --fail --silent --noproxy '*' --cacert "$CERT_FILE" --resolve "$DOMAIN:43876:127.0.0.1" "https://$DOMAIN:43876/" >/dev/null
+curl --fail --silent --noproxy '*' --cacert "$CERT_FILE" --resolve "$DOMAIN:$HTTPS_PORT:127.0.0.1" "https://$DOMAIN:$HTTPS_PORT/" >/dev/null
 printf 'PASS actual HTTPS and renewed certificate without restarting Caddy or application\n'

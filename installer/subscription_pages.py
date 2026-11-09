@@ -107,6 +107,76 @@ def discovered(root):
         return {}
 
 
+LEGACY_PAGE_IMAGES = {'remnawave/subscription-page', 'docker.io/remnawave/subscription-page',
+                      'ghcr.io/remnawave/subscription-page'}
+
+
+def legacy_page_image(value):
+    return isinstance(value, str) and value.split('@')[0].rsplit(':', 1)[0] in LEGACY_PAGE_IMAGES
+
+
+def migration_candidates(root, container=None, directory=None):
+    if container and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', container):
+        raise ValueError('INVALID_CONTAINER')
+    if directory and (not Path(directory).is_absolute() or Path(directory).is_symlink()):
+        raise ValueError('UNSAFE_PAGE_PATH')
+    ids = command(['docker'], 'ps', '--all', '--quiet').split()
+    if len(ids) > 256 or any(not re.fullmatch('[a-f0-9]{12,64}', value) for value in ids):
+        raise ValueError('INVALID_CONTAINER_INVENTORY')
+    inventory = json.loads(command(['docker'], 'inspect', *ids)) if ids else []
+    result = []
+    for current in inventory:
+        cid = current.get('Id', '')
+        if not re.fullmatch('[a-f0-9]{12,64}', cid):
+            continue
+        if container and container != current.get('Name', '').lstrip('/') and not (
+                re.fullmatch('[a-f0-9]{12,64}', container) and cid.startswith(container)):
+            continue
+        if not legacy_page_image(current.get('Config', {}).get('Image')):
+            continue
+        item = descriptor(current)
+        if not item or (directory and Path(item['directory']) != Path(directory)):
+            continue
+        item.pop('tokenUuid', None)
+        try:
+            base = Path(item['directory'])
+            paths = {base, *base.parents}
+            normalized = []
+            for value in item['composeFiles']:
+                path = Path(value) if Path(value).is_absolute() else base / value
+                paths.update([path, *path.parents])
+                normalized.append(str(runtime.compose_path(base, value)))
+            for path in paths:
+                if path.is_symlink() or not path.exists():
+                    raise ValueError('UNSAFE_PAGE_PATH')
+                if os.name != 'nt':
+                    info = path.stat()
+                    if info.st_uid not in {0, os.geteuid()} or (info.st_mode & 0o022 and not (
+                            path.is_dir() and info.st_mode & 0o1000)):
+                        raise ValueError('UNSAFE_PAGE_OWNER')
+            item['composeFiles'] = normalized
+            compose_base(item)
+        except (OSError, ValueError):
+            continue
+        result.append({**item, 'id': identity(item), 'container': cid})
+    return sorted(result, key=lambda item: (item['project'], item['service'], item['container']))
+
+
+def migrate(root, container, image, version, release):
+    choices = migration_candidates(root, container=container)
+    if len(choices) != 1:
+        raise ValueError('PAGE_MIGRATION_SOURCE')
+    item = choices[0]
+    page = item.pop('id')
+    previous = records(root).get(page)
+    if previous:
+        if previous['composeFiles'] != item['composeFiles']:
+            raise ValueError('PAGE_OWNER_COMPOSE_MISMATCH')
+        item = {**previous, **item}
+    upgrade(root, page, image, version, release, migration_item=item)
+    return page
+
+
 def selected(root, page, allow_discovered=False):
     if not isinstance(page, str) or not re.fullmatch('[a-f0-9]{24}', page):
         raise ValueError('INVALID_PAGE_ID')
@@ -361,13 +431,17 @@ def reuse_token_environment(root, directory, project, target):
     runtime.write(Path(target), 'REMNACUST_SUBSCRIPTION_REUSE_TOKEN=' + token + '\n')
 
 
-def upgrade(root, page, image, version, release, panel_connection=None):
-    item = selected(root, page)
+def upgrade(root, page, image, version, release, panel_connection=None, migration_item=None):
+    item = copy.deepcopy(migration_item) if migration_item is not None else selected(root, page)
     base = compose_base(item)
     config = json.loads(command(base, '--profile', '*', 'config', '--no-interpolate', '--no-env-resolution', '--format', 'json'))
     before = copy.deepcopy(config)
     target = config['services'][item['service']]
     current = inspect(item)
+    if migration_item is not None:
+        if (not current or current.get('Id') != item.pop('container', None) or
+                not legacy_page_image(current.get('Config', {}).get('Image'))):
+            raise ValueError('PAGE_MIGRATION_SOURCE')
     env_edits = {}
     if panel_connection is None:
         target['image'] = image
@@ -378,7 +452,7 @@ def upgrade(root, page, image, version, release, panel_connection=None):
         connection.probe((current or {}).get('Config', {}).get('Image') or target.get('image'), endpoint, token, network, current, command)
         env_edits = connection.edit(config, item, endpoint, token, network)
     current_version = ((current or {}).get('Config', {}).get('Labels') or {}).get('org.opencontainers.image.version', '')
-    if re.fullmatch(r'\d+(?:\.\d+){2,3}', current_version) and re.fullmatch(r'\d+(?:\.\d+){2,3}', version):
+    if migration_item is None and re.fullmatch(r'\d+(?:\.\d+){2,3}', current_version) and re.fullmatch(r'\d+(?:\.\d+){2,3}', version):
         if tuple(map(int, current_version.split('.'))) > tuple(map(int, version.split('.'))):
             raise ValueError('PAGE_DOWNGRADE_BLOCKED')
     was_running = bool(current and current.get('State', {}).get('Running'))
@@ -498,12 +572,16 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['install', 'upgrade', 'configure', 'panel-url', 'connection-info', 'token-file', 'uninstall', 'list', 'existing-target', 'reuse-port', 'reuse-token-env', 'status', 'logs', 'start', 'stop', 'restart'])
+    parser.add_argument('operation', choices=['migration-candidates', 'migrate', 'install', 'upgrade', 'configure', 'panel-url', 'connection-info', 'token-file', 'uninstall', 'list', 'existing-target', 'reuse-port', 'reuse-token-env', 'status', 'logs', 'start', 'stop', 'restart'])
     parser.add_argument('--root', type=Path, required=True)
-    for name in ('page-id', 'directory', 'project', 'panel-url', 'token-file', 'target', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
+    for name in ('container', 'page-id', 'directory', 'project', 'panel-url', 'token-file', 'target', 'port', 'image', 'domain', 'proxy', 'version', 'release'):
         parser.add_argument('--' + name)
     args = parser.parse_args()
-    if args.operation == 'list':
+    if args.operation == 'migration-candidates':
+        print(json.dumps(migration_candidates(args.root, args.container, args.directory), ensure_ascii=False))
+    elif args.operation == 'migrate':
+        print(migrate(args.root, args.container, args.image, args.version, args.release))
+    elif args.operation == 'list':
         print(json.dumps(listing(args.root), ensure_ascii=False))
     elif args.operation == 'existing-target':
         print(json.dumps(existing_target(args.root, args.directory, args.project), ensure_ascii=False))

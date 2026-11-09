@@ -233,13 +233,13 @@ lock_operation() { :; }
 resolve_release() { printf v1.2.122; }
 fetch_source() { :; }
 python3() { printf ACTION-CONTINUED; }
-for function in service_action deploy subscription_page_action manage_component_action cleanup_backups_action migrate_marzban; do
+for function in service_action deploy subscription_page_action manage_component_action cleanup_backups_action migrate_marzban migrate_subscription_page_action; do
  eval "$function() { printf ACTION-CONTINUED; }"
 done
 main "$3" --yes
 '''
         actions = ['install-panel', 'install-node', 'upgrade-panel', 'upgrade-node', 'migrate-remnawave-panel',
-                   'migrate-remnawave-node', 'migrate-marzban-panel', 'install-subscription-page',
+                   'migrate-remnawave-node', 'migrate-remnawave-subscription-page', 'migrate-marzban-panel', 'install-subscription-page',
                    'upgrade-subscription-page', 'configure-subscription-page', 'manage-subscription-page',
                    'uninstall-subscription-page', 'uninstall-panel', 'uninstall-node', 'change-domain',
                    'show-config', 'status', 'logs', 'start', 'stop', 'restart', 'backup-panel', 'restore-panel',
