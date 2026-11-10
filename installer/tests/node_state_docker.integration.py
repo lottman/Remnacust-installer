@@ -16,18 +16,20 @@ def docker(*args):
 
 def main():
     name = 'remnacust-state-fixture-' + uuid.uuid4().hex[:12]
+    image = name + ':fixture'
     with tempfile.TemporaryDirectory(prefix='remnacust-state-migration-') as directory:
         root = Path(directory).resolve()
         port_state = json.dumps({'version': 2, 'revision': '9', 'enabled': True, 'required': True,
                                  'appliedRevision': '8', 'delivery': {'epoch': '9007199254740993',
                                  'owner': 'f508a5b7-0422-4857-a07e-69aa63b90a09'}, 'pluginDirty': True}, separators=(',', ':'))
         try:
+            docker('tag', 'alpine:3.22', image)
             # A disposable container layer reproduces old installs without state
             # mounts. The source stops before the installer copies its state.
             docker('run', '--name', name,
                    '--label', 'com.docker.compose.service=node',
                    '--label', 'com.docker.compose.project.working_dir=' + str(root),
-                   '--env', 'SECRET_KEY=isolated-state-fixture', 'alpine:3.22', 'sh', '-c',
+                   '--env', 'SECRET_KEY=isolated-state-fixture', image, 'sh', '-c',
                    "mkdir -p /var/lib/remnacust/run/core-state /var/lib/remnanode/quota /var/lib/remnanode/usage /var/lib/remnanode/core /var/lib/remnawave/core-manager; "
                    "chmod 700 /var/lib/remnanode/core; printf '%s' '" + port_state + "' > /var/lib/remnanode/core/port-plan-state.json; chmod 600 /var/lib/remnanode/core/port-plan-state.json; "
                    "printf 'saved-profile-generation' > /var/lib/remnacust/run/core-state/checkpoint.pb; "
@@ -36,7 +38,7 @@ def main():
                    "printf '%s' '{\"mode\":\"bundled\",\"paused\":true}' > /var/lib/remnawave/core-manager/state.json")
             before = json.loads(docker('inspect', name).stdout)[0]
             assert not before['State']['Running'] and not before['Mounts']
-            compose = {'services': {'node': {'image': 'alpine:3.22', 'volumes': []}}}
+            compose = {'services': {'node': {'image': image, 'volumes': []}}}
             plan = runtime.plan_node_state(compose, before, root)
             runtime.snapshot_node_state(plan)
             assert len(plan['copies']) == 3
@@ -62,7 +64,7 @@ def main():
             backup = root / 'backup'
             backup.mkdir(mode=0o700)
             primary = root / 'compose.json'
-            old_config = {'name': 'state-fixture', 'services': {'node': {'image': 'alpine:3.22'}}}
+            old_config = {'name': 'state-fixture', 'services': {'node': {'image': image}}}
             runtime.write(primary, old_config)
             state = {'directory': str(root), 'component': 'node', 'project': 'state-fixture',
                      'mainService': 'node', 'applications': ['node'], 'composeFiles': [str(primary)]}
@@ -89,7 +91,7 @@ def main():
             assert primary == root / 'docker-compose.yml'
             assert runtime.load(root / 'compose.json')['services'] == {}
             restored = runtime.load(primary)['services']['node']
-            assert restored['image'] == 'alpine:3.22'
+            assert restored['image'] == image
             assert restored['volumes'] == mounts
             runtime.verify_backup(backup, component='node')
             mounted = []
@@ -121,6 +123,7 @@ def main():
             print('PASS real Docker: absent legacy state is distinguished from copy/daemon failures')
         finally:
             subprocess.run(['docker', 'rm', '-f', name, name + '-empty'], capture_output=True, timeout=30)
+            subprocess.run(['docker', 'image', 'rm', image], capture_output=True, timeout=30)
 
 
 if __name__ == '__main__':
