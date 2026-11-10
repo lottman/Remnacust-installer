@@ -78,7 +78,7 @@ class NarrowActions(unittest.TestCase):
         state = self.state()
         del state['ownerRoot']
         (self.root / 'state.json').write_text(json.dumps(state))
-        self.assertEqual(guard.owned_panel('/opt/remnacust'), '')
+        self.assertEqual(guard.owned_panel(str(self.base / 'unowned')), '')
         self.assertEqual(self.output.getvalue(), '')
 
     def test_narrow_cli_missing_files_creates_nothing_and_prints_nothing(self):
@@ -246,6 +246,9 @@ class OwnerCleanup(unittest.TestCase):
         self.site = self.base / 'site'
         self.control = self.base / 'control'
         self.owner = self.base / 'installation'
+        self.default_owner = self.base / 'default-installation'
+        self.assertEqual(guard.DEFAULT_OWNER_ROOT, '/opt/remnacust')
+        self.enterContext(patch.object(guard, 'DEFAULT_OWNER_ROOT', str(self.default_owner)))
         self.calls = []
         self.table = False
         self.unrelated = {'SSH 22', 'SSH 2222', 'Docker', 'admin TCP 9443'}
@@ -378,7 +381,7 @@ class OwnerCleanup(unittest.TestCase):
                 del state['controlPorts']
             (self.root / 'state.json').write_text(json.dumps(state))
             before = self.snapshot()
-            guard.uninstall('/opt/remnacust')
+            guard.uninstall(str(self.default_owner))
             self.assertEqual(self.snapshot(), before)
             self.assertEqual(self.calls, [])
             self.assertTrue(self.table)
@@ -446,9 +449,9 @@ class OwnerCleanup(unittest.TestCase):
         (self.root / 'state.json').write_text(json.dumps(state))
         self.cleanup()
         self.assertEqual(self.calls, [])
-        self.cleanup(owner='/opt/remnacust', api=7289)
+        self.cleanup(owner=str(self.default_owner), api=7289)
         self.assertEqual(self.calls, [])
-        self.cleanup(owner='/opt/remnacust')
+        self.cleanup(owner=str(self.default_owner))
         self.assertFalse((self.root / 'state.json').exists())
         self.assertIn('default owner and tracked API match', self.output.getvalue())
 
@@ -459,7 +462,7 @@ class OwnerCleanup(unittest.TestCase):
         (self.root / 'state.json').write_text(json.dumps(state))
         self.cleanup()
         self.assertEqual(self.calls, [])
-        self.cleanup(owner='/opt/remnacust', api=0)
+        self.cleanup(owner=str(self.default_owner), api=0)
         self.assert_only_lock_remains()
         self.assertIn('old state has no controlPorts', self.output.getvalue())
 

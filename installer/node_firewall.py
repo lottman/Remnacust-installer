@@ -16,6 +16,7 @@ import tempfile
 
 TABLE = 'remnacust_node_guard'
 ROOT = Path('/etc/remnacust-node-firewall')
+DEFAULT_OWNER_ROOT = '/opt/remnacust'
 UNIT = Path('/etc/systemd/system/remnacust-node-firewall.service')
 CONTROL_PROFILE = Path('/etc/ufw/applications.d/remnacust-node-control')
 SITE_PROFILE = Path('/etc/ufw/applications.d/remnacust-node-site')
@@ -385,7 +386,7 @@ def cleanup_owner(state, owner_root, api_port):
     if tracked_owner is not None:
         if tracked_owner != owner:
             return False, 'Guard preserved: ownerRoot mismatch'
-    elif owner != '/opt/remnacust':
+    elif owner != DEFAULT_OWNER_ROOT:
         return False, 'Legacy guard preserved: ownerless state requires /opt/remnacust'
     if api_port is None and tracked_owner is None:
         return False, 'Legacy guard preserved: ownerless state requires an explicit API port'
@@ -631,7 +632,7 @@ def main():
             if state is None:
                 print('No guard state: owned guard cleanup skipped')
                 return
-            args.owner_root = state.get('ownerRoot', '/opt/remnacust')
+            args.owner_root = state.get('ownerRoot', DEFAULT_OWNER_ROOT)
             ports = state.get('controlPorts', [])
             args.api_port = ports[0] if isinstance(ports, list) and ports else 0
         uninstall(args.owner_root, args.api_port, args.https_port)

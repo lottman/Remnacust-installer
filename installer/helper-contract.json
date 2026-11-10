@@ -38,8 +38,8 @@
       "sha256": "2d5f3bbba656c009fe9f2472fc10f44f85ce7a70799fffb9a929784836e40262"
     },
     "node_firewall.py": {
-      "bytes": 30168,
-      "sha256": "c9e77861a328136ca9768444eb9d2aa40636fe8bb72acca79f84e91612da3fd9"
+      "bytes": 30210,
+      "sha256": "bd1c96e9785ed5a59798683b8ffb8cb8fd171c67d8af7635ce3101cd66a01159"
     },
     "node_site.py": {
       "bytes": 33741,
