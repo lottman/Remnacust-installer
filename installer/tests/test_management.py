@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,86 @@ class ManagementTests(unittest.TestCase):
         record = plan['records'][str(self.root / 'registry/node.json')]
         self.assertEqual((record['nodeSiteMode'], record['nodeSitePort'], record['nodeInboundPort'], record['apiPort']), ('standalone', 4433, 8444, 7289))
         self.assertIn('listen 0.0.0.0:4433 ssl;', plan['files'][str(directory / 'nginx.conf')]['after'])
+        self.assertEqual(plan['siteFirewall'], {'before': 0, 'after': 4433})
+
+    def test_prepare_cli_firewall_default_and_opt_out_use_real_plans(self):
+        directory = self.root / 'node'; directory.mkdir()
+        config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture', number='7289')
+        runtime.write(directory / 'docker-compose.yml', config)
+        runtime.write(self.root / 'registry/node.json', state)
+        for flags in ([], ['--no-firewall']):
+            with self.subTest(flags=flags):
+                argv = ['management.py', 'prepare', '--root', str(self.root), '--component', 'node',
+                        '--domain', 'new.example.test', '--site-mode', 'standalone', '--site-port', '4433', *flags]
+                with patch.object(sys, 'argv', argv), patch('sys.stdout', new_callable=io.StringIO) as output:
+                    manage.main()
+                plan = runtime.load(Path(output.getvalue().strip()))
+                if flags:
+                    self.assertNotIn('siteFirewall', plan)
+                else:
+                    self.assertEqual(plan['siteFirewall'], {'before': 0, 'after': 4433})
+
+    def test_no_firewall_is_restricted_to_node_prepare(self):
+        for operation in ('prepare', 'apply', 'complete', 'rollback', 'stop-proxy', 'info'):
+            for component in ('node', 'panel', 'subscription-page', None):
+                if operation == 'prepare' and component == 'node':
+                    continue
+                with self.subTest(operation=operation, component=component):
+                    argv = ['management.py', operation, '--root', str(self.root), '--no-firewall']
+                    if component:
+                        argv += ['--component', component]
+                    with patch.object(sys, 'argv', argv), patch('sys.stderr', new_callable=io.StringIO), \
+                            patch.object(manage, 'prepare') as prepare, patch.object(manage, 'dispatch') as dispatch, \
+                            patch.object(manage, 'description') as description:
+                        with self.assertRaises(SystemExit) as error:
+                            manage.main()
+                    self.assertEqual(error.exception.code, 2)
+                    prepare.assert_not_called()
+                    dispatch.assert_not_called()
+                    description.assert_not_called()
+
+    def test_no_firewall_prepare_apply_and_rollback_never_manage_host_firewall(self):
+        for outcome in ('complete', 'rollback', 'startup-failure', 'https-failure', 'rollback-failure'):
+            with self.subTest(outcome=outcome):
+                directory = self.root / outcome; directory.mkdir()
+                config, state = runtime.fresh('node', directory, 'nodefixture', 'node:fixture', number='7289')
+                runtime.write(directory / 'docker-compose.yml', config)
+                runtime.write(directory / '.env', 'SECRET_KEY=fixture\nNODE_PORT=7289\n')
+                runtime.write(self.root / 'registry/node.json', state)
+                with patch.object(manage, 'set_site_firewall') as firewall, \
+                        patch.object(manage.tls, 'copy_pair'), patch('node_site.install_site'), \
+                        patch.object(runtime, 'wait_node_https') as https, \
+                        patch.object(manage.subprocess, 'run', side_effect=AssertionError('unexpected host command')):
+                    plan = manage.prepare(self.root, 'node', 'new.example.test', site_mode='standalone',
+                                          site_port='4433', manage_firewall=False)
+                    self.assertNotIn('siteFirewall', runtime.load(plan))
+                    certificate, key = self.root / 'leaf.pem', self.root / 'key.pem'
+                    if outcome == 'startup-failure':
+                        with patch.object(pages, 'ready', side_effect=[RuntimeError('startup failed'), None]):
+                            with self.assertRaisesRegex(RuntimeError, 'startup failed'):
+                                manage.apply(plan, certificate, key)
+                    else:
+                        manage.apply(plan, certificate, key)
+                        self.assertEqual(runtime.load(plan)['phase'], 'applied')
+                        self.assertTrue(any('up' in row and 'node-nginx' in row for row in self.calls))
+                        if outcome == 'complete':
+                            manage.complete(plan)
+                        elif outcome == 'https-failure':
+                            https.side_effect = ValueError('HTTPS failed')
+                            with self.assertRaisesRegex(ValueError, 'HTTPS failed'):
+                                manage.complete(plan)
+                        elif outcome == 'rollback-failure':
+                            with patch.object(pages, 'ready', side_effect=RuntimeError('rollback failed')):
+                                with self.assertRaisesRegex(RuntimeError, 'rollback failed'):
+                                    manage.rollback(plan)
+                        else:
+                            manage.rollback(plan)
+                    expected = 'complete' if outcome == 'complete' else 'applied' if outcome == 'rollback-failure' else 'rolled-back'
+                    saved = runtime.load(plan)
+                    self.assertEqual(saved['phase'], expected)
+                    self.assertNotIn('siteFirewall', saved)
+                    self.assertNotIn('siteFirewallApplied', saved)
+                    firewall.assert_not_called()
 
     def test_standalone_firewall_and_proxy_roll_back_together(self):
         directory = self.root / 'node'; directory.mkdir()

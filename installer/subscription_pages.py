@@ -464,12 +464,12 @@ def upgrade(root, page, image, version, release, panel_connection=None, migratio
         legacy_migration = legacy_page_image(current['Config']['Image'])
         if panel_connection is None and page_connection_required(current):
             raise ValueError('PAGE_CONNECTION_REQUIRED')
-    current_version = ((current or {}).get('Config', {}).get('Labels') or {}).get('org.opencontainers.image.version', '')
-    if not legacy_migration and re.fullmatch(r'\d+(?:\.\d+){2,3}', current_version) and re.fullmatch(r'\d+(?:\.\d+){2,3}', version):
-        if tuple(map(int, current_version.split('.'))) > tuple(map(int, version.split('.'))):
-            raise ValueError('PAGE_DOWNGRADE_BLOCKED')
     env_edits = {}
     if panel_connection is None or migration_item is not None:
+        runtime.assert_upgrade_versions(
+            before, {**item, 'component': 'subscription-page', 'mainService': item['service'],
+                     'applications': [item['service']]},
+            version, release, [current] if current else [])
         target['image'] = image
         target.pop('build', None)
     if panel_connection is not None:

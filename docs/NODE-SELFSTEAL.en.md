@@ -51,3 +51,5 @@ If the installed CLI does not recognise the command, download the current `insta
 ## Source catalogue
 
 All 20 websites live in this repository's `sites/` directory. See [the editing and testing guide](../sites/README.md). `scripts/build-node-sites.py` builds the deterministic catalogue used by the installer. Source, catalogue consistency, module safety, CLI rollback and actual Nginx HTTP/TLS checks run before publication.
+
+When the panel IP/CIDR is empty, the installer adds no nftables/UFW rules, including website and HTTP-01 exceptions. Previous rules are removed only after verifying ownership by this installation; unrelated firewall configuration is preserved. Existing generated renewal scripts are detached from managed firewall hooks. Configure website, API and TCP 80 access yourself on the server and at the provider.

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='1cc2a90936fbb8c5292385b975e496ea44d6e3e194166917d8f59c31404ad020'
+HELPER_BUNDLE_SHA256='9c725c318b943fec3bd48cdbdf1a4d4f5f68db4e842076b63e35ff5dd8675223'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -1369,6 +1369,10 @@ manage_component_action() {
         requested_domain=$(ask_confirmed_domain 'Новый домен (без https:// и пути)' "$requested_domain") || return $?
         confirm "Сменить домен $requested_component на $requested_domain"
     elif [[ -n $TLS_METHOD ]]; then options+=(--tls-method "$TLS_METHOD"); fi
+    if [[ $requested_component == node && -z $PANEL_IP ]] && ! $NODE_MIGRATION_TLS; then
+        PANEL_IP=$(python3 -I "$HELPER_ROOT/node_firewall.py" owned-panel --owner-root "$ROOT") || return $?
+    fi
+    if [[ $requested_component == node && -z $PANEL_IP ]]; then options+=(--no-firewall); fi
     if [[ $requested_component == node && -n $NODE_SITE_MODE ]]; then
         options+=(--site-mode "$NODE_SITE_MODE" --site-port "${NODE_SITE_PORT:-443}" --inbound-port "${NODE_INBOUND_PORT:-8443}")
     fi
@@ -1402,7 +1406,6 @@ manage_component_action() {
         fi
         if [[ $TLS_METHOD == http ]]; then
             python3 -I "$HELPER_ROOT/management.py" stop-proxy --root "$ROOT" --plan "$DOMAIN_PLAN" || return $?
-            [[ ! -f /etc/remnacust-node-firewall/state.json ]] || PANEL_IP=managed
         fi
         obtain_certificate || return $?
     fi
@@ -1448,6 +1451,14 @@ node_migration_wizard() {
 }
 node_migration_finish() {
     [[ $ACTION == migrate-remnawave-node ]] || return 0
+    if [[ -z $PANEL_IP ]]; then
+        node_acl_without_panel || return $?
+        local renewal_project
+        renewal_project=$(get project) || return $?
+        if [[ -n $renewal_project ]]; then
+            python3 -I "$HELPER_ROOT/node_firewall.py" detach-renewal --owner-root "$ROOT" --project "$renewal_project" || return $?
+        fi
+    fi
     if $NODE_MIGRATION_TLS; then
         local ACTION=change-domain DOMAIN=$NODE_DOMAIN
         info 'Нода перенесена. Настраиваем сайт и TLS/XHTTP с сохранением её данных.'
@@ -2724,7 +2735,7 @@ obtain_certificate() {
         CERT_FILE="$lineage/fullchain.pem"; KEY_FILE="$lineage/privkey.pem"
 }
 acme_certbot() {
-    if [[ $TLS_METHOD == http ]]; then
+    if [[ $TLS_METHOD == http && ( $COMPONENT != node || -n $PANEL_IP ) ]]; then
         python3 -I "$HELPER_ROOT/ufw_guard.py" --root "$ROOT" -- "$@"
     else "$@"; fi
 }
@@ -2760,8 +2771,12 @@ schedule_certificate_renewal() {
             chmod 0700 "$ACME_ROOT/acme-open.sh" "$ACME_ROOT/acme-close.sh"
             renewal_hooks=(--pre-hook "$ACME_ROOT/acme-open.sh" --post-hook "$ACME_ROOT/acme-close.sh")
         fi
-        install -m 0700 "${HELPER%/*}/ufw_guard.py" "$ACME_ROOT/ufw_guard.py"
-        { printf '#!/usr/bin/env bash\nset -eu\nexec /usr/bin/python3 -I %q --root %q -- %q renew --quiet --config-dir %q --work-dir %q --logs-dir %q --deploy-hook %q' "$ACME_ROOT/ufw_guard.py" "$ROOT" "$CERTBOT" "$ACME_ROOT/config" "$ACME_ROOT/work" "$ACME_ROOT/logs" "$hook"; if ((${#renewal_hooks[@]})); then printf ' %q' "${renewal_hooks[@]}"; fi; printf '\n'; } > "$renew_cli"
+        local -a renewal_command=("$CERTBOT")
+        if [[ $COMPONENT != node || -n $PANEL_IP ]]; then
+            install -m 0700 "${HELPER%/*}/ufw_guard.py" "$ACME_ROOT/ufw_guard.py"
+            renewal_command=(/usr/bin/python3 -I "$ACME_ROOT/ufw_guard.py" --root "$ROOT" -- "$CERTBOT")
+        fi
+        { printf '#!/usr/bin/env bash\nset -eu\nexec '; printf '%q ' "${renewal_command[@]}"; printf 'renew --quiet --config-dir %q --work-dir %q --logs-dir %q --deploy-hook %q' "$ACME_ROOT/config" "$ACME_ROOT/work" "$ACME_ROOT/logs" "$hook"; if ((${#renewal_hooks[@]})); then printf ' %q' "${renewal_hooks[@]}"; fi; printf '\n'; } > "$renew_cli"
         chmod 0700 "$hook" "$renew_cli"
         service="remnacust-acme-$PROJECT"
         tls_helper timer --service "$service" --script "$renew_cli"
@@ -2819,16 +2834,38 @@ try {
     fi
     info "Непрерывность работы нод подтверждена: $count."
 }
+node_firewall_cleanup() {
+    local record=${1:-$STATE}
+    local -a cleanup_options=(--owner-root "$ROOT")
+    if [[ -n $record && -f $record ]]; then
+        local previous_api previous_https
+        previous_api=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("apiPort",0))' "$record") || return $?
+        previous_https=$(python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));print(s.get("nodeSitePort",443) if s.get("nodeSiteMode")=="standalone" else 0)' "$record") || return $?
+        cleanup_options+=(--api-port "$previous_api" --https-port "$previous_https")
+    fi
+    python3 -I "$HELPER_ROOT/node_firewall.py" uninstall --owner-root "$ROOT" || return $?
+    if ((${#cleanup_options[@]} > 2)); then
+        python3 -I "$HELPER_ROOT/node_firewall.py" uninstall "${cleanup_options[@]}" || return $?
+    fi
+}
+node_acl_without_panel() {
+    [[ -z $PANEL_IP ]] || return 0
+    node_firewall_cleanup
+}
 node_acl() {
     local https_port=0
+    if [[ $PANEL_IP == managed ]]; then PANEL_IP=$(python3 -c 'import json;print(json.load(open("/etc/remnacust-node-firewall/state.json"))["panel"])') || return $?; fi
+    if [[ -z $PANEL_IP ]]; then
+        node_acl_without_panel || return $?
+        info "IP панели не задан: правила доступа не добавляются. Доступ к TCP $PORT настройте в своём firewall."
+        return 0
+    fi
     if [[ -n $STATE && -f $STATE ]]; then
         https_port=$(python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));print(s.get("nodeSitePort",443) if s.get("nodeSiteMode")=="standalone" else 0)' "$STATE") || return $?
     fi
     if [[ $https_port != 0 || ( -n $NODE_SITE_MODE && ( -f /etc/ufw/applications.d/remnacust-node-site || -f /etc/remnacust-node-firewall/state.json ) ) ]]; then
         python3 -I "$HELPER_ROOT/node_firewall.py" site --https-port "$https_port" || return $?
     fi
-    if [[ $PANEL_IP == managed ]]; then PANEL_IP=$(python3 -c 'import json;print(json.load(open("/etc/remnacust-node-firewall/state.json"))["panel"])') || return $?; fi
-    [[ -n $PANEL_IP ]] || { info "Ограничьте TCP $PORT адресом панели в firewall провайдера"; return; }
     command -v nft >/dev/null || package_step 'Сетевая защита ноды' install --no-install-recommends nftables || return $?
     local api_port inbound_port
     api_port=$(get apiPort)
@@ -2879,6 +2916,7 @@ deploy() {
         step 'Готовый образ сайта подписки' prepare_subscription_image
     fi
     if [[ $ACTION == install-* ]]; then
+        if [[ $COMPONENT == node && -z $PANEL_IP ]]; then node_acl_without_panel || return $?; fi
         obtain_certificate
         fresh_files
         helper record --state "$STATE" --version "${COMPONENT_VERSION:-${TAG#v}}" --image "$IMAGE" --running "${START_APPS[@]}"
@@ -2904,6 +2942,7 @@ deploy() {
             ((${#detected[@]} != 1)) || CONTAINER=${detected[0]}
         fi
         find_existing
+        helper check-upgrade --source "$WORK/compose.before.json" --state "$STATE" --inspect "$WORK/project-containers.json" --version "${COMPONENT_VERSION:-${TAG#v}}" --key "$TAG" || return $?
         node_migration_wizard
         if [[ $COMPONENT == node ]]; then node_net_admin_wizard "$WORK/compose.after.json"; fi
         if [[ $COMPONENT == panel ]]; then
@@ -3206,6 +3245,7 @@ PY
 uninstall_component() {
     local -a ids=() removed=()
     local snapshot="$ROOT/backups/uninstall-$COMPONENT-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    if [[ $COMPONENT == node ]]; then installed_helper || return $?; fi
     docker ps --all --quiet --no-trunc > "$WORK/uninstall-inventory.ids" || die 'Не удалось проверить Docker; удаление не выполнялось'
     mapfile -t ids < "$WORK/uninstall-inventory.ids"
     if ((${#ids[@]})); then docker inspect "${ids[@]}" > "$WORK/uninstall-inventory.json" || die 'Не удалось прочитать контейнеры; повторите удаление'
@@ -3308,21 +3348,15 @@ pending.write_text(json.dumps(s,indent=2)+'\n');pending.chmod(0o600);os.replace(
 print('Данные и прежний каталог: '+s['directory'])
 print('Повторная установка: remnacust install-'+s['component'])
 PY
-    info "$COMPONENT удалён. Копия описаний контейнеров: $snapshot"
-    if [[ $COMPONENT == node ]] && python3 -c 'import json,sys;sys.exit(json.load(open(sys.argv[1])).get("nodeSiteMode")!="standalone")' "$WORK/uninstall-state.json"; then
-        python3 -I "$HELPER_ROOT/node_firewall.py" site --https-port 0 || return $?
-    fi
     if [[ $COMPONENT == node ]]; then
-        local renewal_project removed_api_port
-        removed_api_port=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("apiPort",""))' "$WORK/uninstall-state.json") || return $?
-        if [[ -n $removed_api_port ]]; then
-            python3 -I "$HELPER_ROOT/node_firewall.py" remove-control --api-port "$removed_api_port" --owner-root "$ROOT" || return $?
-        fi
+        local renewal_project
+        node_firewall_cleanup "$WORK/uninstall-state.json" || return $?
         renewal_project=$(python3 -c 'import json,re,sys;p=json.load(open(sys.argv[1]))["project"];assert re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}",p);print(p)' "$WORK/uninstall-state.json") || return $?
         if [[ -f /etc/systemd/system/remnacust-acme-$renewal_project.timer && ! -L /etc/systemd/system/remnacust-acme-$renewal_project.timer ]]; then
             systemctl disable --now "remnacust-acme-$renewal_project.timer" || return $?
         fi
     fi
+    info "$COMPONENT удалён. Копия описаний контейнеров: $snapshot"
 }
 remove_container_ids() {
     # IDs are immutable; never remove by a name that another process can reuse.

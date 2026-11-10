@@ -210,8 +210,10 @@ def add_unit(plan, item, state):
     return unit
 
 
-def prepare(root, component, hostname, page_id=None, tls_method=None, site_mode=None, site_port=None, inbound_port=None):
+def prepare(root, component, hostname, page_id=None, tls_method=None, site_mode=None, site_port=None, inbound_port=None, manage_firewall=True):
     hostname = runtime.domain(hostname)
+    if type(manage_firewall) is not bool or (not manage_firewall and component != 'node'):
+        raise ManagementError('Отключение управления firewall доступно только для ноды')
     if tls_method is not None and (component != 'node' or tls_method not in ('http', 'existing', 'cloudflare', 'gcore')):
         raise ManagementError('Недопустимый способ TLS для ноды')
     record, state, item = deployment(root, component, page_id)
@@ -242,7 +244,7 @@ def prepare(root, component, hostname, page_id=None, tls_method=None, site_mode=
     backup.mkdir(mode=0o700, parents=True)
     plan = {'root': str(root), 'component': component, 'old': old, 'domain': hostname,
             'files': {}, 'records': {}, 'units': [], 'phase': 'prepared', 'backup': str(backup)}
-    if component == 'node' and site_mode is not None:
+    if manage_firewall and component == 'node' and site_mode is not None:
         previous_site_port = runtime.port(state.get('nodeSitePort', 443)) if state.get('nodeSiteMode') == 'standalone' else 0
         next_site_port = https_port if mode == 'standalone' else 0
         if previous_site_port != next_site_port:
@@ -575,11 +577,14 @@ def main():
     parser.add_argument('--tls-method', choices=['http', 'existing', 'cloudflare', 'gcore'])
     parser.add_argument('--site-mode', choices=['selfsteal', 'standalone'])
     parser.add_argument('--site-port'); parser.add_argument('--inbound-port')
+    parser.add_argument('--no-firewall', action='store_true')
     for name in ('page-id', 'domain', 'plan', 'certificate', 'key'):
         parser.add_argument('--' + name)
     args = parser.parse_args()
+    if args.no_firewall and (args.operation != 'prepare' or args.component != 'node'):
+        parser.error('--no-firewall доступен только для prepare --component node')
     if args.operation == 'prepare':
-        print(prepare(args.root, args.component, args.domain, args.page_id, args.tls_method, args.site_mode, args.site_port, args.inbound_port))
+        print(prepare(args.root, args.component, args.domain, args.page_id, args.tls_method, args.site_mode, args.site_port, args.inbound_port, manage_firewall=not args.no_firewall))
     elif args.operation in ('apply', 'rollback', 'complete', 'stop-proxy'):
         import fcntl
         plan = safe_file(args.plan)

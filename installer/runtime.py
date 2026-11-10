@@ -558,6 +558,96 @@ def preserve_node_state_rollback(plan_path, directory):
     backup_hashes(backup)
 
 
+def _upgrade_version(value, release=False):
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    numeric = value.removeprefix('v') if release else value
+    if not re.fullmatch(r'[0-9]{1,9}(?:\.[0-9]{1,9}){1,3}', numeric):
+        return None
+    parts = tuple(map(int, numeric.split('.')))
+    return parts + (0,) * (4 - len(parts))
+
+
+def _upgrade_image(image):
+    if not isinstance(image, str) or len(image) > 512:
+        return '', None, None
+    reference = image.split('@', 1)[0]
+    repository, separator, tag = reference.rpartition(':')
+    if not separator or '/' in tag:
+        return reference, None, None
+    numeric = r'[0-9]{1,9}(?:\.[0-9]{1,9}){1,3}'
+    match = re.fullmatch('(' + numeric + r')(?:-(v' + numeric + r'))?(?:-(?:amd64|arm64))?', tag)
+    return repository, match[1] if match else None, match[2] if match else None
+
+
+def _upgrade_upstream(repository):
+    return repository.startswith(('ghcr.io/remnawave/', 'remnawave/'))
+
+
+def _upgrade_service_matches(service, component):
+    repository, _, _ = _upgrade_image(service.get('image'))
+    name = repository.rsplit('/', 1)[-1]
+    if name in {'caddy', 'nginx', 'nginx-proxy', 'nginx-proxy-manager', 'traefik', 'postgres', 'postgresql', 'valkey', 'redis'}:
+        return False
+    labels = service.get('labels') or {}
+    role = labels.get('io.remnacust.service-role') if isinstance(labels, dict) else None
+    if role == 'subscription-page' and component != 'subscription-page':
+        return False
+    known = {'remnacust-panel': 'panel', 'remnacust-node': 'node',
+             'remnacust-subscription-page': 'subscription-page', 'subscription-page': 'subscription-page',
+             'backend': 'panel', 'node': 'node'}
+    return name not in known or known[name] == component
+
+
+def assert_upgrade_versions(config, state, target_version, target_release, containers=()):
+    target_component = _upgrade_version(target_version)
+    target_installer = _upgrade_version(target_release, release=True)
+    if target_component is None or target_installer is None:
+        fail('Некорректная версия Compose-конфигурации')
+    component_versions = []
+    installer_versions = []
+    component = state.get('component')
+    marker = config.get('x-remnacust-release') or {}
+    if isinstance(marker, dict):
+        if component and marker.get('component') == component:
+            component_versions.append(marker.get('version'))
+        installer_versions.append(marker.get('installer'))
+    repository, pinned, installer = _upgrade_image(state.get('image'))
+    if not _upgrade_upstream(repository):
+        component_versions.extend([state.get('version'), pinned])
+        installer_versions.append(installer)
+    services = config.get('services') or {}
+    applications = set(state.get('applications') or ())
+    applications.update(name for name in (state.get('mainService'), state.get('service')) if name)
+    scoped = {name for name in applications if _upgrade_service_matches(services.get(name) or {}, component)}
+    for name in scoped:
+        repository, pinned, installer = _upgrade_image((services.get(name) or {}).get('image'))
+        if not _upgrade_upstream(repository):
+            component_versions.append(pinned)
+            installer_versions.append(installer)
+    for container in containers:
+        details = container.get('Config') or {}
+        labels = details.get('Labels') or {}
+        name = labels.get('com.docker.compose.service')
+        if not state.get('project') or labels.get('com.docker.compose.project') != state['project'] or name not in scoped:
+            continue
+        if not _upgrade_service_matches({'image': details.get('Image'), 'labels': labels}, component):
+            continue
+        repository, pinned, installer = _upgrade_image(details.get('Image'))
+        if _upgrade_upstream(repository):
+            continue
+        labelled = labels.get('org.opencontainers.image.version')
+        component_versions.append(labelled if _upgrade_version(labelled) is not None else pinned)
+        installer_versions.append(installer)
+    for values, target, chosen, name, release in (
+            (component_versions, target_component, target_version, 'версии компонента', False),
+            (installer_versions, target_installer, target_release, 'версии установщика', True)):
+        for value in values:
+            current = _upgrade_version(value, release=release)
+            if current is not None and current > target:
+                fail('Понижение ' + name + ' запрещено: установлена ' + value + ', выбрана ' + chosen)
+
+
 def commit_compose(state_path, candidate_path, directory, version, release, preserve_release=False):
     backup = Path(directory)
     before = load(backup/'state.before.json')
@@ -596,8 +686,10 @@ def commit_compose(state_path, candidate_path, directory, version, release, pres
         fail('Compose-конфигурация принадлежит другому проекту')
     if not all(name in config.get('services', {}) for name in state['applications']):
         fail('В новой Compose-конфигурации отсутствует приложение')
-    if not preserve_release and (not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version) or not re.fullmatch(r'v[0-9]+(?:\.[0-9]+){1,3}', release)):
-        fail('Некорректная версия Compose-конфигурации')
+    if not preserve_release:
+        effective = load(backup/'compose.before.json') if (backup/'compose.before.json').exists() else {}
+        containers = load(backup/'container.before.json') if (backup/'container.before.json').exists() else ()
+        assert_upgrade_versions(effective, before, version, release, containers)
     targets = list(dict.fromkeys([primary, *paths]))
     manifest = backup/'compose-files.before.json'
     if manifest.exists():
@@ -1176,7 +1268,7 @@ def write_layout(state, config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['node-https', 'discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'layout'])
+    parser.add_argument('operation', choices=['node-https', 'discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'check-upgrade', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'layout'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
@@ -1218,6 +1310,9 @@ def main():
         snapshot_node_state(load(args.source))
     elif args.operation == 'preserve-node-state-rollback':
         preserve_node_state_rollback(args.source, args.directory)
+    elif args.operation == 'check-upgrade':
+        assert_upgrade_versions(load(args.source), load(args.state), args.version, args.key,
+                                load(args.inspect) if args.inspect else ())
     elif args.operation == 'commit-compose':
         commit_compose(args.state, args.source, args.directory, args.version, args.key)
     elif args.operation == 'restore-compose':
