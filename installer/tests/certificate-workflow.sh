@@ -65,17 +65,23 @@ for method in http cloudflare gcore; do
  [[ ! -d $ROOT/node && ! -f $ROOT/registry/node.json ]]
 done
 printf 'PASS HTTP/Cloudflare/Gcore use separate ACME directories and issue before application creation\n'
-[[ $(wc -l < "$fixture/ufw-guard-calls") == 1 ]]
-printf 'PASS HTTP issuance uses firewall restoration guard; DNS issuance does not alter UFW\n'
+[[ ! -e $fixture/ufw-guard-calls ]]
+printf 'PASS node issuance without a panel IP does not invoke the firewall guard\n'
 TLS_METHOD=http
 for action in install-node migrate-remnawave-node change-domain; do
  ACTION=$action
  acme_certbot /bin/true
 done
-[[ $(wc -l < "$fixture/ufw-guard-calls") == 4 ]]
+[[ ! -e $fixture/ufw-guard-calls ]]
+PANEL_IP=192.0.2.1
+for action in install-node migrate-remnawave-node change-domain; do
+ ACTION=$action
+ acme_certbot /bin/true
+done
+[[ $(wc -l < "$fixture/ufw-guard-calls") == 3 ]]
 TLS_METHOD=cloudflare; ACTION=change-domain
 acme_certbot /bin/true
-[[ $(wc -l < "$fixture/ufw-guard-calls") == 4 ]]
+[[ $(wc -l < "$fixture/ufw-guard-calls") == 3 ]]
 printf 'PASS HTTP installation, migration and domain change guard UFW; DNS domain changes do not\n'
 CERT_FILE="$fixture/cert"; KEY_FILE="$fixture/key"; DEPLOY="$fixture/deploy"; mkdir -p "$DEPLOY" "$ROOT/registry"
 STATE="$WORK/state.json"; printf '{"component":"panel","panelDomain":"node.example.com","nodeDomain":""}' > "$STATE"
@@ -109,4 +115,10 @@ grep -q -- '--post-hook' "$ACME_ROOT/renew.sh"
 grep -q 'guard.py acme-open' "$ACME_ROOT/acme-open.sh"
 grep -q 'guard.py acme-close' "$ACME_ROOT/acme-close.sh"
 printf 'PASS HTTP renewal installs bounded firewall open and close hooks\n'
+PANEL_IP=''
+schedule_certificate_renewal
+bash -n "$ACME_ROOT/renew.sh"
+! grep -qE 'ufw_guard|--pre-hook|--post-hook|acme-open|acme-close' "$ACME_ROOT/renew.sh"
+grep -Fq -- "$CERTBOT" "$ACME_ROOT/renew.sh"
+printf 'PASS node renewal without a panel IP invokes Certbot directly without firewall hooks\n'
 WORK=''
