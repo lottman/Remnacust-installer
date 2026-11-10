@@ -26,6 +26,10 @@ class ConfigurationError(ValueError):
     """A diagnostic written by the installer without rejected secret values."""
 
 
+class UpgradeVersionError(ConfigurationError):
+    pass
+
+
 def fail(message):
     raise ConfigurationError(message)
 
@@ -645,7 +649,7 @@ def assert_upgrade_versions(config, state, target_version, target_release, conta
         for value in values:
             current = _upgrade_version(value, release=release)
             if current is not None and current > target:
-                fail('Понижение ' + name + ' запрещено: установлена ' + value + ', выбрана ' + chosen)
+                raise UpgradeVersionError('Понижение ' + name + ' запрещено: установлена ' + value + ', выбрана ' + chosen)
 
 
 def commit_compose(state_path, candidate_path, directory, version, release, preserve_release=False):

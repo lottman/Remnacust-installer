@@ -466,10 +466,13 @@ def upgrade(root, page, image, version, release, panel_connection=None, migratio
             raise ValueError('PAGE_CONNECTION_REQUIRED')
     env_edits = {}
     if panel_connection is None or migration_item is not None:
-        runtime.assert_upgrade_versions(
-            before, {**item, 'component': 'subscription-page', 'mainService': item['service'],
-                     'applications': [item['service']]},
-            version, release, [current] if current else [])
+        try:
+            runtime.assert_upgrade_versions(
+                before, {**item, 'component': 'subscription-page', 'mainService': item['service'],
+                         'applications': [item['service']]},
+                version, release, [current] if current else [])
+        except runtime.UpgradeVersionError as error:
+            raise runtime.UpgradeVersionError('PAGE_DOWNGRADE_BLOCKED: ' + str(error)) from error
         target['image'] = image
         target.pop('build', None)
     if panel_connection is not None:
@@ -638,6 +641,8 @@ if __name__ == '__main__':
         signal.signal(signum, lambda *_: sys.exit(1))
     try:
         main()
+    except runtime.UpgradeVersionError as error:
+        raise SystemExit(str(error).removeprefix('PAGE_DOWNGRADE_BLOCKED: '))
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
         messages = {
             'PAGE_CONNECTION_REQUIRED': 'В прежней странице нет подключения к панели. Укажите адрес панели и приватный файл API-токена; существующая страница не изменена.',

@@ -58,6 +58,7 @@ class NodeMigrationWizardTests(unittest.TestCase):
 
     def test_tls_failure_after_migration_is_not_reported_as_complete(self):
         command = self.command() + ('NODE_MIGRATION_TLS=true; NODE_DOMAIN=edge.example.com; '
+                                    'PANEL_IP=192.0.2.10; '
                                     'manage_component_action() { return 31; }; '
                                     'if node_migration_finish; then printf FALSE-SUCCESS; fi')
         result = subprocess.run(['bash', '-c', command, 'test', str(test_input.INSTALLER), str(self.root)], capture_output=True, text=True)
