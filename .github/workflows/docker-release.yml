@@ -220,6 +220,18 @@ jobs:
               sources=[x['registry'] for x in entry['architectures'].values()]
               subprocess.run(['docker','buildx','imagetools','create','--tag',f'ghcr.io/lottman/remnacust-{component}:{entry["version"]}-{tag}',*sources],check=True)
           PY
+      - name: Verify anonymous pulls for both architectures
+        run: |
+          python3 - <<'PY'
+          import json,os,subprocess,tempfile
+          from pathlib import Path
+          manifest=json.loads(Path('source/images.json').read_text())
+          with tempfile.TemporaryDirectory(prefix='remnacust-anonymous-pull-') as directory:
+              environment={**os.environ,'DOCKER_CONFIG':directory}
+              for component,entry in manifest['components'].items():
+                  for architecture,image in entry['architectures'].items():
+                      subprocess.run(['docker','pull','--platform','linux/'+architecture,image['registry']],env=environment,check=True)
+          PY
       - name: Verify panel and subscription page gateway together
         env:
           REMNACUST_TEST_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-alpine
