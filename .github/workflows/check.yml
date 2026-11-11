@@ -9,6 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n Install.sh && python3 -B scripts/build-install-entry.py --check && python3 -B tests/install-entry.test.py
+      - run: python3 -B tests/promote-latest-images.test.py
       - run: bash Install.sh @ --help
   os-userspace:
     runs-on: ubuntu-latest

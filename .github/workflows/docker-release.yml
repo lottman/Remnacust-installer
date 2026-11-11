@@ -159,6 +159,10 @@ jobs:
             printf '%s\n' "$version"
             grep -F "Xray $EXPECTED_CORE_VERSION " <<< "$version"
             grep -F "Remnacust-$EXPECTED_CORE_VERSION" <<< "$version"
+            grep -F 'go1.27.4 ' <<< "$version"
+            default_version=$(docker run --rm --entrypoint /usr/local/bin/xray-default "$IMAGE" version)
+            grep -F 'Xray 26.11.9 ' <<< "$default_version"
+            grep -F 'go1.27.4 ' <<< "$default_version"
             for enabled in false true; do
               capabilities=()
               if [ "$enabled" = true ]; then capabilities=(--cap-add NET_ADMIN); fi

@@ -1,6 +1,8 @@
 name: Public release check
-run-name: Public ${{ inputs.tag }}
+run-name: Public ${{ inputs.tag || github.event.release.tag_name }}
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -13,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      EXPECTED_TAG: ${{ inputs.tag }}
+      EXPECTED_TAG: ${{ inputs.tag || github.event.release.tag_name }}
     steps:
       - name: Verify anonymous Latest download and release preflight
         shell: bash
@@ -30,3 +32,23 @@ jobs:
           bash -n "$root/installer.sh"
           sudo env REMNACUST_ROOT="$root/state" bash "$root/installer.sh" --check-release --version latest | tee "$root/result.log"
           grep -F -- "$EXPECTED_TAG" "$root/result.log"
+  latest-images:
+    needs: anonymous-installer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: remnacust-stable-latest-images
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+      - name: Promote verified stable images to latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          EXPECTED_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: python3 -B scripts/promote-latest-images.py --tag "$EXPECTED_TAG" --apply
