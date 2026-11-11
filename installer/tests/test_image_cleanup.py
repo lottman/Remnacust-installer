@@ -14,6 +14,25 @@ def image(n, tags=None, digests=None, source=None):
 
 
 class CleanupTests(unittest.TestCase):
+    def test_verified_local_hotfix_images_are_selected_but_foreign_local_images_are_preserved(self):
+        source = 'https://github.com/lottman/Remnacust-panel'
+        images = [image(1, ['local/remnacust-panel:old'], source=source),
+                  image(2, ['local/remnacust-subscription-page:old'], source=source),
+                  image(3, ['local/remnacust-panel:unknown']),
+                  image(4, ['local/remnacust-panel:foreign'], source='https://example.test/project'),
+                  image(5, ['local/unrelated:old'], source=source)]
+        plan = m.removal_plan(images, set(), 'panel')
+        self.assertEqual(plan, [(images[0]['Id'], images[0]['RepoTags']),
+                                (images[1]['Id'], images[1]['RepoTags'])])
+        self.assertEqual(m.removal_plan(images, {images[0]['Id'], images[1]['Id']}, 'panel'), [])
+
+    def test_local_node_cleanup_never_selects_panel_images_or_foreign_aliases(self):
+        source = 'https://github.com/lottman/Remnacust-node'
+        own = image(1, ['local/remnacust-node:old', 'foreign/node:keep'], source=source)
+        panel = image(2, ['local/remnacust-panel:old'], source='https://github.com/lottman/Remnacust-panel')
+        self.assertEqual(m.removal_plan([own, panel], set(), 'node'),
+                         [(own['Id'], ['local/remnacust-node:old'])])
+
     def test_component_only_unused_references_are_selected(self):
         images = [image(1, ['ghcr.io/lottman/remnacust-panel:current']),
                   image(2, ['remnacust-panel:previous']),

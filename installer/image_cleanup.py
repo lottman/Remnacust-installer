@@ -9,8 +9,9 @@ import time
 
 REPOSITORIES = {
     'panel': {'ghcr.io/lottman/remnacust-panel', 'remnacust-panel',
-              'ghcr.io/lottman/remnacust-subscription-page', 'remnacust-subscription-page'},
-    'node': {'ghcr.io/lottman/remnacust-node', 'remnacust-node'},
+              'ghcr.io/lottman/remnacust-subscription-page', 'remnacust-subscription-page',
+              'local/remnacust-panel', 'local/remnacust-subscription-page'},
+    'node': {'ghcr.io/lottman/remnacust-node', 'remnacust-node', 'local/remnacust-node'},
 }
 SOURCES = {'panel': {'https://github.com/lottman/Remnacust-panel'},
            'node': {'https://github.com/lottman/Remnacust-node'}}
@@ -31,7 +32,9 @@ def removal_plan(images, protected, component):
         if not IMAGE_ID.fullmatch(identifier) or identifier in protected:
             continue
         references = (image.get('RepoTags') or []) + (image.get('RepoDigests') or [])
-        own = [ref for ref in references if repository(ref) in REPOSITORIES[component]]
+        source = (image.get('Config', {}).get('Labels') or {}).get('org.opencontainers.image.source')
+        own = [ref for ref in references if repository(ref) in REPOSITORIES[component]
+               and (not repository(ref).startswith('local/') or source in SOURCES[component])]
         if own:
             tagged_repositories = {repository(ref) for ref in own if '@' not in ref}
             # Removing the final tag of a repository also removes its digest aliases.
@@ -39,7 +42,6 @@ def removal_plan(images, protected, component):
             own = [ref for ref in own if '@' not in ref or repository(ref) not in tagged_repositories]
             result.append((identifier, list(dict.fromkeys(own))))
         elif not references:
-            source = (image.get('Config', {}).get('Labels') or {}).get('org.opencontainers.image.source')
             if source in SOURCES[component]:
                 result.append((identifier, [identifier]))
     return result

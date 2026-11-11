@@ -22,8 +22,8 @@
       "sha256": "93d179034ed62a55b704d81361826a1c283f7268b66ad35e80d4264d97719cd3"
     },
     "image_cleanup.py": {
-      "bytes": 4761,
-      "sha256": "68b912d5028c5eb2d94edb8d69573b5d0027a7bc0692216855c92a94ee35c7dc"
+      "bytes": 4951,
+      "sha256": "05134342028a98ca3c1a6e46167dac5fe99465432b2ed6c4eb0dc6e904898d8b"
     },
     "images.py": {
       "bytes": 9675,
@@ -95,5 +95,5 @@
     }
   },
   "schema": 1,
-  "version": "1.2.161"
+  "version": "1.2.162"
 }
