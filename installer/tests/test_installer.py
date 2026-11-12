@@ -254,6 +254,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_fresh_is_scoped_and_panel_is_loopback(self):
         config, state = runtime.fresh('panel', '/opt/test', 'test-panel', 'app', 'panel.example.com')
+        self.assertEqual(config['services']['remnawave-db']['image'], 'postgres:18.6')
         self.assertEqual(config['services']['remnawave']['ports'], ['127.0.0.1:3000:3000'])
         for service in ['remnawave-db', 'remnawave-redis']:
             self.assertNotIn('ports', config['services'][service])
@@ -261,6 +262,17 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(state['project'], 'test-panel')
         config, _ = runtime.fresh('node', '/opt/test', 'test-node', 'app', number=2222, node_domain='node.example.com')
         self.assertIn('/opt/test/run:/var/lib/remnacust/run', config['services']['remnanode']['volumes'])
+
+    def test_panel_upgrade_preserves_existing_database_image_and_volume(self):
+        for image in ['postgres:14.24', 'postgres:18.4', 'postgres:18.6']:
+            with self.subTest(image=image):
+                original = {'services': {'panel': {'image': 'old-panel'}, 'db': {
+                    'image': image, 'volumes': ['database:/var/lib/postgresql']}}}
+                live = {'Config': {'Labels': {'com.docker.compose.service': 'panel'}}}
+                result, applications = runtime.transform(original, live, 'panel', 'new-panel')
+                self.assertEqual(result['services']['db'], original['services']['db'])
+                self.assertEqual(applications, ['panel'])
+                self.assertEqual(result['services']['panel']['image'], 'new-panel')
 
     def test_changed_secrets_ports_mounts_are_rejected(self):
         original = {'Config': {'Env': ['APP_SECRET=old', 'NODE_PORT=72']}, 'Mounts': [{'Source': '/data', 'Destination': '/app', 'RW': True}], 'HostConfig': {'NetworkMode': 'host'}}

@@ -52,7 +52,7 @@ assert state['subscriptionUrls']==sys.argv[4].split(',')
 assert 'https://'+env['SUB_PUBLIC_DOMAIN']==state['subscriptionUrls'][0]
 assert ',' not in env['SUB_PUBLIC_DOMAIN']
 PY
-[[ $(docker inspect --format '{{.Config.Image}}' "$(compose ps --quiet remnawave-db)") == postgres:18.4 ]]
+[[ $(docker inspect --format '{{.Config.Image}}' "$(compose ps --quiet remnawave-db)") == postgres:18.6 ]]
 curl --fail --silent --show-error -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-For: 127.0.0.1' \
     http://127.0.0.1:43875/api/auth/status >/dev/null
 printf 'PASS fresh panel, PostgreSQL 18, Valkey, API, HWID default, protected secrets and loopback binding\n'

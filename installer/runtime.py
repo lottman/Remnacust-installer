@@ -921,7 +921,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
                    healthcheck={'test': ['CMD-SHELL', 'curl -fsS http://localhost:3001/health'], 'interval': '10s', 'timeout': '5s', 'retries': 6, 'start_period': '30s'})
         if panel_net_admin:
             app['cap_add'] = ['NET_ADMIN']
-        database = dict(common, image='postgres:18.4', env_file=[str(directory / '.env')],
+        database = dict(common, image='postgres:18.6', env_file=[str(directory / '.env')],
                         shm_size='512mb', environment={'TZ': 'UTC'}, volumes=['database:/var/lib/postgresql'],
                         healthcheck={'test': ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}'], 'interval': '3s', 'timeout': '5s', 'retries': 20})
         redis = dict(common, image='valkey/valkey:9-alpine', volumes=['valkey-socket:/var/run/valkey'],
