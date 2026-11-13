@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='e1adc905d0c513c36b8c0be7f7f44d50ed5f043c0ad3f97f0f5bf168e8fc2b43'
+HELPER_BUNDLE_SHA256='7bfdff97af4a4b8a2ecc6a4016a36fc590b1b52c7eb8deaa80df649b47fbb507'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -16,6 +16,7 @@ PROJECT='' DOMAIN=${REMNACUST_PANEL_DOMAIN:-} NODE_DOMAIN='' EMAIL='' PANEL_IP='
 SUBSCRIPTION_URLS=${REMNACUST_SUBSCRIPTION_URLS:-} SUBSCRIPTION_SET=false
 SUBSCRIPTION_PAGE=false SUBSCRIPTION_PAGE_SET=false SUBSCRIPTION_PORT=3010 SUBSCRIPTION_IMAGE='' SUBSCRIPTION_IMAGE_VERSION=''
 PANEL_NET_ADMIN=false PANEL_NET_ADMIN_SET=false
+PANEL_IPV6_MODE=auto PANEL_IPV6_MODE_SET=false
 NODE_NET_ADMIN=false
 NODE_NET_ADMIN_ADDED=false
 NODE_DOMAIN_CONFIRMED=''
@@ -161,6 +162,7 @@ Remnacust · installer.sh
   --component COMPONENT    panel, node или subscription-page для управления
   --directory PATH          Каталог существующей установки
   --compose-file PATH       Основной Compose-файл при миграции
+  --panel-ipv6 MODE         IPv6 egress панели: auto (по умолчанию), on или off
   --container NAME          Контейнер приложения при миграции
   --project-name NAME       Имя новой установки Compose
   --domain DOMAIN           Домен установки / новый домен для change-domain
@@ -339,9 +341,10 @@ parse_args() {
         case "$1" in
             manage-panel|manage-node|configure-node-site|change-domain|show-config|install-subscription-page|upgrade-subscription-page|uninstall-subscription-page|manage-subscription-page|configure-subscription-page|normalize-layout|cleanup-backups|install-panel|install-node|upgrade-panel|upgrade-node|uninstall-panel|uninstall-node|migrate-remnawave-panel|migrate-remnawave-node|migrate-remnawave-subscription-page|migrate-marzban-panel|--check-release|status|check-panel|logs|start|stop|restart|backup-panel|restore-panel|renew-node-certificate|renew-panel-certificate)
                 [[ -z $ACTION ]] || die 'Укажите одно действие'; ACTION=$1 ;;
-            --node-site-mode|--node-site-port|--node-inbound-port|--page-id|--page-operation|--panel-url|--panel-token-file|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
+            --panel-ipv6|--node-site-mode|--node-site-port|--node-inbound-port|--page-id|--page-operation|--panel-url|--panel-token-file|--version|--component|--directory|--compose-file|--container|--project-name|--domain|--subscription-urls|--subscription-port|--server-ip|--port|--proxy|--node-domain|--email|--tls-method|--cert-file|--key-file|--dns-credentials|--panel-ip|--backup|--source-url|--destination-url|--internal-squad|--quota-mode)
                 (($#>=2)) && [[ -n $2 && $2 != --* ]] || die "Нужно значение после $1"
                 case "$1" in
+                    --panel-ipv6) PANEL_IPV6_MODE=$2; PANEL_IPV6_MODE_SET=true;;
                     --node-site-mode) NODE_SITE_MODE=$2;; --node-site-port) NODE_SITE_PORT=$2;; --node-inbound-port) NODE_INBOUND_PORT=$2;;
                     --page-id) PAGE_ID=$2;; --page-operation) PAGE_OPERATION=$2;; --panel-url) PAGE_PANEL_URL=$2;; --panel-token-file) PAGE_TOKEN_FILE=$2;;
                     --version) VERSION=$2;; --component) COMPONENT=$2;; --directory) DIRECTORY=$2;; --compose-file) COMPOSE_FILE=$2;;
@@ -371,6 +374,8 @@ parse_args() {
         case "$ACTION" in status|logs|start|stop|restart|show-config|change-domain|cleanup-backups|*subscription-page) ;; *) die 'Этот компонент доступен только в командах управления страницами';; esac
     fi
     [[ $PROXY == caddy || $PROXY == existing ]] || die 'Proxy: caddy или existing'
+    [[ $PANEL_IPV6_MODE == auto || $PANEL_IPV6_MODE == on || $PANEL_IPV6_MODE == off ]] || die 'IPv6: auto, on или off'
+    [[ $PANEL_IPV6_MODE_SET == false || -z $ACTION || $ACTION == install-panel || $ACTION == upgrade-panel || $ACTION == migrate-remnawave-panel ]] || die '--panel-ipv6 доступен для установки, обновления и переноса панели'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-subscription-page || $SUBSCRIPTION_SET == false ]] || die '--subscription-urls доступен для новой панели; обновление сохраняет существующие адреса подписки'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == upgrade-panel || $ACTION == migrate-remnawave-panel || $SUBSCRIPTION_PAGE_SET == false ]] || die 'Установка сайта подписки доступна для новой панели или миграции Remnawave'
     [[ -z $ACTION || $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $ACTION == migrate-remnawave-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки, переноса или обновления ноды'
@@ -959,6 +964,7 @@ PY
         subscription_options=(--subscription-image "$SUBSCRIPTION_IMAGE")
     fi
     helper transform --source "$WORK/compose.before.json" --inspect "$WORK/container.before.json" --roles "$WORK/project-containers.json" --component "$COMPONENT" --image "$IMAGE" "${subscription_options[@]}" --target "$WORK/compose.after.json" --state "$STATE"
+    panel_ipv6_candidate "$WORK/compose.after.json"
     mapfile -t APPS < <(get applications)
     capture_running_apps
     START_APPS=("${RUNNING_APPS[@]}")
@@ -2310,6 +2316,11 @@ subscription_wizard() {
         [[ -t 0 ]] && ! $YES && ! $preset || die 'Исправьте --subscription-urls: один или два адреса сайта подписки'
     done
 }
+panel_ipv6_candidate() {
+    [[ $COMPONENT == panel ]] || return 0
+    case "$ACTION" in install-panel|upgrade-panel|migrate-remnawave-panel) ;; *) return 0;; esac
+    helper panel-ipv6 --source "$1" --state "$STATE" --key "$PANEL_IPV6_MODE"
+}
 fresh_files() {
     local -a subscription_options=()
     local -a capability_options=()
@@ -2366,6 +2377,7 @@ fresh_files() {
     STATE="$WORK/state.json"
     helper fresh --component "$COMPONENT" --directory "$DEPLOY" --project "$PROJECT" --image "$IMAGE" --domain "$DOMAIN" \
         --port "$PORT" --proxy "$PROXY" --node-domain "$NODE_DOMAIN" "${subscription_options[@]}" "${capability_options[@]}" --target "$DEPLOY/docker-compose.yml" --state "$STATE"
+    panel_ipv6_candidate "$DEPLOY/docker-compose.yml"
     if [[ $COMPONENT == panel && $PROXY == caddy && ${TLS_METHOD:-auto} != auto ]]; then
         python3 - "$DEPLOY/docker-compose.yml" "$DEPLOY" <<'PY'
 import json,sys
@@ -2881,6 +2893,7 @@ node_acl() {
     info 'Отмена ограничения: python3 /etc/remnacust-node-firewall/guard.py remove'
 }
 deploy() {
+    [[ $PANEL_IPV6_MODE_SET == false || $COMPONENT == panel ]] || die '--panel-ipv6 доступен только для панели'
     [[ $ACTION == install-panel || $ACTION == install-node || $ACTION == upgrade-node || $ACTION == migrate-remnawave-node || $PANEL_NET_ADMIN_SET == false ]] || die '--net-admin/--no-net-admin доступны для новой панели, установки, переноса или обновления ноды'
     [[ $ACTION == install-* || -z $PORT ]] || die '--port задаёт порт новой установки. Обновление и миграция сохраняют фактический порт существующего контейнера.'
     if [[ $ACTION == install-* ]]; then

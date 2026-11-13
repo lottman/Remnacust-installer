@@ -14,6 +14,27 @@ Download the latest stable installer and open its interactive menu:
 bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/main/Install.sh) @ install
 ```
 
+## Panel and node IPv6
+
+Panel install, upgrade and migration default to `--panel-ipv6 auto`. A read-only preflight checks host IPv6, a default route, Docker Engine 28+ and Compose 2.33.1+. When safe, the installer adds its own `remnacust_ipv6_egress` Compose bridge network to every discovered panel backend application: API, processor and scheduler. The main service is included even if missing from the application list, and duplicates are removed. The network is IPv6-only (`enable_ipv4: false`, `enable_ipv6: true`) with NAT. Docker allocates the subnet from its address pools, normally an automatic ULA; no prefix is hard-coded.
+
+Existing networks, including an external `remnawave-network`, keep their subnet and IPAM configuration. Existing backend attachments receive higher `priority` and `gw_priority` to retain the primary network and IPv4 gateway. PostgreSQL, Redis/Valkey, the proxy, separate Node and Subscription Page are not attached to the egress network. Published ports, loopback bindings, volumes and secrets are unchanged; database/cache ports are not published over IPv6. Upgrade recreates backend applications through the existing backup/rollback workflow without restarting database or cache services.
+
+```bash
+sudo remnacust upgrade-panel --panel-ipv6 on
+sudo remnacust upgrade-panel --panel-ipv6 off
+```
+
+`on` fails before applying configuration if preflight fails. `auto` explains why it cannot enable IPv6 and preserves the current configuration, including an already-enabled egress network during temporary route failures. `off` explicitly detaches all panel backend applications from the egress network. No networks are force-deleted; an unused network may remain for separate cleanup. Subsequent upgrades preserve the Compose configuration. Explicit panel `network_mode`, a conflicting egress network name, or application sysctls disabling IPv6 require separate review and are not overwritten.
+
+For a default route learned through Router Advertisements (`proto ra` in `ip -6 route show default`), its interface must have `net.ipv6.conf.<interface>.accept_ra=2` so that Docker forwarding does not stop RA acceptance. For `eth0`, inspect `sysctl net.ipv6.conf.eth0.accept_ra`. If it is `0` or `1`, arrange the persistent per-interface OS setting separately first. The installer does not edit sysctl, `daemon.json`, global address pools or foreign firewall rules. Disabled `ip6tables` in the standard Docker configuration, or missing preconfigured forwarding with the nftables backend, prevents automatic enablement. A default route does not prove remote reachability; provider and firewall restrictions need separate checks.
+
+Nodes retain host networking. The installer never disables node IPv6 or adds disabling sysctls. Prior OS optimization disabling IPv6 is a separate host setting, not something the panel's Docker network can repair.
+
+For read-only diagnosis, compare the host's `ip -6 route show default` with `docker inspect <container>` and `docker network inspect <network>`. Host IPv6 working while the panel network has `EnableIPv6=false` and the container has no IPv6 route explains container `ENETUNREACH`. Verify the actual container address and route after applying the configuration, rather than relying on host ping alone.
+
+Official references: [Docker IPv6](https://docs.docker.com/engine/daemon/ipv6/), [Engine 27 automatic ULA allocation](https://docs.docker.com/engine/release-notes/27/), [Engine 28 IPv6-only networks and gateway priority](https://docs.docker.com/engine/release-notes/28/), [Compose networks](https://docs.docker.com/reference/compose-file/networks/), [Compose gw_priority](https://docs.docker.com/reference/compose-file/services/#gw_priority), [Docker forwarding](https://docs.docker.com/engine/network/packet-filtering-firewalls/), [Linux accept_ra](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html).
+
 ## First installation
 
 ```bash

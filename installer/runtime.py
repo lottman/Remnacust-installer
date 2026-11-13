@@ -14,6 +14,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -46,8 +47,8 @@ def write(path, value, mode=0o600):
     data = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2) + '\n'
     fd, name = tempfile.mkstemp(prefix='.remnacust-', dir=target.parent)
     try:
-        os.fchmod(fd, mode)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+            os.fchmod(stream.fileno(), mode)
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
@@ -895,6 +896,155 @@ def nginx_config(hostname, site_port=None):
 '''
 
 
+PANEL_IPV6_NETWORK = 'remnacust_ipv6_egress'
+PANEL_IPV6_CONFIG = {
+    'driver': 'bridge', 'enable_ipv4': False, 'enable_ipv6': True,
+    'driver_opts': {'com.docker.network.bridge.gateway_mode_ipv6': 'nat'},
+    'labels': {'io.remnacust.ipv6-egress': '1'},
+}
+
+
+def panel_ipv6_config(config, applications, enabled, project=None):
+    result = copy.deepcopy(config)
+    networks = result.setdefault('networks', {})
+    if not isinstance(networks, dict):
+        fail('IPv6: неподдерживаемое описание сетей Compose')
+    if PANEL_IPV6_NETWORK in networks:
+        existing = networks[PANEL_IPV6_NETWORK] or {}
+        options = existing.get('driver_opts') or {}
+        if (existing.get('driver', 'bridge') != 'bridge' or existing.get('enable_ipv4') is not False
+                or existing.get('enable_ipv6') is not True or existing.get('external') or existing.get('internal')
+                or (existing.get('labels') or {}).get('io.remnacust.ipv6-egress') != '1'
+                or options.get('com.docker.network.bridge.gateway_mode_ipv6', 'nat') != 'nat'
+                or options.get('com.docker.network.bridge.enable_ip_masquerade', 'true') != 'true'
+                or (project and existing.get('name', project + '_' + PANEL_IPV6_NETWORK) != project + '_' + PANEL_IPV6_NETWORK)):
+            fail('IPv6: имя egress-сети уже используется другой конфигурацией')
+    for name in applications:
+        service = result['services'][name]
+        if (service.get('labels') or {}).get('io.remnacust.service-role') == 'subscription-page':
+            continue
+        if service.get('network_mode'):
+            if enabled:
+                fail('IPv6: network_mode требует отдельной проверки; существующая сеть сохранена')
+            continue
+        attached = service.get('networks')
+        if isinstance(attached, list):
+            attached = {key: None for key in attached}
+        if attached is None or attached == {}:
+            attached = {'default': None}
+        if not isinstance(attached, dict):
+            fail('IPv6: неподдерживаемые подключения Compose')
+        if enabled:
+            sysctls = service.get('sysctls') or {}
+            if isinstance(sysctls, list):
+                sysctls = dict(item.split('=', 1) for item in sysctls)
+            if any(re.fullmatch(r'net\.ipv6\.conf\..+\.disable_ipv6', key) and str(value) != '0'
+                   for key, value in sysctls.items()):
+                fail('IPv6 отключён в sysctls приложения; настройка не перезаписана')
+            for key, options in attached.items():
+                if key == PANEL_IPV6_NETWORK:
+                    continue
+                options = {} if options is None else dict(options)
+                priority = options.get('priority', 0)
+                gateway_priority = options.get('gw_priority', 0)
+                if not isinstance(priority, int) or priority < 0 or not isinstance(gateway_priority, int) or gateway_priority < 0:
+                    fail('IPv6: неподдерживаемый priority существующей сети')
+                options['priority'] = max(1, priority)
+                options['gw_priority'] = max(1, gateway_priority)
+                attached[key] = options
+                if key == 'default':
+                    networks.setdefault('default', {})
+            attached[PANEL_IPV6_NETWORK] = {'priority': 0, 'gw_priority': 0}
+        elif PANEL_IPV6_NETWORK not in attached:
+            continue
+        else:
+            attached.pop(PANEL_IPV6_NETWORK)
+            if not attached:
+                fail('IPv6: нельзя удалить единственную сеть приложения')
+        service['networks'] = attached
+    if enabled:
+        networks.setdefault(PANEL_IPV6_NETWORK, copy.deepcopy(PANEL_IPV6_CONFIG))
+    elif PANEL_IPV6_NETWORK in networks and not any(
+            PANEL_IPV6_NETWORK in (service.get('networks') or {}) for service in result['services'].values()):
+        networks.pop(PANEL_IPV6_NETWORK)
+    if not networks and 'networks' not in config:
+        result.pop('networks')
+    return result
+
+
+def panel_ipv6_preflight(project, sysctl_root=Path('/proc/sys/net/ipv6/conf'), daemon_path=Path('/etc/docker/daemon.json')):
+    def output(arguments):
+        try:
+            process = subprocess.run(arguments, capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired):
+            fail('IPv6: не удалось проверить ' + arguments[0])
+        if process.returncode:
+            fail('IPv6: не удалось проверить ' + arguments[0])
+        return process.stdout.strip()
+
+    def sysctl(interface, key):
+        path = sysctl_root / interface / key
+        if not path.is_file():
+            fail('IPv6: отсутствует sysctl ' + interface + '.' + key)
+        return path.read_text().strip()
+
+    if any(sysctl(interface, 'disable_ipv6') != '0' for interface in ('all', 'default')):
+        fail('IPv6 отключён на хосте; sysctl не изменён')
+    routes = json.loads(output(['ip', '-j', '-6', 'route', 'show', 'default']))
+    routes = [route for route in routes if route.get('dev') and route.get('type', 'unicast') == 'unicast']
+    if not routes:
+        fail('IPv6: на хосте отсутствует default route')
+    for route in routes:
+        interface = route['dev']
+        if not re.fullmatch(r'[A-Za-z0-9_.:@-]{1,15}', interface):
+            fail('IPv6: неподдерживаемый интерфейс default route')
+        if sysctl(interface, 'disable_ipv6') != '0':
+            fail('IPv6 отключён на интерфейсе default route')
+        if route.get('protocol') in ('ra', 9) and sysctl(interface, 'accept_ra') != '2':
+            fail('IPv6: RA-маршрут требует net.ipv6.conf.' + interface + '.accept_ra=2 перед Docker forwarding; sysctl не изменён')
+    for command, minimum in ((['docker', 'version', '--format', '{{.Server.Version}}'], (28, 0, 0)),
+                             (['docker', 'compose', 'version', '--short'], (2, 33, 1))):
+        match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)', output(command))
+        if not match or tuple(map(int, match.groups())) < minimum:
+            fail('IPv6-only egress требует Docker Engine 28+ и Compose 2.33.1+')
+    if daemon_path.is_file():
+        daemon = json.loads(daemon_path.read_text())
+        if daemon.get('ip6tables') is False:
+            fail('IPv6: Docker ip6tables отключён; NAT не гарантирован, daemon.json не изменён')
+        if daemon.get('firewall-backend') == 'nftables' and sysctl('all', 'forwarding') != '1':
+            fail('IPv6: nftables backend требует заранее настроенный forwarding; sysctl не изменён')
+    name = project_name(project) + '_' + PANEL_IPV6_NETWORK
+    names = output(['docker', 'network', 'ls', '--format', '{{.Name}}']).splitlines()
+    if name in names:
+        existing = json.loads(output(['docker', 'network', 'inspect', name]))[0]
+        labels = existing.get('Labels') or {}
+        options = existing.get('Options') or {}
+        if (existing.get('Driver') != 'bridge' or existing.get('EnableIPv6') is not True
+                or existing.get('EnableIPv4') is not False or existing.get('Internal')
+                or labels.get('com.docker.compose.project') != project
+                or labels.get('com.docker.compose.network') != PANEL_IPV6_NETWORK
+                or options.get('com.docker.network.bridge.gateway_mode_ipv6', 'nat') != 'nat'
+                or options.get('com.docker.network.bridge.enable_ip_masquerade', 'true') != 'true'):
+            fail('IPv6: существующая egress-сеть несовместима или принадлежит другому проекту; сеть не изменена')
+
+
+def configure_panel_ipv6(config, state, mode):
+    if state.get('component') != 'panel' or mode not in ('auto', 'on', 'off'):
+        fail('IPv6: режим auto, on или off доступен только для панели')
+    applications = list(dict.fromkeys([state['mainService'], *(state.get('applications') or [])]))
+    if mode == 'off':
+        return panel_ipv6_config(config, applications, False, state['project'])
+    try:
+        panel_ipv6_preflight(state['project'])
+        return panel_ipv6_config(config, applications, True, state['project'])
+    except (ConfigurationError, ValueError, OSError, TypeError, KeyError) as error:
+        if mode == 'on':
+            raise ConfigurationError(str(error) if isinstance(error, ConfigurationError) else 'IPv6: ошибка preflight; конфигурация не изменена') from None
+        reason = str(error) if isinstance(error, ConfigurationError) else 'IPv6: ошибка preflight'
+        print(reason + '. Auto: существующие сети сохранены.', file=sys.stderr)
+        return copy.deepcopy(config)
+
+
 def fresh(component, directory, project, image, hostname='', number='3000', proxy='caddy', node_domain='', subscriptions='', subscription_image='', subscription_port='3010', panel_net_admin=False, node_net_admin=True, node_site_mode='selfsteal', node_site_port='443', node_inbound_port='8443'):
     if node_site_mode not in ('selfsteal', 'standalone'):
         fail('Неизвестный режим сайта ноды')
@@ -1272,7 +1422,7 @@ def write_layout(state, config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['node-https', 'discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'check-upgrade', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'layout'])
+    parser.add_argument('operation', choices=['node-https', 'discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'check-upgrade', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'panel-ipv6', 'layout'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
@@ -1289,7 +1439,14 @@ def main():
     parser.add_argument('--proxy', choices=['caddy', 'existing'], default='caddy')
     parser.add_argument('--node-domain', default=''); parser.add_argument('--key'); parser.add_argument('--version')
     args = parser.parse_args()
-    if args.operation == 'node-https':
+    if args.operation == 'panel-ipv6':
+        state = load(args.state)
+        config = configure_panel_ipv6(load(args.source), state, args.key or 'auto')
+        write(args.source, config)
+        state['panelIpv6'] = PANEL_IPV6_NETWORK in (config['services'][state['mainService']].get('networks') or {})
+        write(args.state, state)
+        print('IPv6 egress панели: ' + ('включён' if state['panelIpv6'] else 'выключен'))
+    elif args.operation == 'node-https':
         wait_node_https(load(args.state))
     elif args.operation == 'layout':
         write_layout(load(args.state), load(args.source))

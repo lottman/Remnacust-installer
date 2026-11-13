@@ -32,6 +32,27 @@ CDN хранится в реестре панели и привязываетс�
 
 В уже установленном комплекте 1.2.137 старый агент вызывает старый CLI до загрузки нового выпуска. Для получения этого исправления сначала один раз обновите установщик и службу обновления новым проверенным скриптом через SSH. Изменение исходников или публикация нового выпуска сами по себе не заменяют уже работающий старый агент.
 
+## IPv6 панели и ноды
+
+При установке, обновлении и переносе панели `--panel-ipv6 auto` используется по умолчанию. Read-only preflight проверяет IPv6 хоста, default route, Docker Engine 28+ и Compose 2.33.1+. Если условия безопасны, installer добавляет собственную Compose bridge-сеть `remnacust_ipv6_egress` всем распознанным backend-приложениям панели: API, processor и scheduler. Основной сервис включается даже при отсутствии в списке приложений; дубликаты исключаются. Сеть IPv6-only (`enable_ipv4: false`, `enable_ipv6: true`), с NAT; подсеть выделяет Docker из своих пулов, при стандартных настройках — ULA. Жёстко заданного префикса нет.
+
+Существующая сеть панели, включая внешнюю `remnawave-network`, её IPv4-подсеть и IPAM не пересоздаются. Подключение к прежней сети получает больший `priority` и `gw_priority`, чтобы сохранить primary network и IPv4 gateway. PostgreSQL, Redis/Valkey, proxy, отдельная Node и Subscription Page к новой сети не подключаются; порты, volumes, ключи и привязки к loopback сохраняются. Добавление IPv6 не публикует порты БД или кеша. При обновлении backend-приложения пересоздаются через существующий workflow резервирования/отката, а не инфраструктура.
+
+```bash
+sudo remnacust upgrade-panel --panel-ipv6 on
+sudo remnacust upgrade-panel --panel-ipv6 off
+```
+
+`on` требует успешного preflight и останавливается до применения конфигурации при ошибке. `auto` сообщает причину отказа и сохраняет текущую сетевую конфигурацию; если egress уже был включён, он не отключается автоматически из-за временной недоступности маршрута. `off` явно убирает подключения всех backend-приложений панели к egress-сети. Installer не удаляет Docker-сети принудительно; неиспользуемая сеть может остаться до отдельной очистки. Обычный upgrade сохраняет согласованную Compose-конфигурацию. Явный `network_mode` у панели, конфликт имени новой сети или отключающие IPv6 sysctl приложения требуют отдельной проверки и не переписываются.
+
+Если default route получен через Router Advertisement (`ip -6 route show default` содержит `proto ra`), для его интерфейса требуется `net.ipv6.conf.<интерфейс>.accept_ra=2`: Docker forwarding иначе может остановить приём RA. Например, для `eth0` проверьте `sysctl net.ipv6.conf.eth0.accept_ra`. При значении `0`/`1` сначала отдельно согласуйте постоянную настройку этого интерфейса в ОС. Installer не меняет `sysctl`, `daemon.json`, глобальные address pools и чужие firewall-правила. Отключённый `ip6tables` в стандартном Docker-конфиге или ненастроенный forwarding при nftables backend блокируют автоматическое включение. Наличие маршрута не гарантирует доступность удалённого адреса: ограничения провайдера/firewall проверяются отдельно.
+
+Node использует `network_mode: host`; installer не отключает IPv6 на ноде и не добавляет отключающие sysctl. Если оптимизатор или администратор ранее отключил IPv6 в ОС, это отдельная настройка хоста, не исправляемая переписыванием Docker-сети панели.
+
+Диагностика без изменения сети: сопоставьте `ip -6 route show default` на хосте, `docker inspect <контейнер>` и `docker network inspect <сеть>`. Рабочий IPv6 на хосте при `EnableIPv6=false` и отсутствии IPv6-маршрута контейнера объясняет `ENETUNREACH` в панели. Проверяйте фактический IPv6-адрес и route контейнера после применения, а не только host ping.
+
+Официальные основания: [Docker IPv6](https://docs.docker.com/engine/daemon/ipv6/), [Engine 27: автоматические ULA-пулы](https://docs.docker.com/engine/release-notes/27/), [Engine 28: IPv6-only сети и gateway priority](https://docs.docker.com/engine/release-notes/28/), [Compose networks](https://docs.docker.com/reference/compose-file/networks/), [Compose gw_priority](https://docs.docker.com/reference/compose-file/services/#gw_priority), [Docker forwarding](https://docs.docker.com/engine/network/packet-filtering-firewalls/), [Linux accept_ra](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html).
+
 ## Подробная диагностика
 
 CLI сохраняет один `logs/installer-<компонент>.log` до следующего действия с тем же компонентом. Диагностика использует отдельный файл. При сбое, включая прерывание, выводится путь и команда просмотра. Для SSH-обслуживания ноды дополнительно сохраняется `logs/node-maintenance.log` на ноде.

@@ -43,6 +43,9 @@ jobs:
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
+      - name: Verify panel IPv6 upgrade on real Docker
+        timeout-minutes: 3
+        run: python3 -B installer/tests/panel_ipv6_docker.integration.py --required
       - name: Test installer and package pinned source
         run: |
           bash -n installer/installer.sh

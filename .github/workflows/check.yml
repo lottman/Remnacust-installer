@@ -46,6 +46,9 @@ jobs:
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
+      - name: Verify panel IPv6 upgrade on real Docker
+        timeout-minutes: 3
+        run: python3 -B installer/tests/panel_ipv6_docker.integration.py --required
       - run: bash -n installer/installer.sh && sudo env "PATH=$PATH" "REMNACUST_NODE_SOURCE=$REMNACUST_NODE_SOURCE" "REMNACUST_TEST_REAL_COMPOSE=$REMNACUST_TEST_REAL_COMPOSE" bash tests/installer.test.sh
         env:
           REMNACUST_TEST_REAL_COMPOSE: '1'

@@ -28,6 +28,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_panel_continuity.p
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_panel_continuity_candidate.py"
 bash "$root/installer/tests/certificate-workflow.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_network.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_panel_ipv6.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_management.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_node_acl_cli.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$root/installer/tests/test_upgrade_versions.py"
