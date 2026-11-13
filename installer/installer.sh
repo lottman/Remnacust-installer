@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='21b3ed0fce6bc2d90848d0b1b4d7b34c9c940f248dc4efcd701c4d17e7ade712'
+HELPER_BUNDLE_SHA256='cb98a90023cd2b5283d0886102ef2e505583cf60811e0565b20a3b356619b379'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -22,6 +22,7 @@ NODE_NET_ADMIN_ADDED=false
 NODE_DOMAIN_CONFIRMED=''
 NODE_SITE_MODE='' NODE_SITE_PORT='' NODE_INBOUND_PORT=''
 NODE_MIGRATION_TLS=false
+NODE_CORE_REQUIRED=false
 ALLOW_DISRUPTION=false
 PORT='' PROXY=caddy PROXY_SET=false TLS_METHOD='' CERT_FILE='' KEY_FILE='' DNS_CREDENTIALS='' ACME_ROOT='' CERTBOT='' YES=false WORK='' SOURCE='' HELPER='' LOG=''
 STATE='' DEPLOY='' CHANGED=false BACKUP='' IMAGE='' TAG='' COMPONENT_VERSION=''
@@ -574,6 +575,12 @@ operation_log_event() {
     $OPERATION_LOG_ACTIVE || return 0
     printf '[%s] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${2:-}" >> "$LOG"
 }
+operation_interrupted() {
+    local signal=$1 result=$2
+    operation_log_event INTERRUPTED "signal=$signal"
+    if $CHANGED && [[ -n $BACKUP ]]; then recover "$result"; fi
+    exit "$result"
+}
 operation_log_error() {
     local result=$1 line=$2 context=$3
     operation_log_event ERROR "exit=$result line=$line functions=$context"
@@ -617,9 +624,9 @@ start_operation_log() {
     OPERATION_LOG_ACTIVE=true; OPERATION_STARTED=$SECONDS
     trap 'operation_log_finish "$?"' EXIT
     trap 'operation_log_error "$?" "$LINENO" "${FUNCNAME[*]}"' ERR
-    trap 'operation_log_event INTERRUPTED signal=INT; exit 130' INT
-    trap 'operation_log_event INTERRUPTED signal=TERM; exit 143' TERM
-    trap 'operation_log_event INTERRUPTED signal=HUP; exit 129' HUP
+    trap 'operation_interrupted INT 130' INT
+    trap 'operation_interrupted TERM 143' TERM
+    trap 'operation_interrupted HUP 129' HUP
     operation_log_event START "action=$ACTION requested=${VERSION:-latest} architecture=$(uname -m) kernel=$(uname -r)"
     printf '  Подробный журнал: %s\n' "$LOG"
     exec {OPERATION_STDERR}>&2
@@ -762,6 +769,19 @@ capture_running_apps() {
         fi
     done
 }
+start_selected_apps() {
+    local service
+    local -a stopped=()
+    for service in "${APPS[@]}"; do
+        [[ " ${START_APPS[*]} " == *" $service "* ]] || stopped+=("$service")
+    done
+    if ((${#stopped[@]})); then
+        compose up --no-start --no-deps --no-build --pull never "${stopped[@]}" || return $?
+    fi
+    if ((${#START_APPS[@]})); then
+        compose up -d --no-deps --no-build --pull never "${START_APPS[@]}" || return $?
+    fi
+}
 load_restore_apps() {
     # An explicitly empty list means all applications were stopped in the backup.
     python3 - "$STATE" > "$WORK/restore-applications" <<'PY'
@@ -855,6 +875,41 @@ panel_processes_ready() {
     [[ $service != remnawave-subscription-page ]] || return 0
     docker exec "$id" node -e 'const fs=require("node:fs");if(!fs.existsSync("/opt/pm2/package.json"))process.exit(0);try{const {execFileSync}=require("node:child_process");const rows=JSON.parse(execFileSync("pm2",["jlist"],{timeout:5000,maxBuffer:16*1024*1024,encoding:"utf8"}));const names=new Set(["remnawave-api","remnawave-jobs","remnawave-scheduler"]);const apps=rows.filter(x=>names.has(x.name));process.exit(apps.length&&apps.every(x=>x.pm2_env.status==="online"&&x.pm2_env.restart_time===0)?0:1);}catch{process.exit(1)}' >/dev/null 2>&1
 }
+node_application_ready() {
+    local id=$1 service=$2
+    [[ $COMPONENT == node && $service == "$(get mainService)" ]] || return 0
+    docker exec "$id" /command/with-contenv node -e '
+const fs=require("node:fs"),{execFileSync}=require("node:child_process");
+function coreReady(){
+ const selected="/var/lib/remnawave/core-manager/state.json";
+ const selection=fs.existsSync(selected)?JSON.parse(fs.readFileSync(selected,"utf8")):{};
+ if(selection.operation?.status==="running")throw Error();
+ if(selection.paused===true)return;
+ if(process.argv[1]!=="true"&&!fs.existsSync("/var/lib/remnacust/run/core-state/checkpoint.pb"))return;
+ const service=process.env.XRAY_S6_SERVICE_DIR||"/run/service/xray";
+ const status=()=>execFileSync("/command/s6-svstat",["-o","up,pid",service],{timeout:2000,maxBuffer:4096,encoding:"utf8"}).trim();
+ const before=status();if(!/^true [1-9][0-9]*$/.test(before))throw Error();
+ const socket=process.env.XTLS_API_SOCKET_PATH;if(!socket)throw Error();let server;
+ if(process.env.REMNACUST_NODE_RUNTIME==="1"){
+  if(!/^\/run\/remnacust-xray-[a-zA-Z0-9]{10}\/api\.sock$/.test(socket))throw Error();
+  const parent=fs.lstatSync(require("node:path").dirname(socket)),info=fs.lstatSync(socket),uid=process.getuid();
+  if(!parent.isDirectory()||!info.isSocket()||((parent.mode|info.mode)&0o077)||parent.uid!==uid||info.uid!==uid)throw Error();
+  server="unix:"+socket;
+ }else if(/^xtls-api-[a-zA-Z0-9]{10}$/.test(socket)){
+  server="unix-abstract:"+socket;
+ }else if(socket.startsWith("/")){
+  server="unix:"+socket;
+ }else{throw Error();
+ }
+ const binary=fs.existsSync("/usr/local/bin/rw-core")?"/usr/local/bin/rw-core":"/usr/local/bin/xray";
+ const response=JSON.parse(execFileSync(binary,["api","statssys","--server="+server,"--timeout=2"],{timeout:3000,maxBuffer:8192,encoding:"utf8"}));
+ if(!response||typeof response!=="object"||Array.isArray(response)||status()!==before)throw Error();
+}
+const s=require("node:net").connect(Number(process.env.NODE_PORT||2222),"127.0.0.1");
+s.on("connect",()=>{s.destroy();try{coreReady();process.exit(0);}catch{process.exit(1);}});
+s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),10000);
+' "$NODE_CORE_REQUIRED" >/dev/null 2>&1
+}
 wait_ready() {
     local service id state before attempt ready
     for service in "${START_APPS[@]}"; do
@@ -863,14 +918,14 @@ wait_ready() {
         ready=false
         for ((attempt=1; attempt<=90; attempt++)); do
             state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id")
-            if [[ $state == healthy ]] && panel_processes_ready "$id" "$service"; then ready=true; break; fi
+            if [[ $state == healthy ]] && panel_processes_ready "$id" "$service" && node_application_ready "$id" "$service"; then ready=true; break; fi
             if [[ $state == unhealthy || $state == exited || $state == dead ]]; then return 1; fi
             if (( $(docker inspect --format '{{.RestartCount}}' "$id") >= 3 )); then return 1; fi
             if [[ $state == running ]]; then
                 before=$(docker inspect --format '{{.State.Running}} {{.RestartCount}} {{.State.StartedAt}}' "$id")
                 sleep 5
                 if [[ $(docker inspect --format '{{.State.Running}} {{.RestartCount}} {{.State.StartedAt}}' "$id") == "$before" ]]; then
-                    if { [[ $COMPONENT != node || $service != "$(get mainService)" ]] || docker exec "$id" node -e 'const s=require("net").connect(Number(process.env.NODE_PORT||2222),"127.0.0.1");s.on("connect",()=>{s.destroy();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),3000)' >/dev/null 2>&1; } && panel_processes_ready "$id" "$service"; then ready=true; break; fi
+                    if node_application_ready "$id" "$service" && panel_processes_ready "$id" "$service"; then ready=true; break; fi
                 fi
             fi
             sleep 2
@@ -968,8 +1023,11 @@ PY
     mapfile -t APPS < <(get applications)
     capture_running_apps
     START_APPS=("${RUNNING_APPS[@]}")
-    local primary; primary=$(get mainService)
-    [[ " ${START_APPS[*]} " == *" $primary "* ]] || START_APPS+=("$primary")
+    NODE_CORE_REQUIRED=false
+    if [[ $COMPONENT == node && " ${START_APPS[*]} " == *" $(get mainService) "* ]] &&
+        docker exec "$id" node -e 'try{const s=require("node:child_process").execFileSync("/command/s6-svstat",["-o","up,pid",process.env.XRAY_S6_SERVICE_DIR||"/run/service/xray"],{timeout:2000,maxBuffer:4096,encoding:"utf8"}).trim();process.exit(/^true [1-9][0-9]*$/.test(s)?0:1);}catch{process.exit(1)}' >/dev/null 2>&1; then
+        NODE_CORE_REQUIRED=true
+    fi
     python3 - "$WORK/state.before.json" "${APPS[@]}" <<'PY'
 import json,sys
 p=sys.argv[1];s=json.load(open(p));s['applications']=sys.argv[2:];json.dump(s,open(p,'w'),indent=2)
@@ -1074,7 +1132,7 @@ PY
     info "Резервная копия: $BACKUP"
 }
 recover() {
-    local result=$?; trap - ERR; set +e
+    local result=${1:-$?}; trap - ERR; trap '' INT TERM HUP; set +e
     operation_log_event ERROR "exit=$result line=${BASH_LINENO[0]} functions=${FUNCNAME[*]} rollback=$CHANGED database-changed=$DB_CHANGED"
     if $CHANGED && [[ -n $BACKUP ]]; then
         if [[ $COMPONENT == node ]] || ! $DB_CHANGED; then
@@ -1084,13 +1142,37 @@ recover() {
             fi
             helper restore-compose --directory "$BACKUP" >> "$LOG" 2>&1 || { info 'Не удалось восстановить Compose; приложения не запускаются'; exit "${result:-1}"; }
             STATE="$BACKUP/state.before.json"; load_state
-            if [[ $COMPONENT == node ]] && ! verify_node_image_policy >> "$LOG" 2>&1; then
-                info 'Предыдущий образ не поддерживает сохранённые квоты или состояние портов; нода оставлена остановленной. Установите совместимый выпуск, не обнуляя состояние.'
-                exit "${result:-1}"
+            load_restore_apps >> "$LOG" 2>&1 || { info 'Не удалось прочитать исходное состояние запуска; приложения не запускаются'; exit "${result:-1}"; }
+            local pending=false
+            if [[ $COMPONENT == node && -f $WORK/node-state-plan.json ]]; then
+                pending=$(python3 - "$WORK/node-state-plan.json" "$BACKUP/compose-files.before.json" <<'PY'
+import json,sys
+plan,manifest=[json.load(open(path)) for path in sys.argv[1:]]
+print('true' if plan['copies'] and not manifest.get('nodeStateRollback') else 'false')
+PY
+                ) || { info 'Состояние snapshot не подтверждено; пересоздание исходной ноды запрещено'; exit "${result:-1}"; }
             fi
-            if ! compose up -d --no-deps --no-build --pull never "${START_APPS[@]}" >> "$LOG" 2>&1; then
-                info 'Предыдущую версию не удалось запустить; сохранённое состояние не обнулялось'
-                exit "${result:-1}"
+            if $pending; then
+                local original primary
+                original=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["Id"])' "$BACKUP/container.before.json")
+                primary=$(get mainService)
+                if [[ ! $original =~ ^[a-f0-9]{12,64}$ ]] || [[ $(docker inspect --format '{{.Id}}' "$original" 2>/dev/null) != "$original" ]]; then
+                    info 'Исходный контейнер с PRIVATE state недоступен; пересоздание до завершённого snapshot запрещено'
+                    exit "${result:-1}"
+                fi
+                if [[ " ${START_APPS[*]} " == *" $primary "* ]] && ! docker start "$original" >> "$LOG" 2>&1; then
+                    info 'Исходную ноду не удалось запустить; её PRIVATE state сохранён в прежнем контейнере'
+                    exit "${result:-1}"
+                fi
+            else
+                if [[ $COMPONENT == node ]] && ! verify_node_image_policy >> "$LOG" 2>&1; then
+                    info 'Предыдущий образ не поддерживает сохранённые квоты или состояние портов; нода оставлена остановленной. Установите совместимый выпуск, не обнуляя состояние.'
+                    exit "${result:-1}"
+                fi
+                if ! start_selected_apps >> "$LOG" 2>&1; then
+                    info 'Предыдущую версию не удалось запустить; сохранённое состояние не обнулялось'
+                    exit "${result:-1}"
+                fi
             fi
             if ! wait_ready >> "$LOG" 2>&1; then
                 info 'Готовность предыдущей версии не подтверждена; проверьте status и журнал'
@@ -1218,10 +1300,26 @@ if(policy.offlineReserves){
 }
 if(Object.values(policy.groups??{}).some(group=>group?.fenceAll===true||Object.values(group?.fencedOwners??{}).includes(true)))required.push("remnacust-quota-fences-v1");
 if(required.some(marker=>marker===userQuota||marker==="remnacust-usage-receipts-v1"||marker==="remnacust-quota-reserves-v1"))required.push("remnacust-unreserved-usage-v1");
+function selectedCore(){
+ const saved=privateState("/var/lib/remnawave/core-manager/state.json",1024*1024);
+ if(!saved)return {path:"/usr/local/bin/xray"};
+ let state=JSON.parse(saved.toString());
+ if(state.operation?.status==="running"){
+  if(!state.recovery)throw Error("Missing core recovery selection");
+  state=state.recovery;
+ }
+ if(!["profile","managed","bundled"].includes(state.mode)||typeof state.paused!=="boolean")throw Error("Invalid core selection");
+ const binary=state.binary;
+ if(state.mode==="bundled"&&["/usr/local/bin/xray","/usr/local/bin/xray-default"].includes(binary?.path))return {path:binary.path};
+ if(!binary){if(state.mode==="managed")throw Error("Missing managed core");return {path:"/usr/local/bin/xray"};}
+ if(!/^[a-f0-9]{64}$/.test(binary.sha256)||binary.path!=="/var/lib/remnawave/core-manager/"+binary.sha256)throw Error("Invalid managed core");
+ return {path:binary.path,sha256:binary.sha256};
+}
 if(required.length){
  try{
-  const details=fs.statSync("/usr/local/bin/xray");if(!details.isFile()||details.size>192*1024*1024)process.exit(3);
-  const binary=fs.readFileSync("/usr/local/bin/xray");
+  const selected=selectedCore(),details=fs.lstatSync(selected.path);if(!details.isFile()||details.isSymbolicLink()||details.size>192*1024*1024)process.exit(3);
+  const binary=fs.readFileSync(selected.path);
+  if(binary.length>192*1024*1024||(selected.sha256&&require("node:crypto").createHash("sha256").update(binary).digest("hex")!==selected.sha256))process.exit(3);
   if(required.some(marker=>!binary.includes(Buffer.from(marker))))process.exit(3);
  }catch{process.exit(3);}
 }
@@ -2958,6 +3056,9 @@ deploy() {
         helper check-upgrade --source "$WORK/compose.before.json" --state "$STATE" --inspect "$WORK/project-containers.json" --version "${COMPONENT_VERSION:-${TAG#v}}" --key "$TAG" || return $?
         node_migration_wizard
         if [[ $COMPONENT == node ]]; then node_net_admin_wizard "$WORK/compose.after.json"; fi
+        docker compose --project-name "$PROJECT" --project-directory "$DEPLOY" -f "$WORK/compose.after.json" \
+            --profile '*' config --format json > "$WORK/compose.environment.json"
+        helper check-runtime-environment --source "$WORK/compose.environment.json" --inspect "$WORK/project-containers.json" --state "$STATE"
         if [[ $COMPONENT == panel ]]; then
             database_environment; check_writers
             step 'Проверка истории миграций и исходных ключей' database_run preflight
@@ -2965,6 +3066,7 @@ deploy() {
         report_update_progress preparation 'Проверка текущей установки' done
         report_update_progress backup 'Резервная копия текущей установки' running
         backup_current
+        START_APPS=("${RUNNING_APPS[@]}")
         report_update_progress backup 'Резервная копия текущей установки' done
         configure_panel_updates "$WORK/compose.after.json"
         if [[ $COMPONENT == node ]]; then
@@ -2999,10 +3101,10 @@ PY
             DB_CHANGED=true
             step 'Совместимость старой базы' docker run --rm --network "$(cat "$WORK/database.network")" --env-file "$WORK/database.env" --entrypoint node "$IMAGE" dist/database-compatibility.js --apply
         fi
-        step 'Запуск обновлённых приложений' compose up -d --no-deps --no-build --pull never "${START_APPS[@]}"
+        step 'Запуск обновлённых приложений' start_selected_apps
     fi
     step 'Проверка готовности приложений' wait_ready
-    if [[ $COMPONENT == node ]] && python3 -c 'import json,sys;sys.exit(json.load(open(sys.argv[1])).get("nodeSiteMode")!="standalone")' "$STATE"; then
+    if [[ $COMPONENT == node && " ${START_APPS[*]} " == *" $(get mainService) "* ]] && python3 -c 'import json,sys;sys.exit(json.load(open(sys.argv[1])).get("nodeSiteMode")!="standalone")' "$STATE"; then
         step 'Проверка HTTPS-сайта' helper node-https --state "$STATE"
     fi
     if [[ $COMPONENT == node ]] && $NODE_NET_ADMIN; then
@@ -3033,8 +3135,12 @@ PY
     CHANGED=false; trap - ERR
     node_migration_finish
     if [[ $COMPONENT == panel ]] && python3 -c 'import json,sys;sys.exit(not json.load(open(sys.argv[1])).get("subscriptionMigration"))' "$STATE"; then
-        step 'Перенос и проверка страницы подписки' subscription_migration_apply
-        helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
+        if [[ " ${START_APPS[*]} " == *" $(get mainService) "* ]]; then
+            step 'Перенос и проверка страницы подписки' subscription_migration_apply
+            helper_file_copy "$STATE" "$ROOT/registry/$COMPONENT.json"
+        else
+            info 'Панель сохранена остановленной. Перенос страницы подписки отложен: запустите панель и выполните migrate-remnawave-subscription-page.'
+        fi
     fi
     step 'Подготовка рабочего каталога' python3 -I "$HELPER_ROOT/deployment_layout.py" --root "$ROOT" --component "$COMPONENT"
     helper_file_copy "$ROOT/registry/$COMPONENT.json" "$STATE"

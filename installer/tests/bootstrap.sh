@@ -194,7 +194,7 @@ pass 'failed migration stops every writer and preserves infrastructure'
  COMPONENT=node; CHANGED=true; DB_CHANGED=false; BACKUP="$fixture/backup"; LOG="$fixture/failure.log"; APPS=(node); START_APPS=(node)
  verify_node_image_policy() { printf 'probe\n' >> "$fixture/node-requests"; }
  wait_ready() { :; }; helper_file_copy() { :; }
- load_state() { :; }; compose() { printf '%s\n' "$*" >> "$fixture/node-requests"; }
+ load_state() { :; }; load_restore_apps() { :; }; compose() { printf '%s\n' "$*" >> "$fixture/node-requests"; }
  helper() { printf '%s\n' "$*" >> "$fixture/node-requests"; }
  recover
 ) >/dev/null 2>&1 || true

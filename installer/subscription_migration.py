@@ -170,6 +170,9 @@ def upgrade(state_path, image, token_path, backup_root, version, release, run=su
         runtime.write(candidate, config)
     else:
         normalized = runtime.environment(current or {}).get('REMNAWAVE_PANEL_URL')
+        if normalized:
+            settings['environment']['REMNAWAVE_PANEL_URL'] = normalized.replace('$', '$$')
+            runtime.write(candidate, config)
     if normalized:
         connection.probe(image, normalized, token, None, current, lambda base, *args: command(base, *args, run=run))
     if env_edits:

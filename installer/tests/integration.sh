@@ -88,7 +88,8 @@ ALLOW_DISRUPTION=true
 deploy
 ALLOW_DISRUPTION=false
 # Verify with a protected helper instead of printing test secrets.
-docker inspect "$(compose ps --quiet remnawave)" > "$WORK/container.before.json"; database_environment
+[[ $(docker inspect --format '{{.State.Running}}' "$(compose ps --all --quiet remnawave)") == false ]]
+docker inspect "$(compose ps --all --quiet remnawave)" > "$WORK/container.before.json"; database_environment
 database_run snapshot > "$WORK/verified.json"
 printf 'PASS historic fork upgrade repairs encrypted credentials and legacy table names\n'
 # Restore the quiesced legacy backup: the same image repairs it again during startup.

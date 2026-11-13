@@ -124,6 +124,21 @@ class PageMigrationTests(unittest.TestCase):
         ready.assert_not_called()
         self.assertTrue(any('up' in call and '--no-start' in call for call in self.calls))
 
+    def test_migration_preserves_runtime_connection_when_compose_is_stale(self):
+        for running in (True, False):
+            with self.subTest(running=running):
+                self.current['State']['Running'] = running
+                self.current['Config']['Env'] = [
+                    'REMNAWAVE_PANEL_URL=https://active-panel.example.test', 'REMNAWAVE_API_TOKEN=active.private.token']
+                item = {'directory': str(self.directory), 'project': 'legacy', 'service': 'page',
+                        'composeFiles': [str(self.compose)], 'container': self.current['Id']}
+                with patch.object(pages, 'command', side_effect=self.command), patch.object(pages, 'inspect', return_value=self.current), patch.object(pages, 'ready'):
+                    pages.upgrade(self.root, pages.identity(item), 'page:new', '1.1.7.106', 'v1.2.152', migration_item=item)
+                environment = runtime.load(self.compose)['services']['page']['environment']
+                self.assertEqual(environment['REMNAWAVE_PANEL_URL'], 'https://active-panel.example.test')
+                self.assertEqual(environment['REMNAWAVE_API_TOKEN'], 'active.private.token')
+                self.assertEqual(self.env.read_text(), 'EXISTING=retained\n')
+
     def test_health_failure_restores_compose_and_creates_no_record(self):
         original = self.compose.read_bytes()
         with patch.object(pages, 'command', side_effect=self.command), patch.object(pages, 'inspect', return_value=self.current), patch.object(pages, 'ready', side_effect=ValueError('fixture health failed')):
@@ -132,6 +147,23 @@ class PageMigrationTests(unittest.TestCase):
         self.assertEqual(self.compose.read_bytes(), original)
         self.assertEqual(pages.records(self.root), {})
         self.assertTrue(list((self.root / 'backups').glob('subscription-page-*')))
+
+    def test_literal_dollars_in_runtime_connection_are_escaped_for_compose(self):
+        for endpoint in ('https://panel-$HOST.example.test', 'https://panel-${HOST}.example.test', 'https://panel-$$literal.example.test'):
+            with self.subTest(endpoint=endpoint):
+                self.assertIsNotNone(pages.panel_origin(endpoint))
+                self.assertEqual(pages.connection.resolve(self.root, endpoint, lambda _: None), (endpoint, None))
+                self.current['Config']['Env'] = ['REMNAWAVE_PANEL_URL=' + endpoint, 'REMNAWAVE_API_TOKEN=active.private.token']
+                item = {'directory': str(self.directory), 'project': 'legacy', 'service': 'page',
+                        'composeFiles': [str(self.compose)], 'container': self.current['Id']}
+                with patch.object(pages, 'command', side_effect=self.command), patch.object(pages, 'inspect', return_value=self.current), patch.object(pages, 'ready'):
+                    pages.upgrade(self.root, pages.identity(item), 'page:new', '1.1.7.106', 'v1.2.152', migration_item=item)
+                environment = runtime.load(self.compose)['services']['page']['environment']
+                self.assertEqual(environment['REMNAWAVE_PANEL_URL'], endpoint.replace('$', '$$'))
+                self.assertEqual(self.env.read_text(), 'EXISTING=retained\n')
+        self.assertIsNone(pages.panel_origin('https://panel.example.test/$HOST'))
+        with self.assertRaisesRegex(ValueError, 'INVALID_PANEL_URL'):
+            pages.connection.resolve(self.root, 'https://panel.example.test/$HOST', lambda _: None)
 
     def test_changed_container_identity_is_rejected_before_compose_mutation(self):
         changed = {**self.current, 'Id': 'b' * 64}

@@ -93,7 +93,7 @@ class MigrationTests(unittest.TestCase):
         token = directory / 'token'; token.write_text('abc.def.ghi')
         return directory, primary, config, state, token
 
-    def execute(self, fail=False, running=True, endpoint=None):
+    def execute(self, fail=False, running=True, endpoint=None, runtime_endpoint=None):
         directory, primary, config, state, token = self.fixture()
         commands = []; attempts = 0
         def run(args, **kwargs):
@@ -103,7 +103,8 @@ class MigrationTests(unittest.TestCase):
             if '--format' in args: value = json.dumps(config)
             elif 'inspect' in args:
                 value = json.dumps([{'State': {'Running': running, 'Health': {'Status': 'healthy'}},
-                    'Config': {'Image': 'new' if attempts else 'old', 'Env': ['REMNAWAVE_API_TOKEN=abc.def.ghi']}}])
+                    'Config': {'Image': 'new' if attempts else 'old', 'Env': ['REMNAWAVE_API_TOKEN=abc.def.ghi',
+                        *(['REMNAWAVE_PANEL_URL=' + runtime_endpoint] if runtime_endpoint else [])]}}])
             elif 'ps' in args: value = 'container'
             elif 'up' in args or 'create' in args:
                 attempts += 1
@@ -124,6 +125,8 @@ class MigrationTests(unittest.TestCase):
                 expected['services']['page']['environment']['REMNAWAVE_API_TOKEN'] = 'abc.def.ghi'
                 if endpoint:
                     expected['services']['page']['environment']['REMNAWAVE_PANEL_URL'] = 'https://' + endpoint
+                elif runtime_endpoint:
+                    expected['services']['page']['environment']['REMNAWAVE_PANEL_URL'] = runtime_endpoint.replace('$', '$$')
                 expected['services']['page']['labels'] = {'io.remnacust.service-role': 'subscription-page'}
                 result.pop('x-remnacust-release')
                 self.assertEqual(result, expected)
@@ -134,6 +137,10 @@ class MigrationTests(unittest.TestCase):
     def test_external_page_keeps_ports_volumes_proxy_network_and_panel_address(self): self.execute()
     def test_failed_update_restores_byte_content_and_previous_service(self): self.execute(fail=True)
     def test_stopped_page_is_updated_without_being_started(self): self.execute(running=False)
+    def test_panel_migration_retains_the_pages_runtime_panel_url(self): self.execute(runtime_endpoint='https://active.example.test')
+    def test_runtime_panel_url_dollars_are_escaped_only_in_compose(self):
+        for endpoint in ('https://panel-$HOST.example.test', 'https://panel-${HOST}.example.test', 'https://panel-$$literal.example.test'):
+            with self.subTest(endpoint=endpoint): self.execute(runtime_endpoint=endpoint)
     def test_migration_can_select_another_panel_without_changing_proxy_or_port(self): self.execute(endpoint='other.example.test:8443')
     def test_migration_to_another_panel_restores_old_connection_on_failure(self): self.execute(fail=True, endpoint='other.example.test:8443')
 

@@ -18,6 +18,36 @@ import marzban
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_node_migration_does_not_replace_a_sibling_nodes_private_container_layer(self):
+        config = {'services': {'primary': {'image': 'node:old'},
+                              'sibling': {'image': 'node:old', 'environment': {'SECRET_KEY': 'sibling'}}}}
+        current = {'Config': {'Env': ['SECRET_KEY=primary', 'NODE_PORT=2222'],
+                             'Labels': {'com.docker.compose.service': 'primary'}}}
+        transformed, applications = runtime.transform(config, current, 'node', 'node:new')
+        self.assertEqual(applications, ['primary'])
+        self.assertEqual(transformed['services']['sibling'], config['services']['sibling'])
+        self.assertEqual(transformed['services']['primary']['image'], 'node:new')
+
+    def test_stale_panel_environment_is_rejected_before_database_mutation(self):
+        state = {'component': 'panel', 'project': 'legacy', 'applications': ['api', 'worker']}
+        config = {'services': {name: {'environment': {'APP_SECRET': 'original', 'DATABASE_URL': 'postgresql://original',
+                    'JWT_AUTH_SECRET': 'original-jwt'}} for name in state['applications']}}
+        containers = [{'Config': {'Env': ['APP_SECRET=original', 'DATABASE_URL=postgresql://original', 'JWT_AUTH_SECRET=original-jwt'],
+                       'Labels': {'com.docker.compose.project': 'legacy', 'com.docker.compose.service': name}}}
+                      for name in state['applications']]
+        runtime.check_runtime_environment(config, containers, state)
+        for name, key in [('api', 'APP_SECRET'), ('worker', 'DATABASE_URL'), ('worker', 'JWT_AUTH_SECRET')]:
+            with self.subTest(name=name, key=key):
+                changed = copy.deepcopy(config)
+                changed['services'][name]['environment'][key] = 'private-changed-value'
+                with self.assertRaises(runtime.ConfigurationError) as error:
+                    runtime.check_runtime_environment(changed, containers, state)
+                self.assertIn(key, str(error.exception))
+                self.assertNotIn('private-changed-value', str(error.exception))
+        del config['services']['api']['environment']['APP_SECRET']
+        with self.assertRaisesRegex(runtime.ConfigurationError, 'APP_SECRET'):
+            runtime.check_runtime_environment(config, containers, state)
+
     def test_node_net_admin_can_be_declined_and_compare_only_allows_requested_capability(self):
         config, _ = runtime.fresh('node', '/opt/test', 'test-node', 'app', node_net_admin=False)
         self.assertEqual(config['services']['remnanode']['cap_add'], [])

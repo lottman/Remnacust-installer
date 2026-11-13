@@ -785,7 +785,7 @@ def transform(config, container, component, image, containers=(), subscription_i
         env = compose_environment(service.get('environment'))
         role = roles.get(name) or env.get('INSTANCE_TYPE')
         worker = component == 'panel' and (role in {'api', 'processor', 'scheduler'} or name in {'remnawave-processor', 'remnawave-scheduler'})
-        same_image = bool(original_image) and service.get('image') == original_image
+        same_image = component == 'panel' and bool(original_image) and service.get('image') == original_image
         if name == main or worker or same_image:
             applications.append(name)
             service['image'] = image
@@ -1133,10 +1133,29 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
     return result, state
 
 
+def protected_environment_key(key):
+    return key.startswith(('APP_', 'JWT_', 'POSTGRES_', 'REDIS_', 'HWID_', 'METRICS_', 'WEBHOOK_')) or key in {'DATABASE_URL', 'DIRECT_URL', 'FRONT_END_DOMAIN', 'SUB_PUBLIC_DOMAIN', 'SECRET_KEY', 'NODE_PORT', 'INSTANCE_TYPE'}
+
+
+def check_runtime_environment(config, containers, state):
+    applications = set(state['applications'])
+    for container in containers:
+        labels = container.get('Config', {}).get('Labels') or {}
+        name = labels.get('com.docker.compose.service')
+        if labels.get('com.docker.compose.project') != state['project'] or name not in applications:
+            continue
+        candidate = compose_environment(config['services'][name].get('environment'))
+        current = environment(container)
+        required = {'APP_SECRET', 'DATABASE_URL'} if state['component'] == 'panel' else {'SECRET_KEY'}
+        for key, value in current.items():
+            if protected_environment_key(key) and (key in candidate or key in required) and value != candidate.get(key):
+                fail('Compose изменяет параметр приложения ' + name + ': ' + key)
+
+
 def compare_environment(before, after, allow_net_admin=False):
     old, new = environment(before), environment(after)
     for key in old:
-        if key.startswith(('APP_', 'JWT_', 'POSTGRES_', 'REDIS_', 'HWID_', 'METRICS_', 'WEBHOOK_')) or key in {'DATABASE_URL', 'DIRECT_URL', 'FRONT_END_DOMAIN', 'SUB_PUBLIC_DOMAIN', 'SECRET_KEY', 'NODE_PORT', 'INSTANCE_TYPE'}:
+        if protected_environment_key(key):
             if old[key] != new.get(key):
                 fail('Изменился параметр приложения: ' + key)
     mounts = lambda c: sorted([(m.get('Type'), m.get('Source'), m.get('Destination'), m.get('RW')) for m in c.get('Mounts', [])])
@@ -1185,13 +1204,34 @@ def plan_node_state(config, container, directory):
     main = (container.get('Config', {}).get('Labels') or {}).get('com.docker.compose.service')
     if main not in config.get('services', {}):
         fail('Не найдена служба ноды для сохранения состояния')
+    mounts = container.get('Mounts', [])
+    declared = config['services'][main].get('volumes', [])
+    def protected(destination):
+        return bool(destination) and any(destination == target or target.startswith(destination.rstrip('/') + '/') or
+                                         destination.startswith(target + '/') for target in NODE_STATE_DIRECTORIES)
+    for current in mounts:
+        target = current.get('Destination')
+        if not protected(target):
+            continue
+        planned = next((mount for mount in declared if isinstance(mount, dict) and mount.get('target') == target), {})
+        source = planned.get('source')
+        if planned.get('type') == 'volume' and source:
+            source = (config.get('volumes', {}).get(source) or {}).get('name', source)
+            expected = current.get('Name', current.get('Source'))
+        else:
+            expected = current.get('Source')
+        if (planned.get('type') != current.get('Type') or source != expected or
+                planned.get('read_only', False) or not current.get('RW', True)):
+            fail('Compose изменяет существующий том состояния ноды: ' + target)
+    for mount in declared:
+        if isinstance(mount, dict) and protected(mount.get('target')) and not any(
+                current.get('Destination') == mount['target'] for current in mounts):
+            fail('Compose скрывает исходное состояние ноды новым томом: ' + mount['target'])
     root = directory / ('.remnacust-node-state-' + uuid.uuid4().hex)
     plan = {'container': container['Id'], 'directory': str(directory), 'root': str(root), 'copies': []}
     for target, name in NODE_STATE_DIRECTORIES.items():
         covering = [mount for mount in container.get('Mounts', []) if target == mount.get('Destination') or target.startswith(mount.get('Destination', '') + '/')]
         if covering:
-            if not max(covering, key=lambda mount: len(mount['Destination'])).get('RW', True):
-                fail('Каталог состояния ноды подключён только для чтения: ' + target)
             continue
         source = root / name
         config['services'][main].setdefault('volumes', []).append({'type': 'bind', 'source': str(source), 'target': target})
@@ -1336,7 +1376,7 @@ def snapshot_node_state(plan, run=subprocess.run, copy_state=copy_node_state_arc
             digest = binary.get('sha256', '')
             if not re.fullmatch(r'[a-f0-9]{64}', digest):
                 fail('Некорректная контрольная сумма выбранного ядра')
-            if binary_path == '/usr/local/bin/xray' and selection.get('mode') == 'bundled':
+            if binary_path in {'/usr/local/bin/xray', '/usr/local/bin/xray-default'} and selection.get('mode') == 'bundled':
                 continue
             if binary_path != '/var/lib/remnawave/core-manager/' + digest:
                 fail('Выбранное ядро находится вне сохраняемого каталога; сначала выберите управляемое или встроенное ядро')
@@ -1423,7 +1463,7 @@ def write_layout(state, config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['node-https', 'discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'check-upgrade', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'panel-ipv6', 'layout'])
+    parser.add_argument('operation', choices=['node-https', 'discover', 'transform', 'panel-env', 'node-env', 'node-proxy', 'fresh', 'compare', 'check-runtime-environment', 'validate', 'get', 'record', 'hash-backup', 'verify-backup', 'subscription-urls', 'subscription-domains', 'subscription-env', 'check-upgrade', 'commit-compose', 'restore-compose', 'database-network', 'plan-node-state', 'snapshot-node-state', 'preserve-node-state-rollback', 'plan-panel-data-restore', 'validate-panel-data-restore', 'commit-panel-data-restore', 'restore-panel-subscription-token', 'node-capability', 'panel-ipv6', 'layout'])
     parser.add_argument('--source'); parser.add_argument('--target'); parser.add_argument('--inspect')
     parser.add_argument('--component', choices=['panel', 'node']); parser.add_argument('--directory')
     parser.add_argument('--project'); parser.add_argument('--image'); parser.add_argument('--state'); parser.add_argument('--compose-file')
@@ -1475,6 +1515,8 @@ def main():
     elif args.operation == 'check-upgrade':
         assert_upgrade_versions(load(args.source), load(args.state), args.version, args.key,
                                 load(args.inspect) if args.inspect else ())
+    elif args.operation == 'check-runtime-environment':
+        check_runtime_environment(load(args.source), load(args.inspect), load(args.state))
     elif args.operation == 'commit-compose':
         commit_compose(args.state, args.source, args.directory, args.version, args.key)
     elif args.operation == 'restore-compose':

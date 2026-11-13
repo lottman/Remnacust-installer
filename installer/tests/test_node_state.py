@@ -66,6 +66,43 @@ class NodeStateTests(unittest.TestCase):
         with self.assertRaises(runtime.ConfigurationError):
             self.plan()
 
+    def test_removed_or_repointed_mount_cannot_discard_private_state(self):
+        self.container['Mounts'] = [{'Destination': '/var/lib/remnanode', 'Type': 'bind',
+                                     'Source': '/private/original', 'RW': True}]
+        for mounts in ([], [{'type': 'bind', 'source': '/private/replacement', 'target': '/var/lib/remnanode'}],
+                       [{'type': 'bind', 'source': '/private/original', 'target': '/var/lib/remnanode', 'read_only': True}]):
+            with self.subTest(mounts=mounts):
+                config = {'services': {'node': {'volumes': mounts}}}
+                with self.assertRaisesRegex(runtime.ConfigurationError, 'Compose'):
+                    runtime.plan_node_state(config, self.container, self.root)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_new_mount_cannot_hide_state_from_the_original_container_layer(self):
+        self.config['services']['node']['volumes'] = [
+            {'type': 'bind', 'source': '/empty/state', 'target': '/var/lib/remnanode'}]
+        with self.assertRaisesRegex(runtime.ConfigurationError, 'Compose'):
+            self.plan()
+
+    def test_nested_quota_mount_cannot_be_changed_or_removed_before_snapshot(self):
+        self.container['Mounts'] = [{'Destination': '/var/lib/remnanode/quota', 'Type': 'bind',
+                                     'Source': '/private/quota', 'RW': True}]
+        for mounts in ([], [{'type': 'bind', 'source': '/empty/quota', 'target': '/var/lib/remnanode/quota'}]):
+            with self.subTest(mounts=mounts):
+                self.config['services']['node']['volumes'] = mounts
+                with self.assertRaisesRegex(runtime.ConfigurationError, 'Compose'):
+                    self.plan()
+                self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_docker_volume_name_is_compared_without_using_its_host_mountpoint(self):
+        self.container['Mounts'] = [{'Destination': '/var/lib', 'Type': 'volume', 'Name': 'legacy_private',
+                                     'Source': '/var/lib/docker/volumes/legacy_private/_data', 'RW': True}]
+        self.config['volumes'] = {'state': {'name': 'legacy_private'}}
+        self.config['services']['node']['volumes'] = [{'type': 'volume', 'source': 'state', 'target': '/var/lib'}]
+        self.assertEqual(self.plan()['copies'], [])
+        self.config['volumes']['state']['name'] = 'empty_replacement'
+        with self.assertRaisesRegex(runtime.ConfigurationError, 'Compose'):
+            self.plan()
+
     def test_daemon_failure_does_not_masquerade_as_absent_legacy_state(self):
         def run(args, **kwargs):
             if args[1] == 'inspect':
@@ -97,6 +134,14 @@ class NodeStateTests(unittest.TestCase):
         plan['root'] = str(self.root.parent / 'unrelated')
         with self.assertRaises(runtime.ConfigurationError):
             runtime.snapshot_node_state(plan, self.runner, self.copy_state(self.runner))
+
+    def test_bundled_default_core_selection_survives_an_unmounted_state_snapshot(self):
+        def copy_state(container, source, target):
+            if source == '/var/lib/remnawave/core-manager':
+                (target / 'state.json').write_text(json.dumps({'mode': 'bundled', 'paused': True,
+                    'binary': {'path': '/usr/local/bin/xray-default', 'sha256': 'd' * 64}}))
+            return types.SimpleNamespace(returncode=0, stderr='')
+        runtime.snapshot_node_state(self.plan(), self.runner, copy_state)
 
     def test_compose_comparison_allows_only_planned_state_paths(self):
         plan = self.plan()

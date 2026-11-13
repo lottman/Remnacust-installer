@@ -104,6 +104,17 @@ with tempfile.TemporaryDirectory(prefix='rc-page-migration-') as folder:
         assert (directory / '.env').read_bytes() == environment
         assert (directory / 'custom.json').read_bytes() == custom
         assert json.loads(docker('inspect', proxy))[0]['State']['StartedAt'] == proxy_started
+        literal = 'https://panel-$REMNACUST_RETAINED_URL.example.test'
+        os.environ['REMNACUST_RETAINED_URL'] = 'must-not-expand'
+        config = pages.runtime.load(compose)
+        config['services']['page']['image'] = custom_image
+        config['services']['page']['environment']['REMNAWAVE_PANEL_URL'] = literal.replace('$', '$$')
+        pages.runtime.write(compose, config)
+        docker(*base, 'up', '-d', '--no-deps', '--pull', 'never', 'page')
+        original_ready(pages.selected(root, page), timeout=8)
+        pages.migrate(root, source(), new, '1.1.7.106', 'v1.2.152')
+        assert pages.runtime.environment(pages.inspect(pages.selected(root, page)))['REMNAWAVE_PANEL_URL'] == literal
+        assert (directory / '.env').read_bytes() == environment
         print('PASS real Docker migration: early custom adoption and legacy version namespace, running/stopped, isolated service, env/mount preservation and failed-health rollback')
     finally:
         subprocess.run(['docker', *base, '--profile', '*', 'down', '--volumes', '--remove-orphans'], capture_output=True, timeout=90)

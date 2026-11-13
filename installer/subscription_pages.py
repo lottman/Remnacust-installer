@@ -464,6 +464,10 @@ def upgrade(root, page, image, version, release, panel_connection=None, migratio
         legacy_migration = legacy_page_image(current['Config']['Image'])
         if panel_connection is None and page_connection_required(current):
             raise ValueError('PAGE_CONNECTION_REQUIRED')
+        if panel_connection is None:
+            retained = runtime.environment(current)
+            target['environment'] = {**runtime.compose_environment(target.get('environment')),
+                                     **{key: retained[key].replace('$', '$$') for key in ('REMNAWAVE_PANEL_URL', 'REMNAWAVE_API_TOKEN')}}
     env_edits = {}
     if panel_connection is None or migration_item is not None:
         try:
