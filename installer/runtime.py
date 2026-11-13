@@ -990,6 +990,7 @@ def panel_ipv6_preflight(project, sysctl_root=Path('/proc/sys/net/ipv6/conf'), d
 
     if any(sysctl(interface, 'disable_ipv6') != '0' for interface in ('all', 'default')):
         fail('IPv6 отключён на хосте; sysctl не изменён')
+    forwarding = sysctl('all', 'forwarding')
     routes = json.loads(output(['ip', '-j', '-6', 'route', 'show', 'default']))
     routes = [route for route in routes if route.get('dev') and route.get('type', 'unicast') == 'unicast']
     if not routes:
@@ -1000,7 +1001,7 @@ def panel_ipv6_preflight(project, sysctl_root=Path('/proc/sys/net/ipv6/conf'), d
             fail('IPv6: неподдерживаемый интерфейс default route')
         if sysctl(interface, 'disable_ipv6') != '0':
             fail('IPv6 отключён на интерфейсе default route')
-        if route.get('protocol') in ('ra', 9) and sysctl(interface, 'accept_ra') != '2':
+        if route.get('protocol') in ('ra', 9) and forwarding != '1' and sysctl(interface, 'accept_ra') != '2':
             fail('IPv6: RA-маршрут требует net.ipv6.conf.' + interface + '.accept_ra=2 перед Docker forwarding; sysctl не изменён')
     for command, minimum in ((['docker', 'version', '--format', '{{.Server.Version}}'], (28, 0, 0)),
                              (['docker', 'compose', 'version', '--short'], (2, 33, 1))):
@@ -1011,7 +1012,7 @@ def panel_ipv6_preflight(project, sysctl_root=Path('/proc/sys/net/ipv6/conf'), d
         daemon = json.loads(daemon_path.read_text())
         if daemon.get('ip6tables') is False:
             fail('IPv6: Docker ip6tables отключён; NAT не гарантирован, daemon.json не изменён')
-        if daemon.get('firewall-backend') == 'nftables' and sysctl('all', 'forwarding') != '1':
+        if daemon.get('firewall-backend') == 'nftables' and forwarding != '1':
             fail('IPv6: nftables backend требует заранее настроенный forwarding; sysctl не изменён')
     name = project_name(project) + '_' + PANEL_IPV6_NETWORK
     names = output(['docker', 'network', 'ls', '--format', '{{.Name}}']).splitlines()

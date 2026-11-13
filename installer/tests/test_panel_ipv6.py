@@ -174,6 +174,14 @@ class PanelIpv6Tests(unittest.TestCase):
             self.preflight()
         self.assertEqual((self.root / 'eth0/accept_ra').read_text(), '1')
 
+    def test_existing_forwarding_preserves_managed_ra_without_changing_acceptance(self):
+        (self.root / 'all/forwarding').write_text('1')
+        for acceptance in ['0', '1', '2']:
+            (self.root / 'eth0/accept_ra').write_text(acceptance)
+            self.preflight()
+            self.assertEqual((self.root / 'all/forwarding').read_text(), '1')
+            self.assertEqual((self.root / 'eth0/accept_ra').read_text(), acceptance)
+
     def test_missing_routes_disabled_ipv6_and_old_docker_compose_are_rejected(self):
         for key, value in [(('ip', '-j', '-6', 'route', 'show', 'default'), '[]'),
                            (('docker', 'version', '--format', '{{.Server.Version}}'), '27.5.1'),
