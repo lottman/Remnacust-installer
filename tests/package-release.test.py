@@ -37,7 +37,7 @@ class ReleaseTests(unittest.TestCase):
                 files.update({'panel/Dockerfile':'FROM scratch\n','panel/backend/.env.sample':'SAMPLE=example\n',
                               'docs/COMPATIBILITY.md':'| Backend и frontend | 1.1.1 | fixture |\n| Агент ноды | 1.1.1-remnacust | fixture |\n| Ядро | 1.1.1 | fixture |\n'})
             elif kind=='node':
-                files.update({'node/package.json':'{"version":"1.1.1"}','node/docker/Dockerfile':'FROM scratch\n','node/docker/remnacust-core.tar.gz':'fixture','node/docker/remnacust-core.tar.gz.sha256':hashlib.sha256(b'fixture').hexdigest()+'  remnacust-core.tar.gz\n'})
+                files.update({'node/package.json':'{"version":"1.1.1"}','node/docker/Dockerfile':'FROM scratch\n','node/docker/remnacust-core.tar.gz':'fixture','node/docker/remnacust-core.tar.gz.sha256':hashlib.sha256(b'fixture').hexdigest()+'  remnacust-core.tar.gz\n','scripts/test-node-startup.sh':'#!/usr/bin/env bash\nexit 0\n'})
             else:
                 files.update({'xray/core/core.go':'package core\nvar (Version_x byte = 1; Version_y byte = 1; Version_z byte = 1)\n','xray/LICENSE':'fixture license\n'})
             self.write(directory,files);self.init(directory)
@@ -76,6 +76,15 @@ class ReleaseTests(unittest.TestCase):
                         'remnacust_certificate_compression_test.go':'package tls\n'})
         return {'xray/go.mod':'module github.com/xtls/xray-core\nreplace github.com/refraction-networking/utls => ../vendor/utls\n',
                 **{'vendor/utls/'+name:data for name,data in sources.items()}}
+    def test_node_image_lifecycle_gate_is_packaged_from_the_exact_pin(self):
+        node=self.parent/'Remnacust-node'
+        self.write(node,{'scripts/test-node-startup.sh':'#!/usr/bin/env bash\nexit 42\n'})
+        destination=module.package(self.root,'v1.1.1',self.parent)
+        contents=module.read_archive((destination/'remnacust-source-v1.1.1.tar.gz').read_bytes())
+        self.assertEqual(contents['scripts/test-node-startup.sh'],b'#!/usr/bin/env bash\nexit 0\n')
+        del contents['scripts/test-node-startup.sh']
+        with self.assertRaisesRegex(ValueError,'Missing release source: scripts/test-node-startup.sh'):
+            module.validate(contents,'1.1.1',{kind:'1.1.1' for kind in module.REPOSITORIES})
     def test_combined_source_keeps_verified_utls_from_exact_core_pin(self):
         files=self.utls_fixture();self.pin_core(files)
         self.write(self.parent/'Remnacust-core',{'vendor/utls/handshake_client.go':'uncommitted change\n'})

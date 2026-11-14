@@ -14,7 +14,7 @@ import urllib.request
 REPOSITORIES = {kind: f'lottman/Remnacust-{kind}' for kind in ('panel', 'node', 'core')}
 PREFIXES = {'panel': ('panel/', 'subscription-page/', 'images/'),
             'node': ('node/',), 'core': ('xray/', 'editor/', 'vendor/olcrtc/', 'vendor/utls/', 'upstream-security/')}
-COMPONENT_FILES = {'panel': {'docs/COMPATIBILITY.md'}}
+COMPONENT_FILES = {'panel': {'docs/COMPATIBILITY.md'}, 'node': {'scripts/test-node-startup.sh'}}
 
 
 def validate_core_sources(files):
@@ -162,7 +162,7 @@ def validate(files, version, versions):
     if not all(numbers) or '.'.join(m.group(1) for m in numbers) != versions['core'].split('-')[0]:
         raise ValueError('Core version mismatch')
     for name in ['installer/installer.sh', 'installer/runtime.py', 'installer/database.cjs', 'installer/marzban.py',
-                 'panel/Dockerfile', 'panel/backend/.env.sample', 'node/docker/Dockerfile', 'xray/LICENSE', 'LICENSE', 'NOTICE.md', 'docs/COMPATIBILITY.md']:
+                 'panel/Dockerfile', 'panel/backend/.env.sample', 'node/docker/Dockerfile', 'scripts/test-node-startup.sh', 'xray/LICENSE', 'LICENSE', 'NOTICE.md', 'docs/COMPATIBILITY.md']:
         if name not in files:
             raise ValueError('Missing release source: ' + name)
     compatibility = files['docs/COMPATIBILITY.md'].decode('utf-8')
