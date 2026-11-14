@@ -43,6 +43,7 @@ class PagesTests(unittest.TestCase):
         with patch.object(pages.connection, 'resolve', return_value=('https://panel.example.test', None)), patch.object(pages.connection, 'probe'), patch.object(pages, 'command', return_value=''), patch.object(pages, 'ready'):
             pages.install(self.root, destination, 'fresh-page', 'https://panel.example.test', 'fixture.valid.token', '3012', 'page:fixture', domain='sub.example.test', proxy='caddy')
         service = runtime.load(destination / 'docker-compose.yml')['services']['caddy']
+        self.assertEqual(service['image'], 'caddy:2.11.9-alpine')
         self.assertEqual(service['environment'], {'GODEBUG': 'multipathtcp=0'})
         self.assertNotIn('sysctls', service)
         self.assertNotIn('privileged', service)

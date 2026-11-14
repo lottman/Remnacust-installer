@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-HELPER_BUNDLE_SHA256='b120adbea13575121df2ca092ad0ff77d2a1965d89f9af74acf71e7e4967af8e'
+HELPER_BUNDLE_SHA256='8ad97b440f4f10c9114d8258f6a5d49318e711bfae4fe746456705c00059940e'
 ENTRY_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
 HELPER_ROOT='' HELPER_ENTRY='' INSTALLED_HELPER_ROOT=''
 
@@ -2360,7 +2360,7 @@ subscription_page_action() {
             [[ $choice != yes ]] || PROXY=caddy
         fi
     fi
-    if [[ $PROXY == caddy ]]; then port_free 80; port_free 443; docker pull caddy:2-alpine; fi
+    if [[ $PROXY == caddy ]]; then port_free 80; port_free 443; docker pull caddy:2.11.9-alpine; fi
     token_file="$WORK/subscription-token.txt"
     subscription_page_token "$endpoint" "$token_file" || return $?
     chmod 600 "$token_file"

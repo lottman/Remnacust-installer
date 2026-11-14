@@ -585,7 +585,7 @@ def install(root, directory, project, endpoint, token, number, image, domain='',
         config['networks'] = {'default': {}, 'panel': {'external': True, 'name': network}}
     if proxy == 'caddy':
         runtime.write(directory / 'Caddyfile', domain + ' {\n    reverse_proxy subscription-page:3010\n}\n')
-        config['services']['caddy'] = {'image': 'caddy:2-alpine', 'restart': 'unless-stopped', 'environment': {'GODEBUG': 'multipathtcp=0'}, 'ports': ['80:80', '443:443', '443:443/udp'], 'volumes': [str(directory / 'Caddyfile') + ':/etc/caddy/Caddyfile:ro', 'caddy-data:/data', 'caddy-config:/config']}
+        config['services']['caddy'] = {'image': 'caddy:2.11.9-alpine', 'restart': 'unless-stopped', 'environment': {'GODEBUG': 'multipathtcp=0'}, 'ports': ['80:80', '443:443', '443:443/udp'], 'volumes': [str(directory / 'Caddyfile') + ':/etc/caddy/Caddyfile:ro', 'caddy-data:/data', 'caddy-config:/config']}
         config['volumes'] = {'caddy-data': {}, 'caddy-config': {}}
     runtime.write(directory / 'docker-compose.yml', config)
     item = {'directory': str(directory), 'project': project, 'service': 'subscription-page',

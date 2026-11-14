@@ -82,6 +82,30 @@ class ReleaseTests(unittest.TestCase):
         destination=module.package(self.root,'v1.1.1',self.parent)
         contents=module.read_archive((destination/'remnacust-source-v1.1.1.tar.gz').read_bytes())
         for name,data in files.items():self.assertEqual(contents[name],data.encode())
+    def test_combined_source_keeps_security_manifest_and_module_locks_from_exact_core_pin(self):
+        locks={'go.mod':'module github.com/xtls/xray-core\n\ngo 1.27.4\n',
+               'go.sum':'reviewed security module checksums\n'}
+        manifest={'schemaVersion':1,'policy':'official-baseline-with-security-dependency-updates',
+                  'upstreamVersion':'v26.11.9','upstreamCommit':'a'*40,
+                  'sourceArchiveSha256':'b'*64,'tagSourceArchiveSha256':'c'*64,
+                  'configurationSourceSha256':'d'*64,
+                  'originalGoModSha256':'e'*64,'originalGoSumSha256':'f'*64,
+                  **{field:hashlib.sha256(locks[name].encode()).hexdigest()
+                     for name,field in [('go.mod','goModSha256'),('go.sum','goSumSha256')]}}
+        files={'upstream-security/'+name:data for name,data in locks.items()}
+        files['upstream-security/manifest.json']=json.dumps(manifest,ensure_ascii=False,indent=2)+'\n'
+        self.pin_core(files)
+        self.write(self.parent/'Remnacust-core',{'upstream-security/go.sum':'uncommitted change\n'})
+        destination=module.package(self.root,'v1.1.1',self.parent)
+        contents=module.read_archive((destination/'remnacust-source-v1.1.1.tar.gz').read_bytes())
+        for name,data in files.items():
+            self.assertIn(name,contents.keys())
+            self.assertEqual(contents[name],data.encode())
+        retained=json.loads(contents['upstream-security/manifest.json'])
+        self.assertEqual(contents['upstream-security/manifest.json'],
+                         (json.dumps(retained,ensure_ascii=False,indent=2)+'\n').encode())
+        for name,field in [('go.mod','goModSha256'),('go.sum','goSumSha256')]:
+            self.assertEqual(hashlib.sha256(contents['upstream-security/'+name]).hexdigest(),retained[field])
     def test_missing_local_core_module_is_rejected(self):
         files=self.utls_fixture();del files['vendor/utls/go.mod'];self.pin_core(files)
         with self.assertRaisesRegex(ValueError,'Missing local Core replacement.*vendor/utls'):

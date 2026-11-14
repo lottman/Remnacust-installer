@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: bash -n Install.sh && python3 -B scripts/build-install-entry.py --check && python3 -B tests/install-entry.test.py
       - run: python3 -B tests/promote-latest-images.test.py
       - run: bash Install.sh @ --help
@@ -19,32 +19,38 @@ jobs:
       matrix:
         os: [ubuntu22, ubuntu24, ubuntu26, debian12, debian13]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
+          package-manager-cache: false
+      - name: Use npm 12.2.2
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org npm@12.2.2 && test "$(npm --version)" = "12.2.2"
       - run: python3 installer/tests/os-matrix-docker.py --os '${{ matrix.os }}' --unit-tests
   installer:
     runs-on: ubuntu-latest
     env:
       REMNACUST_NODE_SOURCE: ${{ github.workspace }}/node-repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - id: node-source
         run: python3 -c "import json; print('commit='+json.load(open('component-sources.json'))['node']['commit'])" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: lottman/Remnacust-node
           ref: ${{ steps.node-source.outputs.commit }}
           path: node-repository
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
+          package-manager-cache: false
+      - name: Use npm 12.2.2
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org npm@12.2.2 && test "$(npm --version)" = "12.2.2"
       - name: Load Docker test images from public mirror
         run: |
-          for image in alpine:3.22 postgres:18.4 postgres:18.6 node:24.22.1-trixie-slim; do
-            docker pull "mirror.gcr.io/library/$image"
-            docker tag "mirror.gcr.io/library/$image" "$image"
+          for image in library/alpine:3.22 library/postgres:18.4 library/postgres:18.6 library/postgres:18.7 library/node:24.22.1-trixie-slim library/caddy:2.11.9-alpine valkey/valkey:9.1.3-alpine; do
+            docker pull "mirror.gcr.io/$image"
+            docker tag "mirror.gcr.io/$image" "${image#library/}"
           done
       - name: Verify panel IPv6 upgrade on real Docker
         timeout-minutes: 3
@@ -73,17 +79,17 @@ jobs:
   proxy:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - id: sources
         run: python3 -c "import json; print('panel='+json.load(open('component-sources.json'))['panel']['commit'])" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: lottman/Remnacust-panel
           ref: ${{ steps.sources.outputs.panel }}
           path: component-panel
       - name: Load proxy test images from public mirror
         run: |
-          for image in nginx:1.28-alpine caddy:2-alpine python:3.12-alpine; do
+          for image in nginx:1.28-alpine caddy:2-alpine caddy:2.11.9-alpine python:3.12-alpine; do
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done

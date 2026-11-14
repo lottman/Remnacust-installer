@@ -2,9 +2,9 @@
 
 [Русский](README.md) · [English](README.en.md)
 
-Stable bundle: Installer **1.2.171**, Panel/website **1.1.7.123**, Node **1.1.34**, Core **1.1.20** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.172**, Panel/website **1.1.7.124**, Node **1.1.35**, Core **1.1.21** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
 
-Installer 1.2.171 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.172 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## Install ready components
 

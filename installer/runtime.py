@@ -1072,10 +1072,10 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
                    healthcheck={'test': ['CMD-SHELL', 'curl -fsS http://localhost:3001/health'], 'interval': '10s', 'timeout': '5s', 'retries': 6, 'start_period': '30s'})
         if panel_net_admin:
             app['cap_add'] = ['NET_ADMIN']
-        database = dict(common, image='postgres:18.6', env_file=[str(directory / '.env')],
+        database = dict(common, image='postgres:18.7', env_file=[str(directory / '.env')],
                         shm_size='512mb', environment={'TZ': 'UTC'}, volumes=['database:/var/lib/postgresql'],
                         healthcheck={'test': ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}'], 'interval': '3s', 'timeout': '5s', 'retries': 20})
-        redis = dict(common, image='valkey/valkey:9-alpine', volumes=['valkey-socket:/var/run/valkey'],
+        redis = dict(common, image='valkey/valkey:9.1.3-alpine', volumes=['valkey-socket:/var/run/valkey'],
                      command=['valkey-server', '--save', '', '--appendonly', 'no', '--maxmemory-policy', 'noeviction', '--unixsocket', '/var/run/valkey/valkey.sock', '--unixsocketperm', '777', '--port', '0'],
                      healthcheck={'test': ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping'], 'interval': '3s', 'timeout': '5s', 'retries': 20})
         services = {'remnawave': app, 'remnawave-db': database, 'remnawave-redis': redis}
@@ -1094,7 +1094,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
                     'interval': '5s', 'timeout': '5s', 'retries': 12, 'start_period': '20s'})
         volumes = {name: {} for name in ['database', 'valkey-socket', 'backups']}
         if proxy == 'caddy':
-            services['caddy'] = dict(common, image='caddy:2-alpine', environment={'GODEBUG': 'multipathtcp=0'}, ports=['80:80', '443:443', '443:443/udp'],
+            services['caddy'] = dict(common, image='caddy:2.11.9-alpine', environment={'GODEBUG': 'multipathtcp=0'}, ports=['80:80', '443:443', '443:443/udp'],
                                      volumes=[str(directory / 'Caddyfile') + ':/etc/caddy/Caddyfile:ro', 'caddy-data:/data', 'caddy-config:/config'])
             volumes.update({'caddy-data': {}, 'caddy-config': {}})
         result = {'name': project, 'services': services, 'volumes': volumes}

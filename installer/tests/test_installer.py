@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import sys
 import subprocess
 import tempfile
@@ -284,7 +285,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_fresh_is_scoped_and_panel_is_loopback(self):
         config, state = runtime.fresh('panel', '/opt/test', 'test-panel', 'app', 'panel.example.com')
-        self.assertEqual(config['services']['remnawave-db']['image'], 'postgres:18.6')
+        self.assertEqual(config['services']['remnawave-db']['image'], 'postgres:18.7')
         self.assertEqual(config['services']['remnawave']['ports'], ['127.0.0.1:3000:3000'])
         for service in ['remnawave-db', 'remnawave-redis']:
             self.assertNotIn('ports', config['services'][service])
@@ -294,7 +295,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('/opt/test/run:/var/lib/remnacust/run', config['services']['remnanode']['volumes'])
 
     def test_panel_upgrade_preserves_existing_database_image_and_volume(self):
-        for image in ['postgres:14.24', 'postgres:18.4', 'postgres:18.6']:
+        for image in ['postgres:14.24', 'postgres:17.6', 'postgres:17.12', 'postgres:18.4', 'postgres:18.6', 'postgres:18.7']:
             with self.subTest(image=image):
                 original = {'services': {'panel': {'image': 'old-panel'}, 'db': {
                     'image': image, 'volumes': ['database:/var/lib/postgresql']}}}
@@ -303,6 +304,38 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(result['services']['db'], original['services']['db'])
                 self.assertEqual(applications, ['panel'])
                 self.assertEqual(result['services']['panel']['image'], 'new-panel')
+
+    def test_fresh_dependency_patches_do_not_replace_existing_services_on_upgrade(self):
+        fresh, _ = runtime.fresh('panel', '/opt/test', 'test-panel', 'panel:old', 'panel.example.com')
+        expected = {'remnawave-db': 'postgres:18.7', 'remnawave-redis': 'valkey/valkey:9.1.3-alpine', 'caddy': 'caddy:2.11.9-alpine'}
+        self.assertEqual({name: fresh['services'][name]['image'] for name in expected}, expected)
+        for database in ['postgres:17.6', 'postgres:18.4', 'postgres:18.6', 'postgres:18.7']:
+            with self.subTest(database=database):
+                original = copy.deepcopy(fresh)
+                original['services']['remnawave-db']['image'] = database
+                original['services']['remnawave-redis']['image'] = 'valkey/valkey:8-alpine'
+                original['services']['caddy']['image'] = 'caddy:2.10.0-alpine'
+                saved = copy.deepcopy(original)
+                live = {'Config': {'Labels': {'com.docker.compose.service': 'remnawave'}}}
+                upgraded, applications = runtime.transform(original, live, 'panel', 'panel:new')
+                self.assertEqual(applications, ['remnawave'])
+                self.assertEqual(upgraded['services']['remnawave']['image'], 'panel:new')
+                for name in expected:
+                    self.assertEqual(upgraded['services'][name], saved['services'][name])
+                self.assertEqual(upgraded['volumes'], saved['volumes'])
+                self.assertEqual(original, saved)
+
+    def test_ci_preloads_cover_fresh_dependencies_and_historical_postgres_fixtures(self):
+        fresh, _ = runtime.fresh('panel', '/opt/test', 'test-panel', 'panel:old', 'panel.example.com')
+        required = {fresh['services'][name]['image'] for name in ['remnawave-db', 'remnawave-redis', 'caddy']}
+        required.update(['postgres:18.4', 'postgres:18.6'])
+        root = Path(__file__).resolve().parents[2]
+        for name in ['check.yml', 'docker-release.yml']:
+            with self.subTest(workflow=name):
+                source = (root / '.github/workflows' / name).read_text(encoding='utf-8')
+                command = next(line.strip() for line in source.splitlines() if line.strip().startswith('for image in '))
+                images = {image.removeprefix('library/') for image in shlex.split(command.removeprefix('for image in ').removesuffix('; do'))}
+                self.assertLessEqual(required, images)
 
     def test_changed_secrets_ports_mounts_are_rejected(self):
         original = {'Config': {'Env': ['APP_SECRET=old', 'NODE_PORT=72']}, 'Mounts': [{'Source': '/data', 'Destination': '/app', 'RW': True}], 'HostConfig': {'NetworkMode': 'host'}}

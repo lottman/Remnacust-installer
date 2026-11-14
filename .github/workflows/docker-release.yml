@@ -20,13 +20,13 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       REMNACUST_NODE_SOURCE: ${{ github.workspace }}/node-repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
       - name: Read pinned node revision
         id: node-source
         run: python3 -c 'import json,os,subprocess; lock=json.loads(subprocess.check_output(["git","show","refs/tags/"+os.environ["RELEASE_TAG"]+":component-sources.json"])); print("commit="+lock["node"]["commit"])' >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: lottman/Remnacust-node
           ref: ${{ steps.node-source.outputs.commit }}
@@ -34,14 +34,17 @@ jobs:
       - name: Record release build time
         id: metadata
         run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
+          package-manager-cache: false
+      - name: Use npm 12.2.2
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org npm@12.2.2 && test "$(npm --version)" = "12.2.2"
       - name: Load Docker test images from public mirror
         run: |
-          for image in alpine:3.22 postgres:18.4 postgres:18.6 node:24.22.1-trixie-slim nginx:1.28-alpine; do
-            docker pull "mirror.gcr.io/library/$image"
-            docker tag "mirror.gcr.io/library/$image" "$image"
+          for image in library/alpine:3.22 library/postgres:18.4 library/postgres:18.6 library/postgres:18.7 library/node:24.22.1-trixie-slim library/nginx:1.28-alpine library/caddy:2.11.9-alpine valkey/valkey:9.1.3-alpine; do
+            docker pull "mirror.gcr.io/$image"
+            docker tag "mirror.gcr.io/$image" "${image#library/}"
           done
       - name: Verify panel IPv6 upgrade on real Docker
         timeout-minutes: 3
@@ -65,7 +68,7 @@ jobs:
           bash installer/tests/uninstall-docker.sh
           bash installer/tests/reinstall-docker.sh
           python3 scripts/package-source-release.py "$RELEASE_TAG"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: source-input
           path: release/
@@ -89,8 +92,8 @@ jobs:
       ARCHITECTURE: ${{ matrix.architecture }}
       BUILD_TIME: ${{ needs.prepare.outputs.build_time }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: source-input
           path: release
@@ -121,19 +124,19 @@ jobs:
                   output.write('REMNACUST_METADATA\n')
           PY
           if [ "$COMPONENT" = node ]; then python3 source/node/docker/package-remnacust-core.py; fi
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
-          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build on native architecture
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: ${{ steps.source.outputs.context }}
           file: ${{ steps.source.outputs.dockerfile }}
@@ -150,8 +153,8 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.architecture }}
       - name: Verify executable and publish exact image
         env:
-          REMNACUST_TEST_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-alpine
-          REMNACUST_TEST_VALKEY_IMAGE: mirror.gcr.io/valkey/valkey:9-alpine
+          REMNACUST_TEST_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17.12-alpine3.24@sha256:34261f594522cf41dfcb76aefd42b9d201098b0e6b23c9c68733f169e4218b6f
+          REMNACUST_TEST_VALKEY_IMAGE: mirror.gcr.io/valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
           IMAGE: ${{ steps.source.outputs.image }}
           EXPECTED_VERSION: ${{ steps.source.outputs.version }}
           EXPECTED_CORE_VERSION: ${{ steps.source.outputs.core_version }}
@@ -179,7 +182,7 @@ jobs:
           fi
           docker push "$IMAGE"
           python3 scripts/export-image.py --source source --component "$COMPONENT" --architecture "$ARCHITECTURE" --tag "$RELEASE_TAG" --output exported
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: image-${{ matrix.component }}-${{ matrix.architecture }}
           path: exported/
@@ -195,12 +198,12 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: source-input
           path: release
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: image-*
           path: images
@@ -209,10 +212,10 @@ jobs:
           mkdir source
           tar -xzf "release/remnacust-source-$RELEASE_TAG.tar.gz" -C source
           python3 scripts/package-docker-release.py --source source --images images --output release --tag "$RELEASE_TAG"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
-          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
-      - uses: docker/login-action@v3
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -241,8 +244,8 @@ jobs:
           PY
       - name: Verify panel and subscription page gateway together
         env:
-          REMNACUST_TEST_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-alpine
-          REMNACUST_TEST_VALKEY_IMAGE: mirror.gcr.io/valkey/valkey:9-alpine
+          REMNACUST_TEST_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17.12-alpine3.24@sha256:34261f594522cf41dfcb76aefd42b9d201098b0e6b23c9c68733f169e4218b6f
+          REMNACUST_TEST_VALKEY_IMAGE: mirror.gcr.io/valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
         run: |
           version=$(python3 -c 'import json;print(json.load(open("source/images.json"))["components"]["panel"]["version"])')
           panel="ghcr.io/lottman/remnacust-panel:$version-$RELEASE_TAG-amd64"

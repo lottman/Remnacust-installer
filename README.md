@@ -34,10 +34,10 @@ docker compose up -d --no-build --pull never
 
 | Компонент | Версия |
 | --- | --- |
-| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.171) | 1.2.171 |
-| [Панель / сайт подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.123) | 1.1.7.123 |
-| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.34) | 1.1.34 |
-| [Core / редактор](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.20) | 1.1.20, Xray v26.11.9 |
+| [Установщик / Docker-комплект](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.172) | 1.2.172 |
+| [Панель / сайт подписки](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.124) | 1.1.7.124 |
+| [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.35) | 1.1.35 |
+| [Core / редактор](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.21) | 1.1.21, Xray v26.11.9 |
 
 Номер установщика не является номером панели. Обновление одного компонента не заменяет остальные автоматически. Закреплённые исходники: [component-sources.json](component-sources.json). Обновление README не создаёт новую версию приложения.
 
@@ -45,7 +45,7 @@ docker compose up -d --no-build --pull never
 
 | Что | Минимум или ориентир |
 | --- | --- |
-| ОС установщика 1.2.171 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| ОС установщика 1.2.172 | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Архитектура | Linux amd64 или arm64 |
 | Панель с БД и кешем | От 2 CPU, 2 GiB RAM, 20 GiB диска; рекомендуется 4 CPU / 4 GiB RAM и запас под копии |
 | Нода | От 1 CPU / 1 GiB RAM с запасом под соединения и правила Xray |
@@ -55,7 +55,7 @@ docker compose up -d --no-build --pull never
 
 Ресурсы — отправная точка, а не гарантия числа клиентов. При совместном размещении учитывайте все компоненты. [Требования Remnawave](https://docs.rw/install/requirements/).
 
-При отсутствии Docker установщик добавляет официальный репозиторий своей ОС. Установленный daemon сохраняется. Отдельный минимальный номер Engine/Compose minor не проверен: используйте актуальные пакеты. Node.js и Go на VPS для готовых образов не нужны; для разработки используются Node.js 26.13 LTS и Go 1.27.3 для Core.
+При отсутствии Docker установщик добавляет официальный репозиторий своей ОС. Установленный daemon сохраняется. Отдельный минимальный номер Engine/Compose minor не проверен: используйте актуальные пакеты. Node.js и Go на VPS для готовых образов не нужны; для разработки используются Node.js 26.13 LTS и Go 1.27.4 для Core.
 
 В текущих исходниках панели проверены PostgreSQL 14–18. Матрица предыдущего комплекта с 200 SQL-миграциями проверена на PostgreSQL 14.24, 15.19, 16.15, 17.11 и 18.6 под ограниченным владельцем; это не обещание проверки каждого прежнего выпуска. PostgreSQL 14 заканчивает поддержку 12 ноября 2026 года. Установщик сохраняет существующую major-версию БД; смена major требует отдельного переноса. [Совместимость БД](docs/DATABASE-COMPATIBILITY.md).
 
@@ -156,7 +156,7 @@ sudo remnacust restore-panel --backup /opt/remnacust/backups/panel-DATE-ID
 
 [Параметры CLI](installer/README.md) · [Установка и обслуживание](docs/INSTALLER.md) · [Панель](https://github.com/lottman/Remnacust-panel) · [Нода](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.171.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
+Поддержка Debian 12/13 доступна с установщика 1.2.137; используется официальный Docker-репозиторий своей ОС. [Изменения текущего выпуска](docs/releases/1.2.172.md) · [Разработка и публикация](docs/PUBLISHING.md). Изменения README не запускают обновление серверов.
 
 Сохраняются лицензии и авторство компонентов. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Поддержка проекта](https://t.me/lottman).
 

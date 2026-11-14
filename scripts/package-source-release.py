@@ -13,7 +13,7 @@ import urllib.request
 
 REPOSITORIES = {kind: f'lottman/Remnacust-{kind}' for kind in ('panel', 'node', 'core')}
 PREFIXES = {'panel': ('panel/', 'subscription-page/', 'images/'),
-            'node': ('node/',), 'core': ('xray/', 'editor/', 'vendor/olcrtc/', 'vendor/utls/')}
+            'node': ('node/',), 'core': ('xray/', 'editor/', 'vendor/olcrtc/', 'vendor/utls/', 'upstream-security/')}
 COMPONENT_FILES = {'panel': {'docs/COMPATIBILITY.md'}}
 
 
