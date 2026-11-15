@@ -1,6 +1,6 @@
 # Remnacust Installer
 
-[Русский](README.md) · [English](README.en.md)
+[Русский](README.md) · [English](README.en.md) · [فارسی](installer/README.fa.md) · [简体中文](installer/README.zh.md)
 
 Install, update, migrate and maintain the Remnacust panel, node and subscription website. The script downloads prebuilt Docker images; no VPS compilation is required. Use the interactive menu or named commands. Prompts currently use Russian; command names remain the same.
 
@@ -34,20 +34,20 @@ Checked on **November 15, 2026**:
 
 | Component | Version |
 | --- | --- |
-| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.175) | 1.2.175 |
-| [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.127) | 1.1.7.127 |
+| [Installer / Docker bundle](https://github.com/lottman/Remnacust-installer/releases/tag/v1.2.176) | 1.2.176 |
+| [Panel / subscription website](https://github.com/lottman/Remnacust-panel/releases/tag/v1.1.7.128) | 1.1.7.128 |
 | [Node](https://github.com/lottman/Remnacust-node/releases/tag/v1.1.38) | 1.1.38 |
 | [Core / editor](https://github.com/lottman/Remnacust-core/releases/tag/v1.1.22) | 1.1.22, Xray v26.11.9 |
 
 The installer version is not the panel version. Updating one component does not automatically replace the others. Pinned sources: [component-sources.json](component-sources.json). A README update does not create a new application release.
 
-Panel 1.1.7.127 and Node 1.1.38 support node IPv4 and IPv6 discovery. Automatic checks every 30 minutes only append new addresses; an explicit rescan also removes discovered IPs that are no longer present. Manual IPs and DNS names, disabled flags and priority are preserved. Update the panel and node separately. [Managing the address list](installer/README.en.md#discovered-node-ip-addresses).
+Panel 1.1.7.128 and Node 1.1.38 support node IPv4 and IPv6 discovery. Automatic checks every 30 minutes only append new addresses; an explicit rescan also removes discovered IPs that are no longer present. Manual IPs and DNS names, disabled flags and priority are preserved. Update the panel and node separately. [Managing the address list](installer/README.en.md#discovered-node-ip-addresses).
 
 ## Requirements
 
 | Item | Minimum or planning allocation |
 | --- | --- |
-| Installer 1.2.175 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
+| Installer 1.2.176 OS | Ubuntu 22.04 / 24.04 / 26.04 LTS; Debian 12 / 13 |
 | Architecture | Linux amd64 or arm64 |
 | Panel with database/cache | At least 2 CPU, 2 GiB RAM and 20 GiB storage; 4 CPU / 4 GiB recommended, plus backup headroom |
 | Node | At least 1 CPU / 1 GiB RAM, with headroom for Xray connections/rules |
@@ -158,7 +158,7 @@ Restore retains the installed application version and restores the database with
 
 [CLI parameters](installer/README.en.md) · [Installation/maintenance](docs/INSTALLER.md) · [Panel](https://github.com/lottman/Remnacust-panel) · [Node](https://github.com/lottman/Remnacust-node) · [Core](https://github.com/lottman/Remnacust-core).
 
-Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.175.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
+Debian 12/13 support is available since Installer 1.2.137, using the official Docker repository for the host OS. [Current release notes (RU)](docs/releases/1.2.176.md) · [Development/publishing](docs/PUBLISHING.md). README changes do not update servers.
 
 Component licenses and attribution are preserved. [LICENSE](LICENSE) · [NOTICE.md](NOTICE.md) · [Project support](https://t.me/lottman).
 

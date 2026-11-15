@@ -1,10 +1,10 @@
 # Remnacust Installer — CLI reference
 
-[Русский](README.md) · [English](README.en.md)
+[Русский](README.md) · [English](README.en.md) · [فارسی](README.fa.md) · [简体中文](README.zh.md)
 
-Stable bundle: Installer **1.2.175**, Panel/website **1.1.7.127**, Node **1.1.38**, Core **1.1.22** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.176**, Panel/website **1.1.7.128**, Node **1.1.38**, Core **1.1.22** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
 
-Installer 1.2.175 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.176 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## Install ready components
 
@@ -25,6 +25,10 @@ Use Rescan IPs in the node editor for a full reconciliation. Save control-addres
 An older Node without the supported endpoint reports that an update is required. Connection failures and incomplete responses retain saved addresses and the last successful result. Row switches disable addresses without deleting them. A configured SOCKS5 proxy remains mandatory; proxy failure does not allow a direct connection. IP discovery does not change firewall rules or API-port bindings.
 
 ## Standard GeoIP and GeoSite
+
+Page 1.1.7.128 serves public geofile links from the domain root even with a nonempty `CUSTOM_SUB_PREFIX`; existing prefixed links remain supported. Public URLs must not expose the private prefix. Domain access rules, redirects and CDN checks still apply.
+
+The proxy must forward the complete public `/geofiles/` path to the same subscription Page, preserving query parameters, GET and HEAD. The installer's Caddy template proxies the entire domain and its aliases. If an existing Caddy/Nginx forwards only the private subscription path, route public geofile requests to Page separately without redirecting clients to the private path. Do not prepend `/api/sub` to Page requests. Application upgrades preserve the existing reverse proxy and do not add this rule automatically.
 
 Importing a standard source for the first time in Panel 1.1.7.127 sets an interval of 48 hours (2880 minutes). Automatic file refresh is enabled separately and runs while the geofile system is enabled. Importing again preserves the existing schedule and an explicitly disabled automatic refresh. Manual refresh does not wait for the next scheduled time; a download failure retains the last successfully downloaded file.
 

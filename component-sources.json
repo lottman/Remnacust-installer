@@ -1,8 +1,8 @@
 {
   "panel": {
     "repository": "lottman/Remnacust-panel",
-    "commit": "87014b35fb7b1e929144227cf6de54914a4b9e2e",
-    "version": "1.1.7.127"
+    "commit": "00421e7e7b1698ac95e9ea2dd7e806c24f0b51f3",
+    "version": "1.1.7.128"
   },
   "node": {
     "repository": "lottman/Remnacust-node",
