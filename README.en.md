@@ -30,7 +30,7 @@ Normalize older layouts with `sudo remnacust normalize-layout --component panel`
 
 ## Stable bundle
 
-Checked on **November 13, 2026**:
+Checked on **November 15, 2026**:
 
 | Component | Version |
 | --- | --- |
@@ -57,7 +57,7 @@ These are starting allocations, not client-capacity guarantees. Allow for all co
 
 If Docker is absent, the installer adds its official distribution repository. An existing daemon is preserved. A specific minimum Engine/Compose minor version has not been established; use current packages. Host Node.js and Go are unnecessary for prebuilt images. Development uses Node.js 26.13 LTS and Go 1.27.4 for Core.
 
-Current panel source was tested on PostgreSQL 14–18. This is the next-update matrix, not a claim that every earlier release was tested. PostgreSQL 14 support ends on November 12, 2026. The installer retains the existing database major version; major changes require a separate migration. [Database compatibility](docs/DATABASE-COMPATIBILITY.md).
+Panel **1.1.7.126** was tested on PostgreSQL **14.25, 15.20, 16.16, 17.12 and 18.7**. Testing an older major version does not extend its support: PostgreSQL 14 support ended on November 12, 2026. The installer retains the existing database major version; changing it requires a separate migration. [Database compatibility and test scope](docs/DATABASE-COMPATIBILITY.en.md).
 
 ## Installation
 

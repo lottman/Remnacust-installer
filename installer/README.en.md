@@ -163,7 +163,7 @@ Uninstall preserves data, configuration, certificates and backups. Removing one 
 
 ## Development and license
 
-[Installer architecture](../docs/INSTALLER.md) · [Database compatibility](../docs/DATABASE-COMPATIBILITY.md) · [Publishing](../docs/PUBLISHING.md) · [Source checks](../.github/workflows/check.yml).
+[Installer architecture](../docs/INSTALLER.md) · [Database compatibility](../docs/DATABASE-COMPATIBILITY.en.md) · [Publishing](../docs/PUBLISHING.md) · [Source checks](../.github/workflows/check.yml).
 
 Installer changes, helper contracts and packaged artifacts must be checked together before a software release. Updating this documentation does not publish an application version or update servers. [LICENSE](../LICENSE) · [NOTICE.md](../NOTICE.md).
 
