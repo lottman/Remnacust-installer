@@ -2,9 +2,9 @@
 
 [Русский](README.md) · [English](README.en.md) · [فارسی](README.fa.md) · [简体中文](README.zh.md)
 
-Stable bundle: Installer **1.2.176**, Panel/website **1.1.7.128**, Node **1.1.38**, Core **1.1.22** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
+Stable bundle: Installer **1.2.177**, Panel/website **1.1.7.129**, Node **1.1.38**, Core **1.1.22** / Xray v26.11.9. [Requirements and quick start](../README.en.md).
 
-Installer 1.2.176 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
+Installer 1.2.177 supports Ubuntu 22.04/24.04/26.04 LTS and Debian 12/13, amd64/arm64. Docker is installed from the official repository for the host OS. Installer prompts currently use Russian. Run `sudo remnacust --help` for the complete command list.
 
 ## Install ready components
 
@@ -18,9 +18,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lottman/Remnacust-installer/
 
 Address discovery requires Panel 1.1.7.127 and Node 1.1.38 or later. A panel update does not update nodes: run `sudo remnacust upgrade-node` separately on each selected node server. An IPv6 entry still requires a working IPv6 route on the panel and node.
 
-The first successful authenticated exchange with a supported node adds its discovered IPv4 and IPv6 addresses. Subsequent automatic checks every 30 minutes only append new addresses. The panel persists the successful scan time, so restarting it does not reset the interval. There is no separate interval setting.
+The first successful authenticated exchange with a supported node triggers IPv4 and IPv6 discovery. Starting with Panel 1.1.7.129, automatic checks every 30 minutes reconcile addresses using a complete network-address response from the node. They add new addresses and remove previously discovered IPs missing from that response. Telemetry metadata alone cannot remove addresses. The panel persists the successful scan time, so restarting it does not reset the interval. There is no separate interval setting.
 
-Use Rescan IPs in the node editor for a full reconciliation. Save control-address, port and proxy changes first; another scan is unavailable while a save or scan is pending. An explicit scan adds new discovered IPs and removes discovered IPs that are no longer present. Manual IPs and DNS names remain, including addresses that existed before the first scan. Existing disabled flags and priority remain. New addresses are enabled only when at least one current address is enabled; an all-disabled list stays disabled.
+Use Rescan IPs in the node editor for an immediate full reconciliation. Save control-address, port and proxy changes first; another scan is unavailable while a save or scan is pending. Automatic and manual scans retain manual IPs never confirmed by the node, including NAT addresses, and DNS names. An address previously confirmed by the node can be removed when absent from a later complete response, even if it was originally entered manually. Existing disabled flags and priority of retained addresses remain. New addresses are enabled only when at least one current address is enabled; an all-disabled list stays disabled.
 
 An older Node without the supported endpoint reports that an update is required. Connection failures and incomplete responses retain saved addresses and the last successful result. Row switches disable addresses without deleting them. A configured SOCKS5 proxy remains mandatory; proxy failure does not allow a direct connection. IP discovery does not change firewall rules or API-port bindings.
 
