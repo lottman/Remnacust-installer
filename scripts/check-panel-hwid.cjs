@@ -207,7 +207,7 @@ async function checkUpstreamUpdates() {
         assert.deepEqual((await prisma.hosts.findUniqueOrThrow({ where: { uuid: host.uuid } })).includeInSrrRules, ['phone', 'RAW']);
         assert.equal((await request('/api/hosts', 'PATCH', { uuid: host.uuid, remark: 'srr_runtime_renamed' })).status, 200);
         assert.deepEqual((await request('/api/hosts/' + host.uuid)).body.response.includeInSrrRules, ['phone', 'RAW']);
-        assert.equal((await request('/api/hosts/bulk/update', 'PATCH', { uuids: [host.uuid], includeInSrrRules: ['desktop'] })).status, 200);
+        assert.equal((await request('/api/hosts/bulk/update', 'PATCH', { uuids: [host.uuid], includeInSrrRules: ['desktop'] })).status, 204);
         assert.deepEqual((await prisma.hosts.findUniqueOrThrow({ where: { uuid: host.uuid } })).includeInSrrRules, ['desktop']);
         assert.equal((await request('/api/hosts', 'PATCH', { uuid: host.uuid, includeInSrrRules: [] })).status, 200);
         assert.deepEqual((await request('/api/hosts/' + host.uuid)).body.response.includeInSrrRules, []);
