@@ -307,7 +307,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_fresh_dependency_patches_do_not_replace_existing_services_on_upgrade(self):
         fresh, _ = runtime.fresh('panel', '/opt/test', 'test-panel', 'panel:old', 'panel.example.com')
-        expected = {'remnawave-db': 'postgres:18.7', 'remnawave-redis': 'valkey/valkey:9.1.3-alpine', 'caddy': 'caddy:2.11.9-alpine'}
+        expected = {'remnawave-db': 'postgres:18.7', 'remnawave-redis': 'valkey/valkey:9.1.4-alpine@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0', 'caddy': 'caddy:2.11.9-alpine'}
         self.assertEqual({name: fresh['services'][name]['image'] for name in expected}, expected)
         for database in ['postgres:17.6', 'postgres:18.4', 'postgres:18.6', 'postgres:18.7']:
             with self.subTest(database=database):
@@ -335,6 +335,10 @@ class RuntimeTests(unittest.TestCase):
                 source = (root / '.github/workflows' / name).read_text(encoding='utf-8')
                 command = next(line.strip() for line in source.splitlines() if line.strip().startswith('for image in '))
                 images = {image.removeprefix('library/') for image in shlex.split(command.removeprefix('for image in ').removesuffix('; do'))}
+                for line in source.splitlines():
+                    line = line.strip()
+                    if line.startswith('docker pull ') and '$' not in line:
+                        images.update(shlex.split(line)[2:])
                 self.assertLessEqual(required, images)
 
     def test_changed_secrets_ports_mounts_are_rejected(self):

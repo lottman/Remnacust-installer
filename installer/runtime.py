@@ -1075,7 +1075,7 @@ def fresh(component, directory, project, image, hostname='', number='3000', prox
         database = dict(common, image='postgres:18.7', env_file=[str(directory / '.env')],
                         shm_size='512mb', environment={'TZ': 'UTC'}, volumes=['database:/var/lib/postgresql'],
                         healthcheck={'test': ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}'], 'interval': '3s', 'timeout': '5s', 'retries': 20})
-        redis = dict(common, image='valkey/valkey:9.1.3-alpine', volumes=['valkey-socket:/var/run/valkey'],
+        redis = dict(common, image='valkey/valkey:9.1.4-alpine@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0', volumes=['valkey-socket:/var/run/valkey'],
                      command=['valkey-server', '--save', '', '--appendonly', 'no', '--maxmemory-policy', 'noeviction', '--unixsocket', '/var/run/valkey/valkey.sock', '--unixsocketperm', '777', '--port', '0'],
                      healthcheck={'test': ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping'], 'interval': '3s', 'timeout': '5s', 'retries': 20})
         services = {'remnawave': app, 'remnawave-db': database, 'remnawave-redis': redis}

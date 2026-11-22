@@ -48,10 +48,11 @@ jobs:
         run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org npm@12.2.2 && test "$(npm --version)" = "12.2.2"
       - name: Load Docker test images from public mirror
         run: |
-          for image in library/alpine:3.22 library/postgres:18.4 library/postgres:18.6 library/postgres:18.7 library/node:24.22.1-trixie-slim library/caddy:2.11.9-alpine valkey/valkey:9.1.3-alpine; do
+          for image in library/alpine:3.22 library/postgres:18.4 library/postgres:18.6 library/postgres:18.7 library/node:24.22.1-trixie-slim library/caddy:2.11.9-alpine; do
             docker pull "mirror.gcr.io/$image"
             docker tag "mirror.gcr.io/$image" "${image#library/}"
           done
+          docker pull "valkey/valkey:9.1.4-alpine@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0"
       - name: Verify panel IPv6 upgrade on real Docker
         timeout-minutes: 3
         run: python3 -B installer/tests/panel_ipv6_docker.integration.py --required
