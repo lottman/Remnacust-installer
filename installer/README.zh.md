@@ -2,7 +2,7 @@
 
 [Русский](README.md) · [English](README.en.md) · [فارسی](README.fa.md) · [简体中文](README.zh.md)
 
-1.2.179 套件包含 Panel/Page 1.1.7.140、Node 1.1.39 和基于 Xray v26.11.9 的 Core 1.1.22。安装器支持 Ubuntu 22.04/24.04/26.04 LTS、Debian 12/13，以及 amd64/arm64 架构。安装使用预构建 Docker 镜像，无需在 VPS 上编译。安装器交互提示目前使用俄语。
+1.2.180 套件包含 Panel/Page 1.1.7.140、Node 1.1.39 和基于 Xray v26.11.9 的 Core 1.1.22。安装器支持 Ubuntu 22.04/24.04/26.04 LTS、Debian 12/13，以及 amd64/arm64 架构。安装使用预构建 Docker 镜像，无需在 VPS 上编译。安装器交互提示目前使用俄语。
 
 ## 更新与设置保留
 
